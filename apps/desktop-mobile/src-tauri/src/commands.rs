@@ -254,8 +254,20 @@ pub fn save_thumbnail(state: State<'_, AppState>, request: tauri::ipc::Request<'
             .ok_or_else(|| invalid(format!("missing {k}")))
     };
     let (nb, page) = (h("x-notebook")?, h("x-page")?);
-    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
-        return Err(invalid("expected a raw PNG body"));
+    // Desktop delivers the Uint8Array as a raw body; the Android/iOS IPC bridge
+    // serialises it as a JSON array of bytes.
+    let owned;
+    let bytes: &[u8] = match request.body() {
+        tauri::ipc::InvokeBody::Raw(b) => b,
+        tauri::ipc::InvokeBody::Json(serde_json::Value::Array(a)) => {
+            owned = a
+                .iter()
+                .map(|v| v.as_u64().filter(|n| *n < 256).map(|n| n as u8))
+                .collect::<Option<Vec<u8>>>()
+                .ok_or_else(|| invalid("thumbnail body is not a byte array"))?;
+            &owned
+        }
+        _ => return Err(invalid("expected a PNG body")),
     };
     Ok(lib!(state).save_thumbnail(nb, page, bytes)?)
 }

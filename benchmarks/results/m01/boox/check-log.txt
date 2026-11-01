@@ -1,0 +1,27 @@
+11-02 13:57:56.926 24473 24533 I RustStdoutStderr: penroam[info]: startup: library loaded
+11-02 13:57:56.938 24473 24533 I RustStdoutStderr: penroam[info]: startup: close listener ok
+11-02 13:57:56.951 24473 24533 I RustStdoutStderr: penroam[info]: startup: native ink boox
+11-02 13:57:56.952 24473 24533 I RustStdoutStderr: penroam[info]: autobench boox
+11-02 13:57:57.078 24473 24533 I RustStdoutStderr: penroam[info]: boox-check nativeKind boox
+11-02 13:57:57.082 24473 24533 I RustStdoutStderr: penroam[info]: boox-check nativeCapabilities {"device":{"androidRelease":"15","brand":"Onyx","density":1.875,"densityDpi":300,"device":"NoteAir5C","display":"2026-08-03_16-13_4.2.1-rel_0803_eaa32b54f","fingerprint":"ONYX/TabBoox/TabBoox:13/TKQ1.230615.001/GV2.029.SQ83A:user/release-keys","firmwareClasses":["android.onyx.ViewUpdateHelper","android.onyx.hardware.DeviceController"],"heightPx":2480,"manufacturer":"ONYX","model":"NoteAir5C","sdkInt":35,"webViewPackage":"com.android.webview","webViewVersion":"146.0.7680.178","widthPx":1860},"errors":[],"firmwareRuntimePresent":true,"initErrors":[],"manufacturerHint":true,"maxTouchPressure":4095,"nativeModeCandidate":true,"onyxSdk":{"base":"1.8.4","device":"1.3.3","pen":"1.5.2"},"sdkClassesPresent":true,"sdkDeviceIndex":"SDM"}
+11-02 13:57:57.293 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:57:58.626 24473 24533 I RustStdoutStderr: penroam[info]: boox-check nativeEventToModelMs 42.20000000111759
+11-02 13:57:58.629 24473 24533 I RustStdoutStderr: penroam[info]: boox-check modelToDurableMs 1.799999998882413
+11-02 13:57:58.630 24473 24533 I RustStdoutStderr: penroam[info]: boox-check stroke {"points":41,"input":{"api":"test-injected","device":"stylus","mode":"BOOX_HARDWARE","simulated":true},"first":{"x":90,"y":200,"pressure":0.25,"tiltX":0,"tiltY":0,"timeUs":0},"last":{"x":530,"y":280,"pressure":0.8500000238418579,"tiltX":0,"tiltY":0,"timeUs":160000},"width":2.200000047683716,"color":"#111111"}
+11-02 13:57:58.631 24473 24533 I RustStdoutStderr: penroam[info]: boox-check phaseA_nativeVisible_at 1793645878630
+11-02 13:58:00.147 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:58:06.634 24473 24533 I RustStdoutStderr: penroam[info]: boox-check phaseB_webVisible_at 1793645886632
+11-02 13:58:16.175 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:58:17.155 24473 24533 I RustStdoutStderr: penroam[info]: boox-check afterUndo {"model":0,"native":0}
+11-02 13:58:18.691 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:58:19.666 24473 24533 I RustStdoutStderr: penroam[info]: boox-check afterRedo {"model":1,"native":1}
+11-02 13:58:19.964 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:58:21.158 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:58:23.961 24473 24533 I RustStdoutStderr: penroam[info]: boox-check scene1000 {"webLoadMs":713.5999999996275,"nativeStrokeCount":1000,"nativeLoadRender":{"count":2,"max":81.80838775634766,"mean":40.91033937828615,"median":81.80838775634766,"min":0.012291000224649906,"p95":81.80838775634766,"retained":2},"nativeLoadParse":{"count":2,"max":157.1428680419922,"mean":78.62245002016425,"median":157.1428680419922,"min":0.10203199833631516,"p95":157.1428680419922,"retained":2},"webFullRedrawMs":318.2999999988824,"rssBytes":357986304}
+11-02 13:58:25.036 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:58:29.031 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:58:31.730 24473 24533 I RustStdoutStderr: penroam[info]: boox-check scene5000 {"webLoadMs":2191.199999999255,"nativeStrokeCount":5000,"nativeLoadRender":{"count":3,"max":879.6575317382812,"mean":320.49273683161783,"median":81.80838775634766,"min":0.012291000224649906,"p95":879.6575317382812,"retained":3},"nativeLoadParse":{"count":3,"max":651.046875,"mean":269.4305916801095,"median":157.1428680419922,"min":0.10203199833631516,"p95":651.046875,"retained":3},"webFullRedrawMs":1540.0999999996275,"rssBytes":527065088}
+11-02 13:58:33.833 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:58:44.884 24473 24533 I RustStdoutStderr: penroam[warn]: thumbnail not saved expected a raw PNG body
+11-02 13:58:44.886 24473 24533 I RustStdoutStderr: penroam[info]: boox-check scene10000 {"webLoadMs":4299.299999998882,"nativeStrokeCount":10000,"nativeLoadRender":{"count":4,"max":1719.5382080078125,"mean":670.2541046256665,"median":879.6575317382812,"min":0.012291000224649906,"p95":1719.5382080078125,"retained":4},"nativeLoadParse":{"count":4,"max":1344.483154296875,"mean":538.1937323343009,"median":651.046875,"min":0.10203199833631516,"p95":1344.483154296875,"retained":4},"webFullRedrawMs":3098.5999999996275,"rssBytes":659525632}
+11-02 13:58:44.905 24473 24533 I RustStdoutStderr: penroam[info]: boox-check done true

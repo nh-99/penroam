@@ -190,12 +190,37 @@ fn android_external(app: &AppHandle) -> Option<PathBuf> {
     base.is_dir().then(|| base.join("perf"))
 }
 
-/// `PENROAM_AUTOBENCH=1` runs the scripted benchmark on start-up and exits.
+/// `PENROAM_AUTOBENCH=<mode>` runs a scripted benchmark/check on start-up.
+/// On Android (apps get no environment variables) the mode is read once from
+/// `<external files>/autobench.txt` (pushed with adb) and the file is removed.
 #[tauri::command]
-pub fn autobench_requested() -> Option<String> {
-    std::env::var("PENROAM_AUTOBENCH")
-        .ok()
-        .filter(|v| !v.is_empty() && v != "0")
+pub fn autobench_requested(app: AppHandle) -> Option<String> {
+    if let Ok(v) = std::env::var("PENROAM_AUTOBENCH") {
+        if !v.is_empty() && v != "0" {
+            return Some(v);
+        }
+    }
+    if !cfg!(target_os = "android") {
+        return None;
+    }
+    let f = PathBuf::from(format!(
+        "/storage/emulated/0/Android/data/{}/files/autobench.txt",
+        app.config().identifier
+    ));
+    let v = match std::fs::read_to_string(&f) {
+        Ok(v) => v,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("penroam: autobench file {}: {e}", f.display());
+            }
+            return None;
+        }
+    };
+    if let Err(e) = std::fs::remove_file(&f) {
+        eprintln!("penroam: could not remove {}: {e}", f.display());
+    }
+    eprintln!("penroam: autobench mode {:?}", v.trim());
+    Some(v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 /// Mobile diagnostics: the WebView console is not visible in release builds,

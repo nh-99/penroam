@@ -41,11 +41,18 @@ cd android && ./gradlew :boox-ink:testDebugUnitTest   # 14 JVM tests (11 M00 + 3
 | Editor opens; native `BooxInkView` attaches in `BOOX_HARDWARE`, Onyx raw input reader starts, view sized exactly to the canvas element (1530×2197 px) | ✅ logcat `BooxInkView: ensureSession mode=BOOX_HARDWARE … size=1530x2197`, `RawInputReader … submitJob` |
 | Template drawn by the web layer visible through the transparent native view | ✅ screenshot `09-boox-editor-native-overlay-mounted.png` |
 | adb-injected stylus swipes | ❌ not picked up — expected: Onyx raw drawing reads the digitiser directly. **Real pen strokes need a person** |
-| Plumbing check (`tools/boox-m01-check.sh`: injected stroke → native bitmap → web model → Rust → undo/redo sync → layer switch screenshots → 1k/5k/10k native loads) | ⏳ written and built into the APK; could not run: the device locked itself (keyguard) between attempts |
-| Real pen: hardware preview immediacy, persistence after pen-up, no blink/double/ghost, eraser | ⏳ **not yet validated in M01** (validated in M00 for the same `BooxInkView` in the M00 Tauri host) |
-| Four-corner alignment, rotation, keyboard, background/resume | ⏳ manual checklist in `tools/boox-m01-check.sh` |
-| `.penroam` Linux → BOOX → Linux | ⏳ steps in `tools/boox-m01-check.sh` (Linux side exported: `docs/screenshots/m01/linux-export.penroam`) |
-| Callback p95 vs M00's 12 ms | ⏳ the plumbing check records the native metrics JSON; needs real pen strokes |
+| **Plumbing check** (`tools/boox-m01-check.sh`, run 2026-11-02 14:00) — stroke injected into the native post-pen-up path (marked `simulated`), not the pen | ✅ native → web model **42 ms**, model → durable on disk **1.8 ms**; undo/redo from the web side mirrored in the native layer (model 0/native 0, then 1/1) |
+| Native layer vs web layer alignment (same stroke, pen tool vs text tool, full-res screenshots) | ✅ best pixel overlap at offset **(0, 0)**, stroke centroids differ by < 1 px (`12-boox-native-vs-web-layer.png`) |
+| 1k / 5k / 10k-stroke pages through the native surface | parse 157 / 651 / 1344 ms + native bitmap render 82 / 880 / 1720 ms (10k ≈ 3.1 s; M00 Mode B load ≈ 3.8 s). Page open incl. IPC 0.7 / 2.2 / 4.3 s. Web canvas whole-page redraw (shown when a non-pen tool is active) 0.3 / 1.5 / 3.1 s at device resolution — slow, see risks. App process RSS 341 / 503 / 629 MiB (WebView renderer process not included; not comparable with M00's ~559 MB figure) |
+| **Two-OS `.penroam`**: Linux export → `adb push` → imported through the Android system picker (content URI) → opened (PDF.js renders the rotated PDF pages, ink/text in place, background thumbnails) → exported through the Android save picker → pulled to Linux | ✅ `tools/compare-penroam.py linux-export.penroam boox-export.penroam` → **IDENTICAL** (6 pages, 6 strokes / 98 points, 2 text blocks, PDF asset bytes) |
+| Real pen: hardware preview immediacy, persistence after pen-up, no blink/double/ghost, eraser | ⏳ **still not validated in M01** (validated in M00 for the same `BooxInkView` in the M00 Tauri host) |
+| Rotation, keyboard, background/resume with the pen | ⏳ manual checklist printed by `tools/boox-m01-check.sh` |
+| Native callback p95 vs M00's 12 ms | ⏳ needs real pen strokes |
+
+Bugs found and fixed during the device run: (1) the Android autobench trigger was never
+compiled in (a scripted edit missed after reformatting) — fixed; (2) thumbnails were rejected
+on Android because the mobile IPC bridge sends byte arrays as JSON, not raw bodies — fixed;
+(3) start-up steps now have timeouts and log to logcat.
 
 ## Known risks
 
@@ -53,5 +60,8 @@ cd android && ./gradlew :boox-ink:testDebugUnitTest   # 14 JVM tests (11 M00 + 3
   drawn off-page is kept (the web canvas clips its rendering to the page).
 * Highlighter preview on the EPD pen layer is opaque (the hardware layer has no alpha); the
   committed stroke is translucent.
+* Whole-page web redraw on the BOOX is slow at 10k strokes (≈ 3 s at device resolution);
+  it is only visible when a non-pen tool is active, but switching tools on huge pages lags.
+  Lower the web backing resolution on ePaper or keep it viewport-sized there.
 * Text editing hides the native layer; switching back re-shows it after the view repaints
   (one ePaper refresh).

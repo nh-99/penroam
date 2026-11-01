@@ -1,6 +1,7 @@
 // Typed facade over the Rust commands (apps/desktop-mobile/src-tauri/src/commands.rs).
 // Types come from the Rust schema via ts-rs (src/generated, checked in CI).
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isMobile } from "./device";
 import type { ApplyOutcome } from "../generated/ApplyOutcome";
 import type { ErrorCode } from "../generated/ErrorCode";
 import type { ExportReport } from "../generated/ExportReport";
@@ -78,7 +79,8 @@ export const api = {
   },
   async saveThumbnail(notebookId: string, pageId: string, png: Uint8Array): Promise<void> {
     if (!hasHost()) return;
-    await invoke("save_thumbnail", png, { headers: { "x-notebook": notebookId, "x-page": pageId } }).catch((e) => {
+    // mobile IPC has no raw-body path: send a plain byte array there
+    await invoke("save_thumbnail", isMobile() ? Array.from(png) : png, { headers: { "x-notebook": notebookId, "x-page": pageId } }).catch((e) => {
       throw new CommandError(e?.code ?? "io", e?.message ?? String(e));
     });
   },

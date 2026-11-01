@@ -77,7 +77,7 @@ Replay interval median 16 ms for both. Steady-state 10k open: 715–880 MiB.
 | 10k full redraw ≤ 300 ms median on the M00 profile | **Met in Workload D** (228 ms whole page, 123 ms visible-first). Fresh-process steady-state runs: 222 / 337 / 325 ms (median 325 ms) — **borderline; not met in 2 of 3 cold runs** |
 | Replay at display cadence over 10k committed strokes, no visible lag | 60 Hz median (16–17 ms), p95 ≤ 20 ms on Wayland. Visual "no ink lag/stroke loss" was checked with mouse input only |
 | RSS: flag > 20 % above M00 10k | **Flagged**: +61 % in-process (1134 vs 703 MiB), +37 % steady state (≈ 960 vs 703). Main contributors: the document model now also lives in Rust (≈ +100 MiB in the app process: parsed page cache + journal), three page-sized canvases at dpr 2 (3 × 30 MiB), JS page objects. Mitigations already applied: no page copies per batch, page cache 8→3, `malloc_trim` after large transfers. Next steps in §5 |
-| BOOX callback p95 vs 12 ms, 10k load/erase | **Not measured in M01** (needs the pen; `tools/boox-m01-check.sh`) |
+| BOOX callback p95 vs 12 ms, 10k load/erase | 10k native load ≈ 3.1 s (parse 1.3 s + render 1.7 s; M00 ≈ 3.8 s). Callback p95 and erase **not measured** (need the pen) |
 | iPad workloads | **Not run** (no packaged iOS build) |
 | Durability | ✅ SIGKILL 300 ms after pen-up loses nothing (real app); torn-write and crash-window recovery unit-tested |
 
@@ -99,14 +99,16 @@ Linux release binary, real XTest mouse/keyboard input (`tools/linux-e2e`), scree
 
 BOOX (Note Air5 C): APK launched, ePaper theme auto-selected, notebook created through the UI,
 native `BooxInkView` attached in BOOX_HARDWARE mode over the canvas with the web template
-visible through it (`08`, `09`). **Not done**: real pen strokes, the scripted plumbing check
-(device kept locking), and the **two-OS `.penroam` transfer** (Linux → BOOX → Linux).
+visible through it (`08`, `09`). `tools/boox-m01-check.sh`: injected stroke through the native
+post-pen-up path → web model in 42 ms → durable in 1.8 ms; undo/redo mirrored natively;
+native vs web layer aligned to 0 px (`12`); 10k-stroke native load ≈ 3.1 s (M00 Mode B ≈ 3.8 s).
+**Two-OS transfer**: Linux export → BOOX import (Android picker) → BOOX export → Linux:
+`compare-penroam.py` **identical** (`13`, `boox-export.penroam`). **Not done**: real pen strokes.
 
 ## 5. Open issues and next steps
 
-* **Two-OS round trip** (DoD 3): run `tools/boox-m01-check.sh` part 2 with the BOOX unlocked.
-* **BOOX pen validation** (DoD 2): checklist in `tools/boox-m01-check.sh`; capture native
-  callback p95 and 10k load timings with the same script.
+* **BOOX pen validation** (DoD 2): manual checklist in `tools/boox-m01-check.sh`; native
+  callback p95 needs real strokes. Web whole-page redraw on the BOOX is ≈ 3 s at 10k strokes.
 * **iPad**: needs a Mac; checklist in `docs/platforms/ipad.md`.
 * **Memory**: render the text layer only where text exists, share one backing store for
   ink+text, drop the Rust page cache to the open page on mobile, stream page JSON instead of

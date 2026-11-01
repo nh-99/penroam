@@ -26,33 +26,45 @@ watch(
   },
 );
 
+/** Rejects after `ms` so one stuck platform call can't block start-up. */
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms} ms`)), ms))]);
+}
+
 onMounted(async () => {
   await lib.refresh();
   if (!hasHost()) return;
-  try {
-    unlisten = await listen("penroam://close-requested", async () => {
-      try {
-        await flushEverything();
-      } catch (e) {
-        // Rust still flushes its own state; unsaved in-memory ops are reported
-        console.error("flush before exit failed", e);
-      }
-      await api.exitApp();
-    });
-  } catch (e) {
-    console.error("close handler not installed", e);
-  }
-  try {
-    const n = await detectNativeInk();
-    nativeKind.value = n?.kind ?? null;
-    if (n?.kind === "boox") settings.preferEpaper();
-  } catch (e) {
-    console.error("native ink detection failed", e);
-  }
-  const bench = await api.autobenchRequested().catch((e) => {
+  console.info("startup: library loaded");
+  const bench = await withTimeout(api.autobenchRequested(), 5000, "autobench query").catch((e) => {
     console.error("autobench query failed", e);
     return null;
   });
+  try {
+    unlisten = await withTimeout(
+      listen("penroam://close-requested", async () => {
+        try {
+          await flushEverything();
+        } catch (e) {
+          // Rust still flushes its own state; unsaved in-memory ops are reported
+          console.error("flush before exit failed", e);
+        }
+        await api.exitApp();
+      }),
+      5000,
+      "close listener",
+    );
+  } catch (e) {
+    console.error("close handler not installed", e);
+  }
+  console.info("startup: close listener ok");
+  try {
+    const n = await withTimeout(detectNativeInk(), 8000, "native ink detection");
+    nativeKind.value = n?.kind ?? null;
+    if (n?.kind === "boox") settings.preferEpaper();
+    console.info("startup: native ink", n?.kind ?? "none");
+  } catch (e) {
+    console.error("native ink detection failed", e);
+  }
   if (bench) {
     console.info("autobench", bench);
     const { runAutobench } = await import("./bench/autobench");
@@ -62,6 +74,7 @@ onMounted(async () => {
     });
   }
 });
+
 onBeforeUnmount(() => unlisten?.());
 </script>
 
