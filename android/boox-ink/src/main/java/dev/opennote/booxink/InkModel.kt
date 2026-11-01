@@ -25,6 +25,8 @@ data class InkBrush(
     val width: Float = 3f,
     val color: String = "#000000",
     val pressure: Boolean = true,
+    /** M01: 1.0 for pens, < 1 for highlighters (alpha). Omitted from JSON when 1. */
+    val opacity: Float = 1f,
 )
 
 data class InkInput(
@@ -93,7 +95,8 @@ object StrokeJson {
                     .put("type", s.brush.type)
                     .put("width", s.brush.width.toDouble())
                     .put("color", s.brush.color)
-                    .put("pressure", s.brush.pressure),
+                    .put("pressure", s.brush.pressure)
+                    .also { if (s.brush.opacity != 1f) it.put("opacity", s.brush.opacity.toDouble()) },
             )
             .put("points", pts)
     }
@@ -127,6 +130,7 @@ object StrokeJson {
                 width = b.optDouble("width", 3.0).toFloat(),
                 color = b.optString("color", "#000000"),
                 pressure = b.optBoolean("pressure", true),
+                opacity = b.optDouble("opacity", 1.0).toFloat(),
             ),
             points = pts,
         )

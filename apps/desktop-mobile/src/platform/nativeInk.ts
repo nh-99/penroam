@@ -159,7 +159,8 @@ class PluginSurface implements NativeInkSurface {
   }
 
   private toolArgs(t: NativeTool) {
-    return { tool: t.tool, color: t.color, width: t.width, pressure: t.pressure, opacity: t.opacity };
+    // `penWidth`, not `width`: attach also carries the overlay rect width
+    return { tool: t.tool, color: t.color, penWidth: t.width, pressure: t.pressure, opacity: t.opacity };
   }
 
   async unmount() {

@@ -91,19 +91,19 @@ internal class OnyxRawSession(
      * Order follows the sequence verified by Boox-EinkDraw: width/color,
      * limit, open (resets the pen engine), then style and params again.
      */
-    fun open(limit: Rect, exclude: List<Rect>, widthPx: Float, pressureStyle: Boolean, renderEnabled: Boolean) {
+    fun open(limit: Rect, exclude: List<Rect>, widthPx: Float, pressureStyle: Boolean, renderEnabled: Boolean, color: Int = android.graphics.Color.BLACK) {
         helper.setStrokeWidth(widthPx)
-        helper.setStrokeColor(android.graphics.Color.BLACK)
+        helper.setStrokeColor(color)
         helper.setLimitRect(limit, exclude)
         helper.openRawDrawing()
-        applyStyle(widthPx, pressureStyle)
+        applyStyle(widthPx, pressureStyle, color)
         helper.setRawDrawingRenderEnabled(renderEnabled)
     }
 
-    fun applyStyle(widthPx: Float, pressureStyle: Boolean) {
+    fun applyStyle(widthPx: Float, pressureStyle: Boolean, color: Int = android.graphics.Color.BLACK) {
         helper.setStrokeStyle(if (pressureStyle) TouchHelper.STROKE_STYLE_FOUNTAIN else TouchHelper.STROKE_STYLE_PENCIL)
         helper.setStrokeWidth(widthPx)
-        helper.setStrokeColor(android.graphics.Color.BLACK)
+        helper.setStrokeColor(color)
     }
 
     fun setLimit(limit: Rect, exclude: List<Rect>) { helper.setLimitRect(limit, exclude) }

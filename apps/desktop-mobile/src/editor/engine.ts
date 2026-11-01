@@ -176,7 +176,8 @@ export class InkEditor {
     viewport.style.touchAction = "none";
     viewport.style.userSelect = "none";
     (viewport.style as any).webkitUserSelect = "none";
-    viewport.classList.add("relative", "overflow-hidden");
+    viewport.style.overflow = "hidden";
+    if (getComputedStyle(viewport).position === "static") viewport.style.position = "relative";
 
     this.world = document.createElement("div");
     this.world.className = "penroam-page absolute left-0 top-0 origin-top-left";
@@ -1387,6 +1388,15 @@ export class InkEditor {
   }
 
   // ===================================================== benchmark ==
+
+  /** Benchmark: zoom `scale` at the top-left, backing store at scale * dpr (uncapped up to 64 Mpx). */
+  benchView(scale: number) {
+    this.transform = { scale, ox: 0, oy: 0 };
+    this.applyTransform(false);
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.renderer.setResolution(scale * this.dpr);
+    this.renderer.renderAll();
+  }
 
   /** Full redraw of all layers' ink at the current resolution; ms (GPU-flushed). */
   fullRedraw(): number {

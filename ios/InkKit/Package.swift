@@ -17,12 +17,16 @@ let package = Package(
         .library(name: "InkCore", targets: ["InkCore"]),
         .library(name: "PencilInk", targets: ["PencilInk"]),
         .library(name: "WebTuning", targets: ["WebTuning"]),
+        .library(name: "PencilSurface", targets: ["PencilSurface"]),
     ],
     targets: [
         .target(name: "InkCore", swiftSettings: v5),
         .target(name: "PencilInk", dependencies: ["InkCore"], swiftSettings: v5),
         // WKWebView tweaks used by the Tauri iOS host and the WKWebView proxy.
         .target(name: "WebTuning", swiftSettings: v5),
+        // M01: platform-independent core of the Penroam iPad native ink surface
+        .target(name: "PencilSurface", dependencies: ["InkCore"], swiftSettings: v5),
         .testTarget(name: "InkCoreTests", dependencies: ["InkCore", "PencilInk"], swiftSettings: v5),
+        .testTarget(name: "PencilSurfaceTests", dependencies: ["PencilSurface", "InkCore"], swiftSettings: v5),
     ]
 )

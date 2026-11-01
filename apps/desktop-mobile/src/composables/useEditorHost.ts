@@ -8,6 +8,7 @@ import { registerFlusher } from "../platform/lifecycle";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
+import { benchHooks } from "../bench/hooks";
 
 export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: Ref<boolean>) {
   const lib = useLibrary();
@@ -124,6 +125,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       onPageEdited: () => void thumbnailNow(),
     });
     editor.value = e;
+    benchHooks.editor = e;
     applySettings();
     unregister = registerFlusher(flush);
     document.addEventListener("visibilitychange", onVisibility);
@@ -140,6 +142,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     document.removeEventListener("visibilitychange", onVisibility);
     const e = editor.value;
     editor.value = null;
+    if (benchHooks.editor === e) benchHooks.editor = null;
     const s = session;
     session = null;
     void s?.flush().catch(() => {});

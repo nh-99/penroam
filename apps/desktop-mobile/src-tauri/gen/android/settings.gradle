@@ -1,0 +1,7 @@
+include ':app'
+
+apply from: 'tauri.settings.gradle'
+
+// Penroam: shared BOOX native ink module from M00 (android/boox-ink)
+include ':boox-ink'
+project(':boox-ink').projectDir = new File(rootDir, '../../../../../android/boox-ink')

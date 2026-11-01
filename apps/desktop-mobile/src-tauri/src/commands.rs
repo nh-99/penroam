@@ -122,8 +122,15 @@ pub fn purge_notebook(state: State<'_, AppState>, id: Uuid) -> R<()> {
 }
 
 #[tauri::command(async)]
-pub fn create_page(state: State<'_, AppState>, notebook_id: Uuid, index: Option<usize>, template: Option<Template>, paper: Option<Paper>) -> R<NotebookAndPage> {
-    let (notebook, page) = lib!(state).create_page(notebook_id, index, template, paper)?;
+pub fn create_page(state: State<'_, AppState>, notebook_id: Uuid, index: Option<usize>, template: Option<Template>, paper: Option<Paper>, size: Option<Size>) -> R<NotebookAndPage> {
+    let mut lib = lib!(state);
+    if let Some(size) = size {
+        // explicit size (custom paper): used by the benchmark harness
+        let t = template.unwrap_or_else(|| Template { kind: TemplateKind::Blank, spacing: 24.0 });
+        let (notebook, mut pages) = lib.create_pages(notebook_id, index, vec![(Paper::Custom, size, t, None)])?;
+        return Ok(NotebookAndPage { notebook, page: pages.remove(0) });
+    }
+    let (notebook, page) = lib.create_page(notebook_id, index, template, paper)?;
     Ok(NotebookAndPage { notebook, page })
 }
 

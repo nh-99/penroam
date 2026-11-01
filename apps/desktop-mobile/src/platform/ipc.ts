@@ -12,6 +12,7 @@ import type { Page } from "../generated/Page";
 import type { Paper } from "../generated/Paper";
 import type { RecoveryReport } from "../generated/RecoveryReport";
 import type { Template } from "../generated/Template";
+import type { Size } from "../generated/Size";
 
 export class CommandError extends Error {
   constructor(
@@ -59,8 +60,8 @@ export const api = {
   deleteNotebook: (id: string) => call<Notebook>("delete_notebook", { id }),
   restoreNotebook: (id: string) => call<Notebook>("restore_notebook", { id }),
   purgeNotebook: (id: string) => call<void>("purge_notebook", { id }),
-  createPage: (notebookId: string, index?: number, template?: Template, paper?: Paper) =>
-    call<NotebookAndPage>("create_page", { notebookId, index, template, paper }),
+  createPage: (notebookId: string, index?: number, template?: Template, paper?: Paper, size?: Size) =>
+    call<NotebookAndPage>("create_page", { notebookId, index, template, paper, size }),
   updatePageOrder: (notebookId: string, order: string[]) => call<Notebook>("update_page_order", { notebookId, order }),
   deletePage: (notebookId: string, pageId: string) => call<Notebook>("delete_page", { notebookId, pageId }),
   restorePage: (notebookId: string, pageId: string) => call<Notebook>("restore_page", { notebookId, pageId }),

@@ -127,6 +127,21 @@ class BooxInkView @JvmOverloads constructor(
     private var tool = Tool.PEN
     private var brushWidth = 3f
     private var pressureEnabled = true
+    // M01: colour / highlighter / opacity of new strokes (M00 was black pen only)
+    private var brushColor = "#000000"
+    private var brushType = "pen"
+    private var brushOpacity = 1f
+
+    /**
+     * M01 overlay mode: no white background, so the host's page (template,
+     * PDF, text) shows through; only ink is drawn by this View.
+     */
+    var transparentBackground = false
+        set(v) {
+            field = v
+            setBackgroundColor(if (v) Color.TRANSPARENT else Color.WHITE)
+            invalidate()
+        }
     private var drawingEnabled = true
     private var hostAttached = false
     private var hostPaused = false
@@ -220,7 +235,7 @@ class BooxInkView @JvmOverloads constructor(
         val gen = sessionGeneration.get()
         if (s != null) sessionExecutor.execute {
             if (gen != sessionGeneration.get()) return@execute
-            runCatching { s.applyStyle(hwWidthPx(), pressureEnabled) }.onFailure { recordError("applyStyle", it) }
+            runCatching { s.applyStyle(hwWidthPx(), pressureEnabled && brushType == "pen", hwColor()) }.onFailure { recordError("applyStyle", it) }
         }
         if (toolChanged) updateRawEnabled()
         publishStatus()
@@ -347,7 +362,7 @@ class BooxInkView @JvmOverloads constructor(
             var s: OnyxRawSession? = null
             try {
                 s = OnyxRawSession(this, sink, opts.featureAllCreate)
-                s.open(limit, emptyList(), widthPx, pressureEnabled, opts.rawRenderEnabled)
+                s.open(limit, emptyList(), widthPx, pressureEnabled && brushType == "pen", opts.rawRenderEnabled, hwColor())
                 if (opts.epdRegionLimit) runCatching { OnyxBridge.setHandwritingRegion(this) }.onFailure { recordError("setScreenHandWritingRegionLimit", it) }
                 val enable = shouldRawBeEnabled()
                 s.setEnabled(enable)
@@ -508,9 +523,10 @@ class BooxInkView @JvmOverloads constructor(
                     "duplicatesRemoved" to r.duplicatesRemoved, "timeGaps" to r.timeGaps,
                     "spatialJumps" to r.spatialJumps, "outOfBounds" to r.outOfBounds,
                     "hardwarePreview" to true, "rawCoordinateSpace" to rawCoordinateSpace,
+                    "maxTouchPressure" to capabilities.maxTouchPressure.toDouble(),
                 ),
             ),
-            brush = InkBrush(width = brushWidth, pressure = pressureEnabled),
+            brush = currentBrush(),
             points = r.points,
         )
         strokes.add(stroke)
@@ -579,6 +595,60 @@ class BooxInkView @JvmOverloads constructor(
         }
     }
 
+    // ============================================== M01 host additions ==
+
+    /** Colour (#rrggbb), tool type ("pen" | "highlighter") and opacity of new strokes. */
+    fun setBrushStyle(color: String, type: String, opacity: Float) {
+        brushColor = if (Regex("^#[0-9a-fA-F]{6}$").matches(color)) color.lowercase() else "#000000"
+        brushType = if (type == "highlighter") "highlighter" else "pen"
+        brushOpacity = opacity.coerceIn(0.05f, 1f)
+        setBrush(brushWidth, pressureEnabled, tool)
+    }
+
+    /** Adds committed strokes made elsewhere (undo/redo, imports) without a full reload. */
+    fun addStrokes(json: String) {
+        val parsed = StrokeJson.parseDocument(json)
+        val have = strokes.mapTo(HashSet()) { it.id }
+        val add = parsed.filter { it.id !in have }
+        strokes.addAll(add)
+        add.forEach { drawStrokeIntoBitmap(it) }
+        metrics.event("strokes_added", mapOf("count" to add.size))
+        if (add.isNotEmpty()) requestEpaperRefresh(full = false)
+    }
+
+    /** Removes strokes by id (undo of a pen stroke, deletes made in the web editor). */
+    fun removeStrokes(ids: Collection<String>) {
+        val set = ids.toHashSet()
+        val before = strokes.size
+        strokes.removeAll { it.id in set }
+        if (strokes.size != before) {
+            rebuildBitmap()
+            requestEpaperRefresh(full = true)
+        }
+        metrics.event("strokes_removed", mapOf("count" to before - strokes.size))
+    }
+
+    private fun currentBrush(pressureCapable: Boolean = true) = InkBrush(
+        type = brushType,
+        width = brushWidth,
+        color = brushColor,
+        pressure = pressureEnabled && pressureCapable && brushType == "pen",
+        opacity = if (brushType == "highlighter") brushOpacity else 1f,
+    )
+
+    private val colorCache = HashMap<String, Int>()
+    private fun parseColor(hex: String): Int = colorCache.getOrPut(hex) { runCatching { Color.parseColor(hex) }.getOrDefault(Color.BLACK) }
+
+    /** Paint colour/alpha for a stroke (M00 strokes are opaque black). */
+    private fun paintFor(s: InkStroke) {
+        val c = parseColor(s.brush.color)
+        val a = (s.brush.opacity.coerceIn(0f, 1f) * 255).toInt()
+        inkPaint.color = Color.argb(a, Color.red(c), Color.green(c), Color.blue(c))
+    }
+
+    /** Hardware preview colour (opaque; the EPD pen layer has no alpha). */
+    private fun hwColor(): Int = parseColor(brushColor)
+
     // ===================================================== rendering ==
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -595,14 +665,15 @@ class BooxInkView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         val t0 = metrics.now()
-        canvas.drawColor(Color.WHITE)
+        if (!transparentBackground) canvas.drawColor(Color.WHITE)
         bitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
         // Mode C: unstable tail of the active stroke (stable pieces are already in the bitmap).
         val a = active
         if (a != null && !activeEraser) {
             canvas.save()
             applyDocMatrix(canvas)
-            val tmp = InkStroke(id = "active", source = activeDevice, input = InkInput("android-motionevent", activeDevice), brush = InkBrush(width = brushWidth, pressure = pressureEnabled), points = a)
+            val tmp = InkStroke(id = "active", source = activeDevice, input = InkInput("android-motionevent", activeDevice), brush = currentBrush(), points = a)
+            paintFor(tmp)
             StrokeGeometry.drawPieces(canvas, inkPaint, tmp, activeStable, StrokeGeometry.pieceCount(a.size), options.renderStyle)
             canvas.restore()
         }
@@ -657,6 +728,7 @@ class BooxInkView @JvmOverloads constructor(
 
     private fun drawStrokeIntoBitmap(s: InkStroke) {
         val c = bitmapCanvas ?: return
+        paintFor(s)
         c.save(); applyDocMatrix(c)
         StrokeGeometry.drawStroke(c, inkPaint, s, options.renderStyle)
         c.restore()
@@ -675,6 +747,7 @@ class BooxInkView @JvmOverloads constructor(
         for (s in strokes) {
             val b = s.bounds
             if (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1) continue
+            paintFor(s)
             StrokeGeometry.drawStroke(c, inkPaint, s, options.renderStyle); drawn++
         }
         c.restore()
@@ -809,13 +882,14 @@ class BooxInkView @JvmOverloads constructor(
                 val stroke = InkStroke(
                     source = device,
                     input = InkInput("android-motionevent", device, mapOf("hardwarePreview" to false)),
-                    brush = InkBrush(width = brushWidth, pressure = pressureEnabled && device != "mouse"),
+                    brush = currentBrush(device != "mouse"),
                     points = a,
                 )
                 strokes.add(stroke)
                 metrics.event("stroke_finalized", mapOf("points" to a.size))
                 val c = bitmapCanvas
                 if (c != null) {
+                    paintFor(stroke)
                     c.save(); applyDocMatrix(c)
                     StrokeGeometry.drawPieces(c, inkPaint, stroke, activeStable, StrokeGeometry.pieceCount(a.size), options.renderStyle)
                     c.restore()
@@ -841,7 +915,8 @@ class BooxInkView @JvmOverloads constructor(
         val stable = StrokeGeometry.stablePieceCount(a.size)
         if (stable <= activeStable) return
         val c = bitmapCanvas ?: return
-        val tmp = InkStroke(id = "active", source = activeDevice, input = InkInput("android-motionevent", activeDevice), brush = InkBrush(width = brushWidth, pressure = pressureEnabled && activeDevice != "mouse"), points = a)
+        val tmp = InkStroke(id = "active", source = activeDevice, input = InkInput("android-motionevent", activeDevice), brush = currentBrush(activeDevice != "mouse"), points = a)
+        paintFor(tmp)
         c.save(); applyDocMatrix(c)
         StrokeGeometry.drawPieces(c, inkPaint, tmp, activeStable, stable, options.renderStyle)
         c.restore()

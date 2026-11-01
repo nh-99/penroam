@@ -1,0 +1,2 @@
+-keep class dev.penroam.nativeink.** { *; }
+-keep class com.onyx.** { *; }
