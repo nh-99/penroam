@@ -1,0 +1,151 @@
+{
+  "app" : "ios-pencilkit",
+  "exportedAt" : "2026-11-02T13:29:48Z",
+  "metrics" : {
+    "capabilities" : {
+      "attached" : true,
+      "backend" : "pencilkit",
+      "documentSize" : {
+        "h" : 4000,
+        "w" : 4000
+      },
+      "drawingPolicy" : "pencilOnly",
+      "eraser" : "vector",
+      "observedForceRange" : [
+        0,
+        2.2829999999999999
+      ],
+      "os" : "26.6.2",
+      "pencilMaxForceAssumed" : 4.166666666666667,
+      "zoom" : {
+        "max" : 8,
+        "min" : 0.25
+      }
+    },
+    "clock" : "ProcessInfo.systemUptime \/ UITouch.timestamp (same clock)",
+    "counters" : {
+      "attach_surface" : 1,
+      "drawing_did_change" : 7,
+      "strokes_committed" : 7,
+      "tool_begin" : 7,
+      "tool_end" : 7
+    },
+    "errors" : [
+
+    ],
+    "events" : [
+      {
+        "h" : 0,
+        "name" : "attach_surface",
+        "t" : 475094504.76129168,
+        "w" : 0
+      }
+    ],
+    "info" : {
+      "backend" : "pencilkit"
+    },
+    "strokeCount" : 7,
+    "strokes" : [
+      {
+        "durationMs" : 3582,
+        "id" : "f598b824-ae13-4334-9638-7d522b43d9f5",
+        "samples" : 172
+      },
+      {
+        "durationMs" : 258,
+        "id" : "24632b16-6669-4f2b-9ac7-a66c2e18f7fc",
+        "samples" : 13
+      },
+      {
+        "durationMs" : 99,
+        "id" : "1d0c563d-cd15-4994-bbf3-f6bc94f1c1fa",
+        "samples" : 6
+      },
+      {
+        "durationMs" : 116,
+        "id" : "8739380e-2de5-403a-9804-5cbc980917cd",
+        "samples" : 10
+      },
+      {
+        "durationMs" : 112,
+        "id" : "aafd2367-0d32-45f8-ab2c-2d5751ba8c63",
+        "samples" : 9
+      },
+      {
+        "durationMs" : 4873,
+        "id" : "af9fedb8-b413-494a-b847-4e53df11a5ed",
+        "samples" : 848
+      },
+      {
+        "durationMs" : 258,
+        "id" : "6f66e3c1-906c-40a1-a8c6-a12300753e81",
+        "samples" : 57
+      }
+    ],
+    "timings" : {
+      "diff_convert_ms" : {
+        "count" : 7,
+        "max" : 4.7915000468492508,
+        "mean" : 0.99845833444435683,
+        "median" : 0.30962500022724271,
+        "min" : 0.11666666250675917,
+        "p95" : 4.7915000468492508,
+        "retained" : 7
+      },
+      "export_ms" : {
+        "count" : 1,
+        "max" : 19.375291652977467,
+        "mean" : 19.375291652977467,
+        "median" : 19.375291652977467,
+        "min" : 19.375291652977467,
+        "p95" : 19.375291652977467,
+        "retained" : 1
+      },
+      "stroke_duration_ms" : {
+        "count" : 7,
+        "max" : 4869.5059583405964,
+        "mean" : 1335.8533690583758,
+        "median" : 260.28058334486559,
+        "min" : 101.07741667889059,
+        "p95" : 4869.5059583405964,
+        "retained" : 7
+      },
+      "tool_end_to_commit_ms" : {
+        "count" : 7,
+        "max" : 25.444375001825392,
+        "mean" : 16.140017849725805,
+        "median" : 15.203874965663999,
+        "min" : 11.057458352297544,
+        "p95" : 25.444375001825392,
+        "retained" : 7
+      }
+    }
+  },
+  "proc" : {
+    "available" : true,
+    "cpuSeconds" : 5.8219259999999995,
+    "note" : "app process (PencilKit renders in-process)",
+    "physFootprintBytes" : 53610368,
+    "pid" : 19517,
+    "processes" : [
+
+    ],
+    "rssBytes" : 53610368,
+    "treeCpuSeconds" : 5.8219259999999995,
+    "treeRssBytes" : 53610368
+  },
+  "system" : {
+    "lowPowerMode" : false,
+    "machine" : "iPad13,4",
+    "maxFPS" : 120,
+    "model" : "iPad",
+    "os" : "ios",
+    "osVersion" : "26.6.2",
+    "screen" : {
+      "h" : 834,
+      "w" : 1194
+    },
+    "screenScale" : 2,
+    "thermalState" : 0
+  }
+}

@@ -1,0 +1,33 @@
+agent-docs/
+node_modules/
+dist/
+target/
+build/
+.gradle/
+local.properties
+.dart_tool/
+.flutter-plugins*
+.idea/
+*.iml
+.build/
+.build-ios/
+.swiftpm/
+.DS_Store
+# Large deterministic benchmark scenes: regenerate with `pnpm fixtures`
+# (tests/fixtures/generate-fixtures.mjs --check verifies them against the
+# frozen SHA-256 values in tests/fixtures/manifest.json).
+tests/fixtures/benchmark-scenes/scene-5000.json
+tests/fixtures/benchmark-scenes/scene-10000.json
+# Tauri generated projects / schemas
+apps/desktop-mobile/src-tauri/gen/schemas/
+apps/desktop-mobile/src-tauri/gen/android/app/src/main/jniLibs/
+apps/desktop-mobile/src-tauri/gen/android/.gradle/
+apps/desktop-mobile/src-tauri/gen/android/app/build/
+apps/desktop-mobile/src-tauri/gen/android/buildSrc/build/
+apps/desktop-mobile/src-tauri/gen/android/buildSrc/.gradle/
+apps/desktop-mobile/src-tauri/gen/android/build/
+plugins/tauri-plugin-native-ink/android/.tauri/
+plugins/tauri-plugin-native-ink/ios/.tauri/
+plugins/*/permissions/schemas/
+reference/m00-tauri-app/plugins/*/android/.tauri/
+reference/m00-tauri-app/plugins/*/ios/.tauri/

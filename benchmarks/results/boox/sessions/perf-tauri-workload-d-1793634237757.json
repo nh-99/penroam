@@ -1,0 +1,548 @@
+{
+  "app": "tauri",
+  "workload": "D-large-document",
+  "exportedAt": "2026-11-02T15:43:57.748Z",
+  "system": {
+    "os": "android",
+    "arch": "aarch64",
+    "family": "unix",
+    "kernel": null,
+    "webviewVersion": "146.0.7680.178",
+    "tauriVersion": "2.12.5",
+    "appVersion": "0.1.0",
+    "sessionType": null,
+    "desktop": null
+  },
+  "viewport": {
+    "width": 992.0000610351562,
+    "height": 1049.933349609375,
+    "dpr": 1.875
+  },
+  "apis": {
+    "pointerEvents": true,
+    "pointerRawUpdate": true,
+    "getCoalescedEvents": true,
+    "getPredictedEvents": true,
+    "setPointerCapture": true,
+    "offscreenCanvas": true,
+    "timestampClockOk": null,
+    "userAgent": "Mozilla/5.0 (Linux; Android 15; NoteAir5C Build/2026-08-03_16-13_4.2.1-rel_0803_eaa32b54f; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/146.0.7680.178 Safari/537.36",
+    "devicePixelRatio": 1.875
+  },
+  "results": [
+    {
+      "strokes": 100,
+      "trial": 0,
+      "generateMs": 7.300000000279397,
+      "initialRenderMs": 29.100000000093132,
+      "rebuildMs": 13.399999999906868,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 1.8999999999068677,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.300000000279397,
+      "replayIntervalMaxMs": 32.09999999962747,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 270884864,
+      "mainRssBytes": 270884864
+    },
+    {
+      "strokes": 100,
+      "trial": 1,
+      "generateMs": 3.8999999999068677,
+      "initialRenderMs": 27.899999999906868,
+      "rebuildMs": 13.200000000186265,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 2.5,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.399999999906868,
+      "replayIntervalMaxMs": 28,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 272617472,
+      "mainRssBytes": 272617472
+    },
+    {
+      "strokes": 100,
+      "trial": 2,
+      "generateMs": 1.7999999998137355,
+      "initialRenderMs": 28.5,
+      "rebuildMs": 13.700000000186265,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 1.400000000372529,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.300000000279397,
+      "replayIntervalMaxMs": 31.299999999813735,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 272740352,
+      "mainRssBytes": 272740352
+    },
+    {
+      "strokes": 1000,
+      "trial": 0,
+      "generateMs": 13.299999999813735,
+      "initialRenderMs": 123.20000000018626,
+      "rebuildMs": 94.39999999990687,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 0.8999999999068677,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.199999999720603,
+      "replayIntervalMaxMs": 28.90000000037253,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 295776256,
+      "mainRssBytes": 295776256
+    },
+    {
+      "strokes": 1000,
+      "trial": 1,
+      "generateMs": 12.299999999813735,
+      "initialRenderMs": 110.89999999990687,
+      "rebuildMs": 96.20000000018626,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 1.599999999627471,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.399999999906868,
+      "replayIntervalMaxMs": 28.100000000093132,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 303419392,
+      "mainRssBytes": 303419392
+    },
+    {
+      "strokes": 1000,
+      "trial": 2,
+      "generateMs": 26.5,
+      "initialRenderMs": 91.20000000018626,
+      "rebuildMs": 96.29999999981374,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 0.39999999990686774,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.299999999813735,
+      "replayIntervalMaxMs": 28.800000000279397,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 305553408,
+      "mainRssBytes": 305553408
+    },
+    {
+      "strokes": 5000,
+      "trial": 0,
+      "generateMs": 37.09999999962747,
+      "initialRenderMs": 348.10000000009313,
+      "rebuildMs": 335.20000000018626,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 0.20000000018626451,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.600000000093132,
+      "replayIntervalMaxMs": 28.799999999813735,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 340033536,
+      "mainRssBytes": 340033536
+    },
+    {
+      "strokes": 5000,
+      "trial": 1,
+      "generateMs": 58.39999999990687,
+      "initialRenderMs": 349.70000000018626,
+      "rebuildMs": 329.79999999981374,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 0.40000000037252903,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.200000000186265,
+      "replayIntervalMaxMs": 28.799999999813735,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 360230912,
+      "mainRssBytes": 360230912
+    },
+    {
+      "strokes": 5000,
+      "trial": 2,
+      "generateMs": 29.700000000186265,
+      "initialRenderMs": 338.6999999997206,
+      "rebuildMs": 332.20000000018626,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 1.3000000002793968,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.300000000279397,
+      "replayIntervalMaxMs": 28.700000000186265,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 360579072,
+      "mainRssBytes": 360579072
+    },
+    {
+      "strokes": 10000,
+      "trial": 0,
+      "generateMs": 51.3000000002794,
+      "initialRenderMs": 664.1999999997206,
+      "rebuildMs": 618.8000000002794,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 1.2999999998137355,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.699999999720603,
+      "replayIntervalMaxMs": 28.700000000186265,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 404267008,
+      "mainRssBytes": 404267008
+    },
+    {
+      "strokes": 10000,
+      "trial": 1,
+      "generateMs": 50.200000000186265,
+      "initialRenderMs": 627,
+      "rebuildMs": 606.6999999997206,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 2.599999999627471,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.59999999962747,
+      "replayIntervalMaxMs": 28.799999999813735,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 404373504,
+      "mainRssBytes": 404373504
+    },
+    {
+      "strokes": 10000,
+      "trial": 2,
+      "generateMs": 48.299999999813735,
+      "initialRenderMs": 641.4000000003725,
+      "rebuildMs": 582.3999999999069,
+      "replayFrameMedianMs": 0.10000000009313226,
+      "replayFrameMaxMs": 0.2999999998137355,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 26.299999999813735,
+      "replayIntervalMaxMs": 114.39999999990687,
+      "jsHeapBytes": 10000000,
+      "treeRssBytes": 404578304,
+      "mainRssBytes": 404578304
+    }
+  ],
+  "metrics": {
+    "clock": "performance.now",
+    "counters": {
+      "resize": 3,
+      "full_rebuilds": 28,
+      "frames_over_budget": 254,
+      "stroke_finalized": 12,
+      "clear_canvas": 1
+    },
+    "timings": {
+      "full_rebuild_ms": {
+        "count": 28,
+        "retained": 28,
+        "median": 110.89999999990687,
+        "p95": 641.3000000002794,
+        "max": 664.1999999997206,
+        "min": 3.5,
+        "mean": 234.6607142857309
+      },
+      "startup_to_first_frame_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 753.9862499999999,
+        "p95": 753.9862499999999,
+        "max": 753.9862499999999,
+        "min": 753.9862499999999,
+        "mean": 753.9862499999999
+      },
+      "preview_render_submitted_ms": {
+        "count": 300,
+        "retained": 300,
+        "median": 0.10000000009313226,
+        "p95": 0.5,
+        "max": 2.599999999627471,
+        "min": 0,
+        "mean": 0.16600000000558793
+      },
+      "frame_interval_ms": {
+        "count": 290,
+        "retained": 290,
+        "median": 26.399999999906868,
+        "p95": 28.300000000279397,
+        "max": 159.40000000037253,
+        "min": 1.6000000000931323,
+        "mean": 27.10172413793264
+      },
+      "persistent_render_completed_ms": {
+        "count": 12,
+        "retained": 12,
+        "median": 0.20000000018626451,
+        "p95": 0.5,
+        "max": 1.5,
+        "min": 0.10000000009313226,
+        "mean": 0.35000000001552206
+      }
+    },
+    "events": [
+      {
+        "name": "resize",
+        "t": 301.70000000018626,
+        "w": 992.0000610351562,
+        "h": 1098.533447265625,
+        "dpr": 1.875
+      },
+      {
+        "name": "resize",
+        "t": 348.10000000009313,
+        "w": 992.0000610351562,
+        "h": 1098.533447265625,
+        "dpr": 1.875
+      },
+      {
+        "name": "resize",
+        "t": 622.3000000002794,
+        "w": 992.0000610351562,
+        "h": 1049.933349609375,
+        "dpr": 1.875
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 7401.800000000279,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 8191.600000000093,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 8982.80000000028,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 9907.600000000093,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 10857.80000000028,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 11805.80000000028,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 13257.400000000373,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 14734.400000000373,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 16106.700000000186,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 18190.5,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 20222,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 22227.80000000028,
+        "points": 25
+      },
+      {
+        "name": "clear_canvas",
+        "t": 22247.5
+      }
+    ],
+    "strokes": [
+      {
+        "id": "8240a363-ff44-4f67-a2c7-1202774b7064",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 632,
+        "commitMs": 0.2999999998137355,
+        "medianDtMs": 26.299999999813735,
+        "maxDtMs": 32.09999999962747,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "92ed99d8-0f63-43c1-8598-20fd9d750a71",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 632.6999999997206,
+        "commitMs": 1.5,
+        "medianDtMs": 26.5,
+        "maxDtMs": 28,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "861b9024-7b83-4b10-a551-feddce48d025",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 631.5999999996275,
+        "commitMs": 0.19999999972060323,
+        "medianDtMs": 26.399999999906868,
+        "maxDtMs": 31.299999999813735,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "dea4f939-8057-4b1b-bb23-c81e25be80d4",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 604.7000000001863,
+        "commitMs": 0.20000000018626451,
+        "medianDtMs": 26.199999999720603,
+        "maxDtMs": 28.800000000279397,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "92e7cac1-e65b-403d-a0fd-a75c851118b2",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 635.2999999998137,
+        "commitMs": 0.20000000018626451,
+        "medianDtMs": 26.399999999906868,
+        "maxDtMs": 28.100000000093132,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "cc675a1a-cee2-4525-8204-188732847d8e",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 632.5,
+        "commitMs": 0.20000000018626451,
+        "medianDtMs": 26.300000000279397,
+        "maxDtMs": 28.800000000279397,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "43e8457d-1180-4b32-96c2-a85835792554",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 636.6000000000931,
+        "commitMs": 0.19999999972060323,
+        "medianDtMs": 26.600000000093132,
+        "maxDtMs": 28.799999999813735,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "9696d766-ed35-4e0d-a40b-6ace3c5134e5",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 632.3999999999069,
+        "commitMs": 0.5,
+        "medianDtMs": 26.299999999813735,
+        "maxDtMs": 28.799999999813735,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "205104f2-6d35-4cee-b596-24aab0136d91",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 584.6000000000931,
+        "commitMs": 0.20000000018626451,
+        "medianDtMs": 26.300000000279397,
+        "maxDtMs": 28.700000000186265,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "c0aea4b0-fdba-48be-8be6-5b494e481306",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 637.3000000002794,
+        "commitMs": 0.5,
+        "medianDtMs": 26.699999999720603,
+        "maxDtMs": 28.700000000186265,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "47f28fdd-beb4-415f-b0e6-841545f0eabe",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 636.8000000002794,
+        "commitMs": 0.10000000009313226,
+        "medianDtMs": 26.600000000093132,
+        "maxDtMs": 28.700000000186265,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "fa4b44fb-2821-4bbc-9699-0795c5af6277",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 644.2999999998137,
+        "commitMs": 0.10000000009313226,
+        "medianDtMs": 26.299999999813735,
+        "maxDtMs": 114.39999999990687,
+        "timeGaps": 1,
+        "spatialJumps": 0
+      }
+    ],
+    "errors": [],
+    "info": {
+      "apis": {
+        "pointerEvents": true,
+        "pointerRawUpdate": true,
+        "getCoalescedEvents": true,
+        "getPredictedEvents": true,
+        "setPointerCapture": true,
+        "offscreenCanvas": true,
+        "timestampClockOk": null,
+        "userAgent": "Mozilla/5.0 (Linux; Android 15; NoteAir5C Build/2026-08-03_16-13_4.2.1-rel_0803_eaa32b54f; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/146.0.7680.178 Safari/537.36",
+        "devicePixelRatio": 1.875
+      },
+      "sampleEvent": "pointerrawupdate",
+      "lastRebuild": {
+        "strokes": 0,
+        "drawn": 0,
+        "ms": 8.200000000186265
+      },
+      "startupMs": 753.9862499999999,
+      "system": {
+        "os": "android",
+        "arch": "aarch64",
+        "family": "unix",
+        "kernel": null,
+        "webviewVersion": "146.0.7680.178",
+        "tauriVersion": "2.12.5",
+        "appVersion": "0.1.0",
+        "sessionType": null,
+        "desktop": null
+      }
+    }
+  }
+}

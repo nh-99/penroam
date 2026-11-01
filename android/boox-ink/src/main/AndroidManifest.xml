@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Onyx SDK AARs declare an application label and a broad set of
+  permissions that raw pen drawing does not need. Strip them here so every
+  host (reference app, Flutter, Tauri) gets a clean merged manifest.
+  If a future firmware/SDK combination turns out to need one of these,
+  re-add it explicitly and document why in README.md.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-sdk tools:overrideLibrary="com.onyx.android.sdk,com.onyx.android.sdk.pen,com.onyx.android.sdk.baselite,com.onyx.android.sdk.geometry,com.onyx.android.sdk.penbrush,com.tencent.mmkv" />
+
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.BLUETOOTH" tools:node="remove" />
+    <uses-permission android:name="android.permission.DUMP" tools:node="remove" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+
+    <!-- Hosts must still add tools:replace="android:label" to their own
+         <application>: library-level tools:remove does not win against the
+         app manifest vs. transitive-AAR conflict. -->
+    <application tools:remove="android:allowBackup" />
+</manifest>

@@ -1,0 +1,742 @@
+{
+  "app" : "ios-native-uikit",
+  "exportedAt" : "2026-11-02T03:01:11Z",
+  "metrics" : {
+    "clock" : "ProcessInfo.systemUptime \/ UITouch.timestamp (same clock)",
+    "counters" : {
+      "clear_canvas" : 2,
+      "estimated_force_updates" : 1747,
+      "frames_over_budget" : 289,
+      "full_rebuilds" : 60,
+      "input_samples" : 1758,
+      "pointer_event_received" : 839,
+      "preview_update_scheduled" : 839,
+      "stroke_finalized" : 35
+    },
+    "errors" : [
+
+    ],
+    "events" : [
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437481899.39520836
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437482265.8589167
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437482610.137375
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437483066.23675007
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437483523.79204172
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437483988.5604167
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437484914.81145841
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437485846.05787504
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437486771.388125
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437488318.05425006
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437489856.58362502
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437491404.68462503
+      },
+      {
+        "name" : "clear_canvas",
+        "t" : 437491416.37829167
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437504589.66145831
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437504933.03841668
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437505287.21070838
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437505743.1385417
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437506210.32995838
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437506673.81925005
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437507598.31208336
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437508524.63916671
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437509458.35254169
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437511003.71054173
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437512548.81941664
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437514096.59066671
+      },
+      {
+        "name" : "clear_canvas",
+        "t" : 437514105.598625
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 117,
+        "t" : 437654860.20145839
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 134,
+        "t" : 437655880.95737505
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 242,
+        "t" : 437657643.92620838
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 21,
+        "t" : 437658102.99883336
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 339,
+        "t" : 437659953.75758332
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 283,
+        "t" : 437661537.51895839
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 217,
+        "t" : 437662729.98745841
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 330,
+        "t" : 437664680.20666671
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 20,
+        "t" : 437665114.0505417
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 17,
+        "t" : 437665297.63420832
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 38,
+        "t" : 437665730.80800003
+      }
+    ],
+    "info" : {
+      "device_pencil" : "maxForce=4.166666666666667 force=0.3333333333333333 altitude=0.9201727668431143 azimuth=0.34678999980421793 estimatedProps=1 expectingUpdates=1 rollAngle=0.0",
+      "pencilPreferredTapAction" : "1",
+      "system" : "[\"os\": \"ios\", \"screenScale\": 2.0, \"screen\": [\"w\": 1194.0, \"h\": 834.0], \"model\": \"iPad\", \"maxFPS\": 120, \"thermalState\": 0, \"lowPowerMode\": false, \"osVersion\": \"26.6.2\", \"machine\": \"iPad13,4\"]"
+    },
+    "strokes" : [
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "07d85a8b-b558-4a03-a2ea-48460824e13e",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "53e94b4e-ec89-4e35-a2b1-b635a0d6eadb",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "cd724ad7-0556-4423-a8cc-bddb39692388",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "ff10bf9f-1ab7-4eb5-9bca-8fbbfa43a5b8",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "4343a108-71a0-4605-99b8-54c587f9427e",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "4e302d40-ac16-4627-8388-f31edebfd5e6",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "2e0cd613-5a10-4f07-9c1e-913a0ffd30c2",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "0e5bd49d-61c5-433d-b6ce-0d32d40eb855",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "86117452-c9b7-406a-8a83-0658c1659577",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "1b0ca077-50ea-44cf-a880-07315827af60",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "a3fac819-8428-44ba-a05f-5e451c63aa45",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "1b42b707-4462-469a-a03e-8384c4034858",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "82b2ba66-1b8f-4c37-ac0c-d52529247975",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "ec62c65a-b387-47a1-bb14-a24fb7cbf20d",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "33b95242-612d-4240-9e4d-e804623b4c0c",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "8d323fbb-f3e9-4e56-a453-709b0c04a2ff",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "b0e50da9-8966-407a-9567-c05ceed09281",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "45ea59bd-f1ac-4adf-bd03-292b513b83ee",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "466122fb-6b63-4b43-b615-fe104ba74a40",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "462b2756-305b-4af4-ad64-f79fb97e4d75",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "f6f6657c-4428-403e-bdd8-423a485726e4",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "5cb69191-3811-40d3-8ad5-a35510cff884",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "3c32b221-ba2d-4ba3-b19f-22bfe60a797f",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "53d29766-dea2-4611-8d26-def865751107",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 115,
+        "device" : "pencil",
+        "durationMs" : 483.00000000745058,
+        "id" : "bb104c53-6d39-4ed6-9b62-da47b62fa53b",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 117,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 132,
+        "device" : "pencil",
+        "durationMs" : 554.99999999301508,
+        "id" : "766c5b40-5a8b-4fa0-b894-348e50943c62",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 134,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 240,
+        "device" : "pencil",
+        "durationMs" : 1004.0000000153668,
+        "id" : "475e3cf4-e1da-481f-b3cf-b2da91cf2821",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 242,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 19,
+        "device" : "pencil",
+        "durationMs" : 82.999999984167516,
+        "id" : "32bc1789-29bf-4cb5-8d7c-667a104c225d",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 21,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 337,
+        "device" : "pencil",
+        "durationMs" : 1409.0000000433065,
+        "id" : "90865c5a-d437-40c2-93c9-72b867c7dbaa",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 339,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 281,
+        "device" : "pencil",
+        "durationMs" : 1175.9999999776483,
+        "id" : "d23ffb60-edb8-474b-af2f-b1191ebb291e",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 283,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 215,
+        "device" : "pencil",
+        "durationMs" : 899.9999999650754,
+        "id" : "61028a6d-985e-432a-b214-87ffa0bce157",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 217,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 328,
+        "device" : "pencil",
+        "durationMs" : 1372.0000000321306,
+        "id" : "2090c625-4127-4fff-81b9-7c0ecff63d80",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 330,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 18,
+        "device" : "pencil",
+        "durationMs" : 78.999999968800694,
+        "id" : "45fdcb6d-d7b0-4030-8724-aed78013bbed",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 20,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 15,
+        "device" : "pencil",
+        "durationMs" : 66.999999980907887,
+        "id" : "184a1d26-2ee3-4201-ae15-7f5f85541081",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 17,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 36,
+        "device" : "pencil",
+        "durationMs" : 153.99999998044223,
+        "id" : "52da369c-7bc5-422c-8d5c-672d4a4c871d",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 38,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      }
+    ],
+    "timings" : {
+      "commit_cpu_ms" : {
+        "count" : 35,
+        "max" : 5.8162499917671084,
+        "mean" : 2.3252476239576936,
+        "median" : 1.9557916675694287,
+        "min" : 1.0264166630804539,
+        "p95" : 4.4621249544434249,
+        "retained" : 35
+      },
+      "event_to_expected_present_ms" : {
+        "count" : 819,
+        "max" : 30.706250108778477,
+        "mean" : 12.285813740972015,
+        "median" : 11.965333425905555,
+        "min" : 10.349666757974774,
+        "p95" : 12.464416795410216,
+        "retained" : 819
+      },
+      "event_to_handler_ms" : {
+        "count" : 839,
+        "max" : 20.452166791073978,
+        "mean" : 4.7983942657883398,
+        "median" : 4.5825417619198561,
+        "min" : 3.9227918023243546,
+        "p95" : 5.1273334538564086,
+        "retained" : 839
+      },
+      "frame_interval_ms" : {
+        "count" : 9093,
+        "max" : 170.5283333430998,
+        "mean" : 9.0736286468597882,
+        "median" : 8.3367499755695462,
+        "min" : 6.2932499567978084,
+        "p95" : 8.3367500337772071,
+        "retained" : 8192
+      },
+      "full_rebuild_ms" : {
+        "count" : 60,
+        "max" : 569.96125000296161,
+        "mean" : 182.82662985924011,
+        "median" : 73.040249990299344,
+        "min" : 1.3394583365879953,
+        "p95" : 567.87720834836364,
+        "retained" : 60
+      },
+      "input_sample_processed_ms" : {
+        "count" : 839,
+        "max" : 0.22320833522826433,
+        "mean" : 0.10079578804551526,
+        "median" : 0.10429165558889508,
+        "min" : 0.037874968256801367,
+        "p95" : 0.12791668996214867,
+        "retained" : 839
+      },
+      "persistent_render_completed_ms" : {
+        "count" : 35,
+        "max" : 40.99524999037385,
+        "mean" : 6.9429607113956342,
+        "median" : 5.1948750042356551,
+        "min" : 1.372499973513186,
+        "p95" : 8.2408749731257558,
+        "retained" : 35
+      },
+      "preview_render_submitted_ms" : {
+        "count" : 1433,
+        "max" : 2.2025416838005185,
+        "mean" : 0.39020123782184885,
+        "median" : 0.19183330005034804,
+        "min" : 0.0045416527427732944,
+        "p95" : 1.3577499776147306,
+        "retained" : 1433
+      },
+      "startup_to_first_frame_ms" : {
+        "count" : 1,
+        "max" : 88.00506591796875,
+        "mean" : 88.00506591796875,
+        "median" : 88.00506591796875,
+        "min" : 88.00506591796875,
+        "p95" : 88.00506591796875,
+        "retained" : 1
+      }
+    }
+  },
+  "proc" : {
+    "available" : true,
+    "cpuSeconds" : 25.818151,
+    "note" : "app process",
+    "physFootprintBytes" : 17025344,
+    "pid" : 19123,
+    "processes" : [
+
+    ],
+    "rssBytes" : 17025344,
+    "treeCpuSeconds" : 25.818151,
+    "treeRssBytes" : 17025344
+  },
+  "system" : {
+    "lowPowerMode" : false,
+    "machine" : "iPad13,4",
+    "maxFPS" : 120,
+    "model" : "iPad",
+    "os" : "ios",
+    "osVersion" : "26.6.2",
+    "screen" : {
+      "h" : 834,
+      "w" : 1194
+    },
+    "screenScale" : 2,
+    "thermalState" : 0
+  }
+}

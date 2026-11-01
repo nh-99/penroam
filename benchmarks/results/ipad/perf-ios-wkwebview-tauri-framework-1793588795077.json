@@ -1,0 +1,274 @@
+{
+  "app": "tauri-frontend@ios-wkwebview",
+  "mode": "framework",
+  "exportedAt": "2026-11-02T03:06:35.066Z",
+  "system": {
+    "maxFPS": 120,
+    "machine": "iPad13,4",
+    "lowPowerMode": false,
+    "webview": "WKWebView",
+    "osVersion": "26.6.2",
+    "os": "ios",
+    "host": "M00iOS (Tauri frontend proxy)",
+    "thermalState": 0,
+    "model": "iPad",
+    "screen": {
+      "h": 834,
+      "w": 1194
+    },
+    "screenScale": 2
+  },
+  "proc": {
+    "cpuSeconds": 2.1023769999999997,
+    "note": "app process only; WKWebView WebContent process is separate and not included",
+    "pid": 19131,
+    "treeRssBytes": 17517056,
+    "processes": [],
+    "physFootprintBytes": 17517056,
+    "rssBytes": 17517056,
+    "available": true,
+    "treeCpuSeconds": 2.1023769999999997
+  },
+  "metrics": {
+    "clock": "performance.now",
+    "counters": {
+      "api_unavailable": 1,
+      "resize": 3,
+      "full_rebuilds": 3,
+      "pointer_event_received": 679,
+      "timestamp_clock_check": 1,
+      "input_samples": 1347,
+      "preview_update_scheduled": 174,
+      "stroke_finalized": 4
+    },
+    "timings": {
+      "full_rebuild_ms": {
+        "count": 3,
+        "retained": 3,
+        "median": 3,
+        "p95": 24,
+        "max": 24,
+        "min": 1,
+        "mean": 9.333333333333334
+      },
+      "startup_to_first_frame_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 9727.621078491211,
+        "p95": 9727.621078491211,
+        "max": 9727.621078491211,
+        "min": 9727.621078491211,
+        "mean": 9727.621078491211
+      },
+      "event_to_handler_ms": {
+        "count": 679,
+        "retained": 679,
+        "median": 5,
+        "p95": 6,
+        "max": 18,
+        "min": 3.9999999999995453,
+        "mean": 4.876288659793853
+      },
+      "input_sample_processed_ms": {
+        "count": 679,
+        "retained": 679,
+        "median": 0,
+        "p95": 0,
+        "max": 1,
+        "min": 0,
+        "mean": 0.019145802650956955
+      },
+      "preview_render_submitted_ms": {
+        "count": 174,
+        "retained": 174,
+        "median": 0,
+        "p95": 1,
+        "max": 1.0000000000009095,
+        "min": 0,
+        "mean": 0.09770114942529128
+      },
+      "event_to_render_ms": {
+        "count": 174,
+        "retained": 174,
+        "median": 13,
+        "p95": 15.000000000000227,
+        "max": 39,
+        "min": 9,
+        "mean": 13.770114942528785
+      },
+      "render_to_next_frame_ms": {
+        "count": 174,
+        "retained": 174,
+        "median": 16.999999999999545,
+        "p95": 17.000000000000455,
+        "max": 22,
+        "min": 13,
+        "mean": 16.632183908045974
+      },
+      "frame_interval_ms": {
+        "count": 170,
+        "retained": 170,
+        "median": 17,
+        "p95": 18,
+        "max": 23,
+        "min": 13,
+        "mean": 16.729411764705883
+      },
+      "persistent_render_completed_ms": {
+        "count": 4,
+        "retained": 4,
+        "median": 1,
+        "p95": 1.0000000000009095,
+        "max": 1.0000000000009095,
+        "min": 0,
+        "mean": 0.7500000000002274
+      }
+    },
+    "events": [
+      {
+        "name": "api_unavailable",
+        "t": 22,
+        "api": "pointerRawUpdate"
+      },
+      {
+        "name": "resize",
+        "t": 23,
+        "w": 1186,
+        "h": 653,
+        "dpr": 2
+      },
+      {
+        "name": "resize",
+        "t": 57,
+        "w": 1186,
+        "h": 653,
+        "dpr": 2
+      },
+      {
+        "name": "resize",
+        "t": 313,
+        "w": 1186,
+        "h": 597,
+        "dpr": 2
+      },
+      {
+        "name": "timestamp_clock_check",
+        "t": 1167,
+        "deltaMs": 18,
+        "ok": true
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 1867,
+        "points": 338
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 2950,
+        "points": 344
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 4134,
+        "points": 316
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 5434,
+        "points": 349
+      }
+    ],
+    "strokes": [
+      {
+        "id": "5fc2c1e3-c26e-47ad-b189-30a511b99962",
+        "device": "pen",
+        "samples": 338,
+        "coalescedSamples": 336,
+        "predictedSamplesShown": 0,
+        "durationMs": 712,
+        "commitMs": 1,
+        "medianDtMs": 4,
+        "maxDtMs": 5.000000000000227,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "eeb800d5-a66f-4066-badc-7b4cea3d73c2",
+        "device": "pen",
+        "samples": 344,
+        "coalescedSamples": 342,
+        "predictedSamplesShown": 0,
+        "durationMs": 726,
+        "commitMs": 1,
+        "medianDtMs": 4,
+        "maxDtMs": 5.000000000000455,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "8d4f5cae-611d-404c-9098-9e04a15a739b",
+        "device": "pen",
+        "samples": 316,
+        "coalescedSamples": 314,
+        "predictedSamplesShown": 0,
+        "durationMs": 667,
+        "commitMs": 0,
+        "medianDtMs": 4,
+        "maxDtMs": 5.0000000000009095,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "9aa25968-2fe0-495a-926b-252fa3590b46",
+        "device": "pen",
+        "samples": 349,
+        "coalescedSamples": 347,
+        "predictedSamplesShown": 0,
+        "durationMs": 738,
+        "commitMs": 1.0000000000009095,
+        "medianDtMs": 4,
+        "maxDtMs": 5.0000000000009095,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      }
+    ],
+    "errors": [],
+    "info": {
+      "apis": {
+        "pointerEvents": true,
+        "pointerRawUpdate": false,
+        "getCoalescedEvents": true,
+        "getPredictedEvents": true,
+        "setPointerCapture": true,
+        "offscreenCanvas": true,
+        "timestampClockOk": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+        "devicePixelRatio": 2
+      },
+      "sampleEvent": "pointermove",
+      "lastRebuild": {
+        "strokes": 0,
+        "drawn": 0,
+        "ms": 3
+      },
+      "startupMs": 9727.621078491211,
+      "system": {
+        "host": "M00iOS (Tauri frontend proxy)",
+        "machine": "iPad13,4",
+        "screenScale": 2,
+        "maxFPS": 120,
+        "screen": {
+          "w": 1194,
+          "h": 834
+        },
+        "lowPowerMode": false,
+        "osVersion": "26.6.2",
+        "os": "ios",
+        "thermalState": 0,
+        "model": "iPad",
+        "webview": "WKWebView"
+      }
+    }
+  },
+  "native": null
+}

@@ -1,0 +1,497 @@
+{
+  "app": "boox-ink-demo",
+  "framework": "native-android",
+  "exportedAt": 1793632760718,
+  "capabilities": {
+    "manufacturerHint": true,
+    "sdkClassesPresent": true,
+    "firmwareRuntimePresent": true,
+    "sdkDeviceIndex": "SDM",
+    "maxTouchPressure": 4095,
+    "nativeModeCandidate": true,
+    "onyxSdk": {
+      "pen": "1.5.2",
+      "device": "1.3.3",
+      "base": "1.8.4"
+    },
+    "errors": [],
+    "device": {
+      "manufacturer": "ONYX",
+      "brand": "Onyx",
+      "model": "NoteAir5C",
+      "device": "NoteAir5C",
+      "androidRelease": "15",
+      "sdkInt": 35,
+      "fingerprint": "ONYX\/TabBoox\/TabBoox:13\/TKQ1.230615.001\/GV2.029.SQ83A:user\/release-keys",
+      "display": "2026-08-03_16-13_4.2.1-rel_0803_eaa32b54f",
+      "widthPx": 1860,
+      "heightPx": 2480,
+      "density": 1.875,
+      "densityDpi": 300,
+      "firmwareClasses": [
+        "android.onyx.ViewUpdateHelper",
+        "android.onyx.hardware.DeviceController"
+      ],
+      "webViewPackage": "com.android.webview",
+      "webViewVersion": "146.0.7680.178"
+    },
+    "sessionState": "open",
+    "rawCoordinateSpace": "view",
+    "lastError": null
+  },
+  "metrics": {
+    "clock": "SystemClock.elapsedRealtimeNanos",
+    "counters": {
+      "host_attach": 1,
+      "full_rebuilds": 1,
+      "mode_requested": 1,
+      "hardware_preview_enabled": 1,
+      "native_pen_active_callback": 3739,
+      "native_pen_down_callback": 5,
+      "onyx_timestamp_epoch": 1,
+      "native_pen_move_callback": 1968,
+      "pointer_event_received": 169,
+      "motion_events_while_raw": 169,
+      "native_pen_list_callback": 5,
+      "native_list_points": 1973,
+      "native_pen_up_callback": 5,
+      "stroke_finalized": 5,
+      "software_stroke_committed": 5,
+      "pen_up_refresh_fallback_used": 5,
+      "raw_layer_clear_requested": 5,
+      "epaper_refresh_requested": 5,
+      "persistent_render_completed": 5,
+      "native_pen_up_refresh_callback": 2,
+      "raw_coordinate_space": 1
+    },
+    "timings": {
+      "full_rebuild_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 11.777709007263184,
+        "p95": 11.777709007263184,
+        "max": 11.777709007263184,
+        "min": 11.777709007263184,
+        "mean": 11.777709007263184
+      },
+      "preview_render_submitted_ms": {
+        "count": 16,
+        "retained": 16,
+        "median": 0.0495310015976429,
+        "p95": 0.08468800038099289,
+        "max": 0.09114599972963333,
+        "min": 0.033541999757289886,
+        "mean": 0.05213862517848611
+      },
+      "startup_to_first_layout_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 160,
+        "p95": 160,
+        "max": 160,
+        "min": 160,
+        "mean": 160
+      },
+      "raw_open_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 51.090572357177734,
+        "p95": 51.090572357177734,
+        "max": 51.090572357177734,
+        "min": 51.090572357177734,
+        "mean": 51.090572357177734
+      },
+      "native_input_to_callback_ms": {
+        "count": 1973,
+        "retained": 1973,
+        "median": 0,
+        "p95": 1,
+        "max": 7,
+        "min": 0,
+        "mean": 0.4221996958945768
+      },
+      "native_callback_handler_ms": {
+        "count": 1973,
+        "retained": 1973,
+        "median": 0.01343700010329485,
+        "p95": 0.06802099943161011,
+        "max": 0.37156298756599426,
+        "min": 0.001563000027090311,
+        "mean": 0.01934859098318315
+      },
+      "input_to_handler_ms": {
+        "count": 169,
+        "retained": 169,
+        "median": 6,
+        "p95": 7,
+        "max": 13,
+        "min": 2,
+        "mean": 5.733727810650888
+      },
+      "callback_to_software_render_ms": {
+        "count": 5,
+        "retained": 5,
+        "median": 5.558333873748779,
+        "p95": 9.642969131469727,
+        "max": 9.642969131469727,
+        "min": 1.222707986831665,
+        "mean": 5.434344053268433
+      },
+      "stroke_duration_ms": {
+        "count": 5,
+        "retained": 5,
+        "median": 884.7517700195312,
+        "p95": 1356.708740234375,
+        "max": 1356.708740234375,
+        "min": 58.552085876464844,
+        "mean": 817.781901550293
+      },
+      "commit_main_thread_ms": {
+        "count": 5,
+        "retained": 5,
+        "median": 6.929062843322754,
+        "p95": 13.294479370117188,
+        "max": 13.294479370117188,
+        "min": 3.1888020038604736,
+        "mean": 7.4416039943695065
+      },
+      "persistent_render_completed_ms": {
+        "count": 5,
+        "retained": 5,
+        "median": 147.74464416503906,
+        "p95": 153.7062530517578,
+        "max": 153.7062530517578,
+        "min": 133.44708251953125,
+        "mean": 145.6458251953125
+      }
+    },
+    "memory": {
+      "javaHeapUsedBytes": 4861136,
+      "javaHeapMaxBytes": 268435456,
+      "nativeHeapAllocatedBytes": 26283376
+    },
+    "events": [
+      {
+        "name": "host_attach",
+        "tNs": 6748552051227
+      },
+      {
+        "name": "mode_requested",
+        "tNs": 6763718413826,
+        "mode": "BOOX_HARDWARE"
+      },
+      {
+        "name": "hardware_preview_enabled",
+        "tNs": 6763770679346,
+        "rawDrawingCreated": true,
+        "rawRender": true,
+        "inputEnabled": true,
+        "limit": "0 0 1860 2018"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 6793433165481
+      },
+      {
+        "name": "onyx_timestamp_epoch",
+        "tNs": 6793433224856,
+        "epoch": 2,
+        "uptimeDelta": -1793631417226,
+        "wallDelta": 1
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 6794317913397
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 6794321142147,
+        "points": 423,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 6794327605481,
+        "id": "711f9bff-e53a-41bd-8bca-8328293dea21"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 6794452281210,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 6794465630324,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 6794465680480
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 6794604872772
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 6794663420428
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 6794663861678,
+        "points": 28,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 6794664651887,
+        "id": "3509390c-7d62-483f-884e-287141dfabd1"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 6794787137355,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 6794807983032,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 6794808004543
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 6795163619595,
+        "rect": "[152.11304,305.0417][367.5298,470.3393]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 6795196768657
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 6796553471626
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 6796554174803,
+        "points": 655,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 6796559844594,
+        "id": "034c479a-284b-4de1-988a-c4ab31c89b01"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 6796682399073,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 6796707147771,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 6796707173188
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 6796991233969
+      },
+      {
+        "name": "raw_coordinate_space",
+        "tNs": 6796991513448,
+        "space": "view"
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 6797971779229
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 6797972229437,
+        "points": 475,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 6797977332927,
+        "id": "51d4521a-b4b0-483c-9da2-e38829eabc31"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 6798099663917,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 6798105184802,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 6798105287094
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 6798335030114
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 6799143385895
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 6799143811989,
+        "points": 392,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 6799147781312,
+        "id": "d6a3e626-b6f4-4ca0-8f8c-f8082f891be4"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 6799271267145,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 6799292106677,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 6799292130270
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 6799645945166,
+        "rect": "[157.73804,300.2798][1324.0774,566.4107]"
+      }
+    ],
+    "strokes": [
+      {
+        "id": "711f9bff-e53a-41bd-8bca-8328293dea21",
+        "points": 423,
+        "api": "onyx-touchhelper",
+        "durationUs": 875000,
+        "stream": "LIST",
+        "moveCount": 424,
+        "listCount": 423,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "3509390c-7d62-483f-884e-287141dfabd1",
+        "points": 28,
+        "api": "onyx-touchhelper",
+        "durationUs": 56000,
+        "stream": "LIST",
+        "moveCount": 29,
+        "listCount": 28,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "034c479a-284b-4de1-988a-c4ab31c89b01",
+        "points": 655,
+        "api": "onyx-touchhelper",
+        "durationUs": 1356000,
+        "stream": "LIST",
+        "moveCount": 656,
+        "listCount": 655,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "51d4521a-b4b0-483c-9da2-e38829eabc31",
+        "points": 475,
+        "api": "onyx-touchhelper",
+        "durationUs": 984000,
+        "stream": "LIST",
+        "moveCount": 476,
+        "listCount": 475,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "d6a3e626-b6f4-4ca0-8f8c-f8082f891be4",
+        "points": 392,
+        "api": "onyx-touchhelper",
+        "durationUs": 811000,
+        "stream": "LIST",
+        "moveCount": 393,
+        "listCount": 392,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      }
+    ],
+    "errors": [],
+    "status": {
+      "mode": "BOOX_HARDWARE",
+      "requestedMode": "BOOX_HARDWARE",
+      "sessionState": "open",
+      "tool": "PEN",
+      "brushWidth": 3,
+      "pressure": true,
+      "drawingEnabled": true,
+      "hostAttached": true,
+      "rawCoordinateSpace": "view",
+      "lastError": null,
+      "options": {
+        "rawRenderEnabled": true,
+        "handoff": "PEN_UP_REFRESH",
+        "featureAllCreate": false,
+        "epdRegionLimit": true,
+        "fingerNavigation": true,
+        "fingerDraws": false,
+        "penUpFallbackMs": 120,
+        "renderStyle": "SMOOTH"
+      },
+      "transform": {
+        "scale": 1,
+        "offsetX": 0,
+        "offsetY": 0,
+        "density": 1.875
+      },
+      "viewSize": {
+        "w": 1860,
+        "h": 2018
+      }
+    },
+    "strokeCount": 5
+  },
+  "initErrors": []
+}

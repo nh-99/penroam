@@ -1,0 +1,26 @@
+{
+  "sample-strokes.json": {
+    "sha256": "b241e87a8e104f5811ba07b22d5e407921aa3d73f2491d161579b0e04d00c934",
+    "bytes": 8322
+  },
+  "geometry-golden.json": {
+    "sha256": "6da6e83469b646588799889af1901c667c255ddf69dabd87782bd0557823d7cf",
+    "bytes": 13303
+  },
+  "benchmark-scenes/scene-100.json": {
+    "sha256": "f813a2ee4621fc7053c2e83b626590da5c029f606ed056a91020306411da5e51",
+    "bytes": 222167
+  },
+  "benchmark-scenes/scene-1000.json": {
+    "sha256": "86ffacbfac033b4f4c769144fb2716cea7f6d2a788859211b6f4e0afb30eeb8b",
+    "bytes": 2230162
+  },
+  "benchmark-scenes/scene-5000.json": {
+    "sha256": "94feccfa5989161bb0fe09d8924821681fa1ad36a1fbe6b3c56434ab083f42b6",
+    "bytes": 11311181
+  },
+  "benchmark-scenes/scene-10000.json": {
+    "sha256": "139e2d55788c4036c61374a4b355c68f0068dbbd2e74dc553ebb8533567c9b40",
+    "bytes": 22621980
+  }
+}

@@ -1,0 +1,20 @@
+[package]
+name = "penroam-storage"
+description = "Durable local Penroam library (atomic files + operation journal) and the portable .penroam archive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+penroam-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+zip.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

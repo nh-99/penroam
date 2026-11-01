@@ -1,0 +1,294 @@
+{
+  "app" : "ios-pencilkit",
+  "exportedAt" : "2026-11-02T13:38:44Z",
+  "metrics" : {
+    "capabilities" : {
+      "attached" : true,
+      "backend" : "pencilkit",
+      "documentSize" : {
+        "h" : 4000,
+        "w" : 4000
+      },
+      "drawingPolicy" : "pencilOnly",
+      "eraser" : "vector",
+      "forceCalibration" : [
+        {
+          "pkForceMax" : 0.185,
+          "pkForceMedian" : 0.067000000000000004,
+          "pkForceP90" : 0.17999999999999999,
+          "pkPoints" : 141,
+          "touchForceMax" : 0.33333333333333331,
+          "touchForceMedian" : 0.085902349154154456,
+          "touchForceP90" : 0.20360639890034993,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 161
+        },
+        {
+          "pkForceMax" : 3.6099999999999999,
+          "pkForceMedian" : 2.746,
+          "pkForceP90" : 3.5129999999999999,
+          "pkPoints" : 240,
+          "touchForceMax" : 3.6154902140299479,
+          "touchForceMedian" : 2.5971211751302081,
+          "touchForceP90" : 3.4953514099121095,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 298
+        },
+        {
+          "pkForceMax" : 1.988,
+          "pkForceMedian" : 0.95199999999999996,
+          "pkForceP90" : 1.704,
+          "pkPoints" : 316,
+          "touchForceMax" : 2.0643229166666668,
+          "touchForceMedian" : 0.39101250966389972,
+          "touchForceP90" : 1.6300493876139324,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 532
+        },
+        {
+          "pkForceMax" : 0.107,
+          "pkForceMedian" : 0.058000000000000003,
+          "pkForceP90" : 0.085999999999999993,
+          "pkPoints" : 52,
+          "touchForceMax" : 0.33333333333333331,
+          "touchForceMedian" : 0.059649280707041424,
+          "touchForceP90" : 0.12349148591359456,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 121
+        },
+        {
+          "pkForceMax" : 0.108,
+          "pkForceMedian" : 0.021999999999999999,
+          "pkForceP90" : 0.062,
+          "pkPoints" : 86,
+          "touchForceMax" : 0.33333333333333331,
+          "touchForceMedian" : 0.031314524014790852,
+          "touchForceP90" : 0.13105390071868897,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 180
+        },
+        {
+          "pkForceMax" : 1.75,
+          "pkForceMedian" : 0.20200000000000001,
+          "pkForceP90" : 1.5209999999999999,
+          "pkPoints" : 239,
+          "touchForceMax" : 1.845364507039388,
+          "touchForceMedian" : 0.2595064640045166,
+          "touchForceP90" : 1.4830533345540364,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 546
+        },
+        {
+          "pkForceMax" : 0.16500000000000001,
+          "pkForceMedian" : 0.11799999999999999,
+          "pkForceP90" : 0.157,
+          "pkPoints" : 82,
+          "touchForceMax" : 0.33333333333333331,
+          "touchForceMedian" : 0.13646162350972493,
+          "touchForceP90" : 0.33333333333333331,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 22
+        },
+        {
+          "pkForceMax" : 0.109,
+          "pkForceMedian" : 0.089999999999999997,
+          "pkForceP90" : 0.109,
+          "pkPoints" : 24,
+          "touchForceMax" : 0.15345436731974285,
+          "touchForceMedian" : 0.1257918914159139,
+          "touchForceP90" : 0.15345436731974285,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 8
+        },
+        {
+          "pkForceMax" : 0.35799999999999998,
+          "pkForceMedian" : 0.253,
+          "pkForceP90" : 0.318,
+          "pkPoints" : 143,
+          "touchForceMax" : 0.40776631037394206,
+          "touchForceMedian" : 0.25399367014567059,
+          "touchForceP90" : 0.34757521947224934,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 193
+        },
+        {
+          "pkForceMax" : 1.9890000000000001,
+          "pkForceMedian" : 1.7270000000000001,
+          "pkForceP90" : 1.9510000000000001,
+          "pkPoints" : 194,
+          "touchForceMax" : 2.196075948079427,
+          "touchForceMedian" : 1.7103148142496745,
+          "touchForceP90" : 1.9605344136555989,
+          "touchMaxPossibleForce" : 4.166666666666667,
+          "touchSamples" : 271
+        }
+      ],
+      "observedForceRange" : [
+        0,
+        3.6099999999999999
+      ],
+      "os" : "26.6.2",
+      "pencilMaxForceAssumed" : 4.166666666666667,
+      "zoom" : {
+        "max" : 8,
+        "min" : 0.25
+      }
+    },
+    "clock" : "ProcessInfo.systemUptime \/ UITouch.timestamp (same clock)",
+    "counters" : {
+      "attach_surface" : 1,
+      "drawing_did_change" : 11,
+      "finish_rendering" : 1,
+      "strokes_committed" : 10,
+      "strokes_loaded" : 1,
+      "tool_begin" : 10,
+      "tool_end" : 10
+    },
+    "errors" : [
+
+    ],
+    "events" : [
+      {
+        "h" : 0,
+        "name" : "attach_surface",
+        "t" : 475885917.71016669,
+        "w" : 0
+      },
+      {
+        "count" : 7,
+        "name" : "strokes_loaded",
+        "t" : 475886077.60066664
+      }
+    ],
+    "info" : {
+      "backend" : "pencilkit"
+    },
+    "strokeCount" : 17,
+    "strokes" : [
+      {
+        "durationMs" : 663,
+        "id" : "89b64382-b778-4932-9b41-cabba7b92bc9",
+        "samples" : 141
+      },
+      {
+        "durationMs" : 1217,
+        "id" : "0fd3243f-f9fb-4d93-971b-f6a831b71293",
+        "samples" : 240
+      },
+      {
+        "durationMs" : 2201,
+        "id" : "9b2cbc80-d361-47c7-8ff4-10cc09843a58",
+        "samples" : 316
+      },
+      {
+        "durationMs" : 491,
+        "id" : "1a763e45-c9ce-43fd-9113-f6bdfcf4a3d5",
+        "samples" : 52
+      },
+      {
+        "durationMs" : 742,
+        "id" : "faa9386c-7863-4b1e-b33e-cda4e41f7aab",
+        "samples" : 86
+      },
+      {
+        "durationMs" : 2259,
+        "id" : "d795944d-7470-491f-b146-e6bb743fc592",
+        "samples" : 239
+      },
+      {
+        "durationMs" : 501,
+        "id" : "594ff81b-0e05-49e0-87e9-35b5e620f2e3",
+        "samples" : 82
+      },
+      {
+        "durationMs" : 117,
+        "id" : "493e67ad-5e2c-4169-8c17-cf0f511b026a",
+        "samples" : 24
+      },
+      {
+        "durationMs" : 796,
+        "id" : "c2bb9ca5-9cba-465d-a5b3-fd98b8f55a96",
+        "samples" : 143
+      },
+      {
+        "durationMs" : 1109,
+        "id" : "e442b03e-d027-4ea5-ad37-7d7876c7206f",
+        "samples" : 194
+      }
+    ],
+    "timings" : {
+      "diff_convert_ms" : {
+        "count" : 10,
+        "max" : 6.5672083292156458,
+        "mean" : 2.9681416635867208,
+        "median" : 3.0613333219662309,
+        "min" : 0.18716661725193262,
+        "p95" : 6.5672083292156458,
+        "retained" : 10
+      },
+      "export_ms" : {
+        "count" : 2,
+        "max" : 30.104624980594963,
+        "mean" : 21.735895832534879,
+        "median" : 30.104624980594963,
+        "min" : 13.367166684474796,
+        "p95" : 30.104624980594963,
+        "retained" : 2
+      },
+      "import_ms" : {
+        "count" : 1,
+        "max" : 4.9800833803601563,
+        "mean" : 4.9800833803601563,
+        "median" : 4.9800833803601563,
+        "min" : 4.9800833803601563,
+        "p95" : 4.9800833803601563,
+        "retained" : 1
+      },
+      "stroke_duration_ms" : {
+        "count" : 10,
+        "max" : 2266.1953333299607,
+        "mean" : 1013.8291750045028,
+        "median" : 792.65387501800433,
+        "min" : 119.04320830944926,
+        "p95" : 2266.1953333299607,
+        "retained" : 10
+      },
+      "tool_end_to_commit_ms" : {
+        "count" : 10,
+        "max" : 103.91616664128378,
+        "mean" : 23.127008340088651,
+        "median" : 14.504333317745477,
+        "min" : 8.6249583400785923,
+        "p95" : 103.91616664128378,
+        "retained" : 10
+      }
+    }
+  },
+  "proc" : {
+    "available" : true,
+    "cpuSeconds" : 4.1223460000000003,
+    "note" : "app process (PencilKit renders in-process)",
+    "physFootprintBytes" : 53839808,
+    "pid" : 19525,
+    "processes" : [
+
+    ],
+    "rssBytes" : 53839808,
+    "treeCpuSeconds" : 4.1223460000000003,
+    "treeRssBytes" : 53839808
+  },
+  "system" : {
+    "lowPowerMode" : false,
+    "machine" : "iPad13,4",
+    "maxFPS" : 120,
+    "model" : "iPad",
+    "os" : "ios",
+    "osVersion" : "26.6.2",
+    "screen" : {
+      "h" : 834,
+      "w" : 1194
+    },
+    "screenScale" : 2,
+    "thermalState" : 0
+  }
+}

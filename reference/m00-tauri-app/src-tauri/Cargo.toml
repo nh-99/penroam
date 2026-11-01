@@ -1,0 +1,25 @@
+[package]
+name = "m00-tauri-app"
+version = "0.1.0"
+description = "M00 handwriting bake-off: Tauri v2 prototype"
+edition = "2021"
+rust-version = "1.90"
+
+[lib]
+name = "m00_tauri_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.5", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-boox-ink = { path = "../plugins/tauri-plugin-boox-ink" }
+tauri-plugin-pencilkit = { path = "../plugins/tauri-plugin-pencilkit" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3

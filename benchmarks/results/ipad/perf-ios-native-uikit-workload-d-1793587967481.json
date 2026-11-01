@@ -1,0 +1,442 @@
+{
+  "app" : "ios-native-uikit",
+  "exportedAt" : "2026-11-02T02:52:47Z",
+  "metrics" : {
+    "clock" : "ProcessInfo.systemUptime \/ UITouch.timestamp (same clock)",
+    "counters" : {
+      "clear_canvas" : 1,
+      "frames_over_budget" : 10,
+      "full_rebuilds" : 29,
+      "stroke_finalized" : 12
+    },
+    "errors" : [
+
+    ],
+    "events" : [
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437181437.95320833
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437181790.40366668
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437182135.97712505
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437182597.78575003
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437183059.26991665
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437183516.93395835
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437184447.42204165
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437185377.27100003
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437186310.38008332
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437187861.41037506
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437189408.73687506
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 25,
+        "t" : 437190948.16845834
+      },
+      {
+        "name" : "clear_canvas",
+        "t" : 437190960.31104165
+      }
+    ],
+    "info" : {
+      "pencilPreferredTapAction" : "1",
+      "system" : "[\"machine\": \"iPad13,4\", \"screenScale\": 2.0, \"osVersion\": \"26.6.2\", \"os\": \"ios\", \"thermalState\": 0, \"model\": \"iPad\", \"screen\": [\"w\": 1194.0, \"h\": 834.0], \"lowPowerMode\": false, \"maxFPS\": 120]"
+    },
+    "strokes" : [
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "3f194dbe-bf5f-4724-8b45-453e62414f22",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "7c9b78a7-be86-4dd2-8534-cd100f1fcb0f",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "b0feb501-0a8b-4086-83b4-526624753c96",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "6388b982-b130-4da1-89bf-f8a2e1b6fae2",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "acce966e-c45e-43aa-8ca2-04a39c698665",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "df43de5e-ae47-465c-8dc1-51616a4abc5b",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "85b17e07-9ab6-4039-9b02-7328bf3753d5",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "9016a523-1068-4054-80c8-f398c566cfa4",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "d085110c-9948-407a-9ee3-8ac6d5f7190a",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "f53d302c-bf3b-4cc7-b5f6-fb6883b1d406",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "87fb14ce-c992-4338-8c77-73e0f1de88de",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 0,
+        "device" : "pencil",
+        "durationMs" : 192,
+        "id" : "5c670b83-02cd-4585-b63c-937c370faad3",
+        "maxDtMs" : 8,
+        "medianDtMs" : 8,
+        "predictedSamplesShown" : 0,
+        "samples" : 25,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      }
+    ],
+    "timings" : {
+      "commit_cpu_ms" : {
+        "count" : 12,
+        "max" : 3.0667916871607304,
+        "mean" : 2.0535069440181055,
+        "median" : 1.9901249906979501,
+        "min" : 1.2446250184439123,
+        "p95" : 2.8816666454076767,
+        "retained" : 12
+      },
+      "frame_interval_ms" : {
+        "count" : 604,
+        "max" : 171.80012498283759,
+        "mean" : 9.4239086643962295,
+        "median" : 8.3367499755695462,
+        "min" : 6.3799583003856242,
+        "p95" : 8.3367500337772071,
+        "retained" : 604
+      },
+      "full_rebuild_ms" : {
+        "count" : 29,
+        "max" : 568.36441665655002,
+        "mean" : 189.14384195773766,
+        "median" : 77.574083348736167,
+        "min" : 1.3588749570772052,
+        "p95" : 568.00987495807931,
+        "retained" : 29
+      },
+      "persistent_render_completed_ms" : {
+        "count" : 11,
+        "max" : 8.2859999965876341,
+        "mean" : 5.6314583264545286,
+        "median" : 5.006583349313587,
+        "min" : 3.74195835320279,
+        "p95" : 8.2859999965876341,
+        "retained" : 11
+      },
+      "preview_render_submitted_ms" : {
+        "count" : 300,
+        "max" : 0.52924995543435216,
+        "mean" : 0.081419443983274206,
+        "median" : 0.041791703552007675,
+        "min" : 0.0046250061132013798,
+        "p95" : 0.27404166758060455,
+        "retained" : 300
+      },
+      "startup_to_first_frame_ms" : {
+        "count" : 1,
+        "max" : 82.525014877319336,
+        "mean" : 82.525014877319336,
+        "median" : 82.525014877319336,
+        "min" : 82.525014877319336,
+        "p95" : 82.525014877319336,
+        "retained" : 1
+      }
+    }
+  },
+  "results" : [
+    {
+      "generateMs" : 2.701624995097518,
+      "initialRenderMs" : 26.015833311248571,
+      "physFootprintBytes" : 24053696,
+      "rebuildMs" : 18.56804167618975,
+      "replayFrameMaxMs" : 1.0963750537484884,
+      "replayFrameMedianMs" : 0.47354167327284813,
+      "replayFrames" : 25,
+      "strokes" : 100,
+      "trial" : 0
+    },
+    {
+      "generateMs" : 5.8314999914728105,
+      "initialRenderMs" : 28.706750017590821,
+      "physFootprintBytes" : 24364928,
+      "rebuildMs" : 18.049583304673433,
+      "replayFrameMaxMs" : 0.97049999749287963,
+      "replayFrameMedianMs" : 0.20920834504067898,
+      "replayFrames" : 25,
+      "strokes" : 100,
+      "trial" : 1
+    },
+    {
+      "generateMs" : 7.5302916811779141,
+      "initialRenderMs" : 22.2264583571814,
+      "physFootprintBytes" : 24037312,
+      "rebuildMs" : 16.294291708618402,
+      "replayFrameMaxMs" : 1.1782083311118186,
+      "replayFrameMedianMs" : 0.36945834290236235,
+      "replayFrames" : 25,
+      "strokes" : 100,
+      "trial" : 2
+    },
+    {
+      "generateMs" : 34.377250005491078,
+      "initialRenderMs" : 78.882875037379563,
+      "physFootprintBytes" : 25888704,
+      "rebuildMs" : 53.56374999973923,
+      "replayFrameMaxMs" : 1.0339583386667073,
+      "replayFrameMedianMs" : 0.1545000122860074,
+      "replayFrames" : 25,
+      "strokes" : 1000,
+      "trial" : 0
+    },
+    {
+      "generateMs" : 33.182416635099798,
+      "initialRenderMs" : 78.391541668679565,
+      "physFootprintBytes" : 27756480,
+      "rebuildMs" : 52.758958365302533,
+      "replayFrameMaxMs" : 0.83716667722910643,
+      "replayFrameMedianMs" : 0.1707083429209888,
+      "replayFrames" : 25,
+      "strokes" : 1000,
+      "trial" : 1
+    },
+    {
+      "generateMs" : 33.992000040598214,
+      "initialRenderMs" : 77.574083348736167,
+      "physFootprintBytes" : 27019200,
+      "rebuildMs" : 52.839041687548161,
+      "replayFrameMaxMs" : 1.0667083552107215,
+      "replayFrameMedianMs" : 0.14383334200829268,
+      "replayFrames" : 25,
+      "strokes" : 1000,
+      "trial" : 2
+    },
+    {
+      "generateMs" : 95.581208297517151,
+      "initialRenderMs" : 279.43654166301712,
+      "physFootprintBytes" : 34703296,
+      "rebuildMs" : 262.12708331877366,
+      "replayFrameMaxMs" : 0.69199997233226895,
+      "replayFrameMedianMs" : 0.13612501788884401,
+      "replayFrames" : 25,
+      "strokes" : 5000,
+      "trial" : 0
+    },
+    {
+      "generateMs" : 94.67804164160043,
+      "initialRenderMs" : 279.70612497301772,
+      "physFootprintBytes" : 40880128,
+      "rebuildMs" : 261.80945831583813,
+      "replayFrameMaxMs" : 0.76145830098539591,
+      "replayFrameMedianMs" : 0.14687498332932591,
+      "replayFrames" : 25,
+      "strokes" : 5000,
+      "trial" : 1
+    },
+    {
+      "generateMs" : 99.297875014599413,
+      "initialRenderMs" : 280.10341670596972,
+      "physFootprintBytes" : 40470528,
+      "rebuildMs" : 261.70666667167097,
+      "replayFrameMaxMs" : 0.52316667279228568,
+      "replayFrameMedianMs" : 0.15366665320470929,
+      "replayFrames" : 25,
+      "strokes" : 5000,
+      "trial" : 2
+    },
+    {
+      "generateMs" : 152.46633335482329,
+      "initialRenderMs" : 568.36441665655002,
+      "physFootprintBytes" : 48187392,
+      "rebuildMs" : 537.1328333276324,
+      "replayFrameMaxMs" : 0.78937504440546036,
+      "replayFrameMedianMs" : 0.1620416296645999,
+      "replayFrames" : 25,
+      "strokes" : 10000,
+      "trial" : 0
+    },
+    {
+      "generateMs" : 147.866333310958,
+      "initialRenderMs" : 567.00833333889022,
+      "physFootprintBytes" : 41060352,
+      "rebuildMs" : 537.017916678451,
+      "replayFrameMaxMs" : 0.66137500107288361,
+      "replayFrameMedianMs" : 0.17354171723127365,
+      "replayFrames" : 25,
+      "strokes" : 10000,
+      "trial" : 1
+    },
+    {
+      "generateMs" : 139.54720832407475,
+      "initialRenderMs" : 568.00987495807931,
+      "physFootprintBytes" : 41404416,
+      "rebuildMs" : 536.74408333608881,
+      "replayFrameMaxMs" : 0.84300001617521048,
+      "replayFrameMedianMs" : 0.13883330393582582,
+      "replayFrames" : 25,
+      "strokes" : 10000,
+      "trial" : 2
+    }
+  ],
+  "system" : {
+    "lowPowerMode" : false,
+    "machine" : "iPad13,4",
+    "maxFPS" : 120,
+    "model" : "iPad",
+    "os" : "ios",
+    "osVersion" : "26.6.2",
+    "screen" : {
+      "h" : 834,
+      "w" : 1194
+    },
+    "screenScale" : 2,
+    "thermalState" : 0
+  },
+  "viewport" : {
+    "dpr" : 2,
+    "height" : 657.5,
+    "width" : 1186
+  },
+  "workload" : "D-large-document"
+}

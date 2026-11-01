@@ -1,0 +1,227 @@
+{
+  "app" : "ios-native-uikit",
+  "exportedAt" : "2026-11-02T14:21:12Z",
+  "metrics" : {
+    "clock" : "ProcessInfo.systemUptime \/ UITouch.timestamp (same clock)",
+    "counters" : {
+      "estimated_force_updates" : 315,
+      "frames_over_budget" : 290,
+      "full_rebuild" : 4,
+      "full_rebuilds" : 4,
+      "input_samples" : 318,
+      "pointer_event_received" : 161,
+      "preview_update_scheduled" : 161,
+      "stroke_finalized" : 3
+    },
+    "errors" : [
+
+    ],
+    "events" : [
+      {
+        "activeStroke" : false,
+        "name" : "full_rebuild",
+        "reason" : "first-layout",
+        "strokes" : 0,
+        "t" : 478411150.67941672
+      },
+      {
+        "activeStroke" : false,
+        "name" : "full_rebuild",
+        "reason" : "resize",
+        "strokes" : 0,
+        "t" : 478411158.39445835
+      },
+      {
+        "activeStroke" : false,
+        "name" : "full_rebuild",
+        "reason" : "resize",
+        "strokes" : 0,
+        "t" : 478411392.99358332
+      },
+      {
+        "activeStroke" : true,
+        "name" : "full_rebuild",
+        "reason" : "resize",
+        "strokes" : 0,
+        "t" : 478449652.0500834
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 99,
+        "t" : 478449902.04462504
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 107,
+        "t" : 478450908.89308333
+      },
+      {
+        "name" : "stroke_finalized",
+        "points" : 112,
+        "t" : 478451654.18141669
+      }
+    ],
+    "info" : {
+      "device_pencil" : "maxForce=4.166666666666667 force=0.3333333333333333 altitude=0.9284327189114432 azimuth=0.034845872721413186 estimatedProps=1 expectingUpdates=1 rollAngle=0.0",
+      "pencilPreferredTapAction" : "1",
+      "system" : "[\"machine\": \"iPad13,4\", \"thermalState\": 0, \"os\": \"ios\", \"osVersion\": \"26.6.2\", \"screenScale\": 2.0, \"screen\": [\"w\": 1194.0, \"h\": 834.0], \"lowPowerMode\": false, \"maxFPS\": 120, \"model\": \"iPad\"]"
+    },
+    "strokes" : [
+      {
+        "coalescedSamples" : 97,
+        "device" : "pencil",
+        "durationMs" : 407.99999999580905,
+        "id" : "2f2b0e8b-213b-4b36-b371-2149218c002f",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 99,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 105,
+        "device" : "pencil",
+        "durationMs" : 441.99999998090789,
+        "id" : "b0fb4c07-deb8-414c-abf2-216095ca13c1",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 107,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      },
+      {
+        "coalescedSamples" : 110,
+        "device" : "pencil",
+        "durationMs" : 462.99999998882413,
+        "id" : "0aba202d-5301-429a-9fa2-1e44eb4fd453",
+        "maxDtMs" : 5.0000000046566129,
+        "medianDtMs" : 4.0000000153668225,
+        "predictedSamplesShown" : 0,
+        "samples" : 112,
+        "spatialJumps" : 0,
+        "timeGaps" : 0
+      }
+    ],
+    "timings" : {
+      "commit_cpu_ms" : {
+        "count" : 3,
+        "max" : 0.61154167633503675,
+        "mean" : 0.38509722799062729,
+        "median" : 0.39195833960548043,
+        "min" : 0.15179166803136468,
+        "p95" : 0.61154167633503675,
+        "retained" : 3
+      },
+      "event_to_expected_present_ms" : {
+        "count" : 152,
+        "max" : 29.481208475772291,
+        "mean" : 12.730175543478445,
+        "median" : 12.027125107124448,
+        "min" : 10.874791769310832,
+        "p95" : 20.239375124219805,
+        "retained" : 152
+      },
+      "event_to_handler_ms" : {
+        "count" : 161,
+        "max" : 18.545291793998331,
+        "mean" : 5.0415591122033021,
+        "median" : 4.5670834369957447,
+        "min" : 3.3591667888686061,
+        "p95" : 10.072500095702708,
+        "retained" : 161
+      },
+      "frame_interval_ms" : {
+        "count" : 9860,
+        "max" : 77.01112498762086,
+        "mean" : 8.8405460255955859,
+        "median" : 8.3367499755695462,
+        "min" : 6.2609583837911487,
+        "p95" : 8.3367500337772071,
+        "retained" : 8192
+      },
+      "full_rebuild_ms" : {
+        "count" : 4,
+        "max" : 2.3705416242592037,
+        "mean" : 1.8004791782004759,
+        "median" : 1.9222917035222054,
+        "min" : 1.4252917026169598,
+        "p95" : 2.3705416242592037,
+        "retained" : 4
+      },
+      "input_sample_processed_ms" : {
+        "count" : 161,
+        "max" : 1.4330416452139616,
+        "mean" : 0.076027949679041321,
+        "median" : 0.069916655775159597,
+        "min" : 0.017583312001079321,
+        "p95" : 0.088666682131588459,
+        "retained" : 161
+      },
+      "persistent_render_completed_ms" : {
+        "count" : 3,
+        "max" : 8.2788333529606462,
+        "mean" : 3.774430563983818,
+        "median" : 2.2736666724085808,
+        "min" : 0.77079166658222675,
+        "p95" : 8.2788333529606462,
+        "retained" : 3
+      },
+      "preview_render_submitted_ms" : {
+        "count" : 157,
+        "max" : 0.090916641056537628,
+        "mean" : 0.02513774173856256,
+        "median" : 0.024958339054137468,
+        "min" : 0.0054583651944994926,
+        "p95" : 0.02966664033010602,
+        "retained" : 157
+      },
+      "stable_flush_ms" : {
+        "count" : 146,
+        "max" : 1.473916694521904,
+        "mean" : 0.50478110892047523,
+        "median" : 0.49004162428900599,
+        "min" : 0.18562498735263944,
+        "p95" : 0.8689583046361804,
+        "retained" : 146
+      },
+      "startup_to_first_frame_ms" : {
+        "count" : 1,
+        "max" : 119.03691291809082,
+        "mean" : 119.03691291809082,
+        "median" : 119.03691291809082,
+        "min" : 119.03691291809082,
+        "p95" : 119.03691291809082,
+        "retained" : 1
+      }
+    }
+  },
+  "proc" : {
+    "available" : true,
+    "cpuSeconds" : 7.6911040000000002,
+    "note" : "app process",
+    "physFootprintBytes" : 13010752,
+    "pid" : 19552,
+    "processes" : [
+
+    ],
+    "rssBytes" : 13010752,
+    "treeCpuSeconds" : 7.6911040000000002,
+    "treeRssBytes" : 13010752
+  },
+  "system" : {
+    "lowPowerMode" : false,
+    "machine" : "iPad13,4",
+    "maxFPS" : 120,
+    "model" : "iPad",
+    "os" : "ios",
+    "osVersion" : "26.6.2",
+    "screen" : {
+      "h" : 834,
+      "w" : 1194
+    },
+    "screenScale" : 2,
+    "thermalState" : 0
+  }
+}

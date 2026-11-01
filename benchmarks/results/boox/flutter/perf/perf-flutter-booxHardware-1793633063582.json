@@ -1,0 +1,2453 @@
+{
+  "app": "flutter",
+  "mode": "booxHardware",
+  "composition": "hybrid",
+  "exportedAt": "2026-11-02T10:24:23.557327",
+  "system": {
+    "os": "android",
+    "osVersion": "2026-08-03_16-13_4.2.1-rel_0803_eaa32b54f",
+    "dartVersion": "3.13.7 (stable) (Thu Oct 22 14:28:57 2026 -0700) on \"android_arm64\"",
+    "numberOfProcessors": 8,
+    "sessionType": null,
+    "desktop": null,
+    "kernel": null,
+    "releaseMode": true,
+    "profileMode": false
+  },
+  "proc": {
+    "available": true,
+    "pid": 9640,
+    "rssBytes": 225353728,
+    "maxRssBytes": 239419392,
+    "cpuSeconds": 15.61
+  },
+  "metrics": {
+    "clock": "Stopwatch (monotonic)",
+    "counters": {
+      "full_rebuilds": 1,
+      "cache_rebuilds": 2,
+      "frames_over_budget": 17,
+      "framework_frame_presented": 139
+    },
+    "timings": {
+      "picture_record_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 0.003,
+        "p95": 0.003,
+        "max": 0.003,
+        "min": 0.003,
+        "mean": 0.003
+      },
+      "cache_build_submit_ms": {
+        "count": 2,
+        "retained": 2,
+        "median": 0.123,
+        "p95": 0.123,
+        "max": 0.123,
+        "min": 0.0779999999999994,
+        "mean": 0.1004999999999997
+      },
+      "committed_paint_ms": {
+        "count": 2,
+        "retained": 2,
+        "median": 0.214,
+        "p95": 0.214,
+        "max": 0.214,
+        "min": 0.11700000000000088,
+        "mean": 0.16550000000000042
+      },
+      "preview_render_submitted_ms": {
+        "count": 2,
+        "retained": 2,
+        "median": 0.0010000000000000009,
+        "p95": 0.0010000000000000009,
+        "max": 0.0010000000000000009,
+        "min": 0.0,
+        "mean": 0.0005000000000000004
+      },
+      "frame_build_ms": {
+        "count": 139,
+        "retained": 139,
+        "median": 1.737,
+        "p95": 48.228,
+        "max": 106.276,
+        "min": 0.115,
+        "mean": 6.151956834532373
+      },
+      "frame_raster_ms": {
+        "count": 139,
+        "retained": 139,
+        "median": 3.002,
+        "p95": 6.817,
+        "max": 34.811,
+        "min": 0.877,
+        "mean": 3.878899280575539
+      },
+      "frame_total_span_ms": {
+        "count": 139,
+        "retained": 139,
+        "median": 8.027,
+        "p95": 59.88,
+        "max": 282.948,
+        "min": 3.633,
+        "mean": 17.393402877697838
+      },
+      "frame_vsync_overhead_ms": {
+        "count": 139,
+        "retained": 139,
+        "median": 1.245,
+        "p95": 17.656,
+        "max": 214.737,
+        "min": 0.111,
+        "mean": 4.836532374100719
+      }
+    },
+    "events": [],
+    "strokes": [],
+    "errors": [],
+    "info": {
+      "system": {
+        "os": "android",
+        "osVersion": "2026-08-03_16-13_4.2.1-rel_0803_eaa32b54f",
+        "dartVersion": "3.13.7 (stable) (Thu Oct 22 14:28:57 2026 -0700) on \"android_arm64\"",
+        "numberOfProcessors": 8,
+        "sessionType": null,
+        "desktop": null,
+        "kernel": null,
+        "releaseMode": true,
+        "profileMode": false
+      },
+      "lastRasterFinishUs": 1644307910,
+      "nativeCapabilities": {
+        "manufacturerHint": true,
+        "sdkClassesPresent": true,
+        "firmwareRuntimePresent": true,
+        "sdkDeviceIndex": "SDM",
+        "maxTouchPressure": 4095,
+        "nativeModeCandidate": true,
+        "onyxSdk": {
+          "pen": "1.5.2",
+          "device": "1.3.3",
+          "base": "1.8.4"
+        },
+        "errors": [],
+        "device": {
+          "manufacturer": "ONYX",
+          "brand": "Onyx",
+          "model": "NoteAir5C",
+          "device": "NoteAir5C",
+          "androidRelease": "15",
+          "sdkInt": 35,
+          "fingerprint": "ONYX/TabBoox/TabBoox:13/TKQ1.230615.001/GV2.029.SQ83A:user/release-keys",
+          "display": "2026-08-03_16-13_4.2.1-rel_0803_eaa32b54f",
+          "widthPx": 1860,
+          "heightPx": 2480,
+          "density": 1.875,
+          "densityDpi": 300,
+          "firmwareClasses": [
+            "android.onyx.ViewUpdateHelper",
+            "android.onyx.hardware.DeviceController"
+          ],
+          "webViewPackage": "com.android.webview",
+          "webViewVersion": "146.0.7680.178"
+        },
+        "sessionState": "closed",
+        "rawCoordinateSpace": "unknown",
+        "lastError": null
+      }
+    }
+  },
+  "native": {
+    "clock": "SystemClock.elapsedRealtimeNanos",
+    "counters": {
+      "strokes_loaded": 1,
+      "mode_requested": 2,
+      "host_attach": 1,
+      "full_rebuilds": 27,
+      "epaper_refresh_requested": 46,
+      "hardware_preview_enabled": 4,
+      "raw_limit_reconfigured": 3,
+      "raw_drawing_closed": 3,
+      "native_pen_active_callback": 19752,
+      "native_pen_down_callback": 39,
+      "onyx_timestamp_epoch": 1,
+      "native_pen_move_callback": 10609,
+      "pointer_event_received": 986,
+      "motion_events_while_raw": 954,
+      "native_pen_list_callback": 39,
+      "native_list_points": 10648,
+      "native_pen_up_callback": 39,
+      "stroke_finalized": 39,
+      "software_stroke_committed": 39,
+      "pen_up_refresh_fallback_used": 38,
+      "raw_layer_clear_requested": 38,
+      "persistent_render_completed": 38,
+      "native_pen_up_refresh_callback": 15,
+      "raw_coordinate_space": 1
+    },
+    "timings": {
+      "load_parse_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 0.9646869897842407,
+        "p95": 0.9646869897842407,
+        "max": 0.9646869897842407,
+        "min": 0.9646869897842407,
+        "mean": 0.9646869897842407
+      },
+      "load_render_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 0.02437499910593033,
+        "p95": 0.02437499910593033,
+        "max": 0.02437499910593033,
+        "min": 0.02437499910593033,
+        "mean": 0.02437499910593033
+      },
+      "full_rebuild_ms": {
+        "count": 27,
+        "retained": 27,
+        "median": 59.98765563964844,
+        "p95": 67.62328338623047,
+        "max": 80.33869934082031,
+        "min": 6.67062520980835,
+        "mean": 51.802386584105314
+      },
+      "preview_render_submitted_ms": {
+        "count": 258,
+        "retained": 258,
+        "median": 0.024271000176668167,
+        "p95": 0.04927099868655205,
+        "max": 1.5919790267944336,
+        "min": 0.011354000307619572,
+        "mean": 0.0385436553204822
+      },
+      "raw_open_ms": {
+        "count": 4,
+        "retained": 4,
+        "median": 44.86588668823242,
+        "p95": 50.881248474121094,
+        "max": 50.881248474121094,
+        "min": 37.29927062988281,
+        "mean": 43.157968521118164
+      },
+      "native_input_to_callback_ms": {
+        "count": 10648,
+        "retained": 4096,
+        "median": 0,
+        "p95": 12,
+        "max": 66,
+        "min": 0,
+        "mean": 1.75634765625
+      },
+      "native_callback_handler_ms": {
+        "count": 10648,
+        "retained": 4096,
+        "median": 0.014166000299155712,
+        "p95": 0.020261000841856003,
+        "max": 0.8197910189628601,
+        "min": 0.0014070000033825636,
+        "mean": 0.016618614260806908
+      },
+      "input_to_handler_ms": {
+        "count": 986,
+        "retained": 986,
+        "median": 7,
+        "p95": 24,
+        "max": 136,
+        "min": 3,
+        "mean": 9.242393509127789
+      },
+      "callback_to_software_render_ms": {
+        "count": 39,
+        "retained": 39,
+        "median": 2.270051956176758,
+        "p95": 9.735053062438965,
+        "max": 14.207291603088379,
+        "min": 0.6127079725265503,
+        "mean": 3.9053779320839124
+      },
+      "stroke_duration_ms": {
+        "count": 39,
+        "retained": 39,
+        "median": 268.6033935546875,
+        "p95": 2060.4658203125,
+        "max": 3311.16162109375,
+        "min": 51.79077911376953,
+        "mean": 568.3805685776931
+      },
+      "commit_main_thread_ms": {
+        "count": 39,
+        "retained": 39,
+        "median": 2.382188081741333,
+        "p95": 17.39911460876465,
+        "max": 22.87645721435547,
+        "min": 0.8173440098762512,
+        "mean": 5.397251586119334
+      },
+      "persistent_render_completed_ms": {
+        "count": 38,
+        "retained": 38,
+        "median": 145.1934814453125,
+        "p95": 161.8209991455078,
+        "max": 177.2808837890625,
+        "min": 91.78645324707031,
+        "mean": 143.6683006286621
+      }
+    },
+    "memory": {
+      "javaHeapUsedBytes": 4106952,
+      "javaHeapMaxBytes": 268435456,
+      "nativeHeapAllocatedBytes": 41571760
+    },
+    "events": [
+      {
+        "name": "strokes_loaded",
+        "tNs": 7073212577457,
+        "count": 0
+      },
+      {
+        "name": "mode_requested",
+        "tNs": 7073224304280,
+        "mode": "BOOX_HARDWARE"
+      },
+      {
+        "name": "host_attach",
+        "tNs": 7073224722457
+      },
+      {
+        "name": "mode_requested",
+        "tNs": 7073226535947,
+        "mode": "BOOX_HARDWARE"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7073275055635,
+        "mode": "GC_full"
+      },
+      {
+        "name": "hardware_preview_enabled",
+        "tNs": 7073335510010,
+        "rawDrawingCreated": true,
+        "rawRender": true,
+        "inputEnabled": true,
+        "limit": "0 0 1860 1977"
+      },
+      {
+        "name": "raw_limit_reconfigured",
+        "tNs": 7073337446728,
+        "limit": "0 0 1860 1977",
+        "screenX": 0,
+        "screenY": 377
+      },
+      {
+        "name": "raw_drawing_closed",
+        "tNs": 7073337528812,
+        "reason": "layout changed"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7073390974124,
+        "mode": "GC_full"
+      },
+      {
+        "name": "hardware_preview_enabled",
+        "tNs": 7073432998291,
+        "rawDrawingCreated": true,
+        "rawRender": true,
+        "inputEnabled": true,
+        "limit": "0 0 1860 1977"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7087217832035
+      },
+      {
+        "name": "onyx_timestamp_epoch",
+        "tNs": 7087217896254,
+        "epoch": 2,
+        "uptimeDelta": -1793631417226,
+        "wallDelta": 1
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7087862739275
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7087866586462,
+        "points": 311,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7087871500473,
+        "id": "1bba944b-42ff-46a0-b819-5111fb239f2d"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7087995418441,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7088008645889,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7088008803806
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7088086304535
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7088139016618
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7088140869691,
+        "points": 19,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7088141258129,
+        "id": "92d1193e-73ea-4872-98a5-24e55314ede6"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7088262017348,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7088273366827,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7088274289014
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7088563359535
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7089413381670
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7089413714326,
+        "points": 410,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7089417088389,
+        "id": "f416241a-8d85-4c9c-9f58-fc5372422477"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7089547759951,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7089565190993,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7089565234378
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7089813846409
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7090664137815
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7090665386409,
+        "points": 410,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7090668834534,
+        "id": "19668159-b44d-4bd5-a399-eb17e40c576f"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7090791176357,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7090805811097,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7090805847867
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7091164879690,
+        "rect": "[193.18457,340.3512][1115.1488,568.625]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7091215604638
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7091953758127
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7091954010575,
+        "points": 356,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7091958776565,
+        "id": "63598c0b-fe4c-4fd3-bf30-a7bf8b798659"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7092062833544
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7092081411929,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7092096201200,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7092096223909
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7092157551982
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7092159590575,
+        "points": 41,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7092162595315,
+        "id": "8d50066b-ac81-4429-9cb7-81f07f6af369"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7092285557346,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7092307562450,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7092307610471
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7092644992294,
+        "rect": "[198.80957,344.75598][1402.7678,564.2202]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7093137622033
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7094101146043
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7094101476252,
+        "points": 466,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7094106444950,
+        "id": "99fb7f8c-ffc2-4e72-bb95-9509272cab1b"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7094229736512,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7094234472866,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7094234484324
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7094601627762,
+        "rect": "[290.08923,350.38098][1397.1428,995.7678]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7095461089532
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7095552518595
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7095552705574,
+        "points": 46,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7095554117397,
+        "id": "634bd9f9-f102-4f40-91dc-af34536777dd"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7095672684793
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7095673843230,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7095685292657,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7095685308178
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7095751221095
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7095751332397,
+        "points": 38,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7095751836199,
+        "id": "da0c40a3-5d42-43a9-9d3e-83dc4042a78a"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7095895203699,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7095922316303,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7095922332553
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7095946704584
+      },
+      {
+        "name": "raw_coordinate_space",
+        "tNs": 7095948600730,
+        "space": "view"
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7096050734324
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7096058061928,
+        "points": 60,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7096058683126,
+        "id": "a85048ff-8414-4203-b192-90c108d52426"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7096179728699,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7096184518022,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7096184554949
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7096550871719,
+        "rect": "[295.71423,737.5238][1072.0536,990.1428]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7097111631042
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7097507993490
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7097508174323,
+        "points": 192,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7097510271042,
+        "id": "cd3b775f-f191-43e5-9a24-f31f27fde1c3"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7097565297552
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7097631331406,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7097651581511,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7097651591302
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7097671428438
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7097671564427,
+        "points": 52,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7097672254063,
+        "id": "0e7fc2b0-7519-4b21-aed4-f566f956a335"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7097792549479,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7097821803177,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7097821816094
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7098171711146,
+        "rect": "[575.4464,781.0952][1066.4286,1321.8392]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7098844228541
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7100904690728
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7100905060832,
+        "points": 963,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7100914433697,
+        "id": "ee831d53-09d7-43fb-bbb7-a54447b4b851"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7101043707968,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7101066462551,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7101066512030
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7101511143332,
+        "mode": "GC_full"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7102234995363
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7104080168592
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7104080606248,
+        "points": 885,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7104088827394,
+        "id": "5b42b589-512a-4f4b-ba6b-b2e57e30097d"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7104214417550,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7104223616196,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7104223633800
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7104580673539,
+        "rect": "[487.70837,1153.3572][1282.9762,1703.863]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7104634315570
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7104944771560
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7104944898956,
+        "points": 150,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7104946154372,
+        "id": "da5f7f14-aca7-4411-bdeb-57434744a996"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7105067153174,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7105093234529,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7105093246768
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7105445421143,
+        "rect": "[493.33337,1549.3096][759.1964,1705.7678]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7105496106247
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7105880059528
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7105880243070,
+        "points": 186,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7105883124060,
+        "id": "fb2adde2-e68e-422b-b000-0a15999d11fa"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7106004193330,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7106014776195
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7106017075205,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7106017085205
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7109193551767
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7109194119892,
+        "points": 1525,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7109206259527,
+        "id": "b11f7cec-1280-4cc3-8d38-94f017347301"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7109227647131
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7109279420204
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7109279522183,
+        "points": 37,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7109280322756,
+        "id": "f8fa98bf-6796-43e2-80f5-8d5a967c4ca9"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7109337602444,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7109371184579,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7109371207392
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7109779772287,
+        "rect": "[685.9524,1465.8274][1361.1012,1706.8394]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7110751007443
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7111373744683
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7111373958797,
+        "points": 301,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7111376527183,
+        "id": "ea276501-5b7d-4802-9abf-7fb052bf0d25"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7111497822130,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7111505048641,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7111505067182
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7111636230880
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7111895595203
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7111895767130,
+        "points": 126,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7111897300047,
+        "id": "899e3f32-73c2-4f5a-b769-9581253e85a9"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7112018642911,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7112033545672,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7112033558797
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7112057519057
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7112298192338
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7112298328224,
+        "points": 128,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7112299565151,
+        "id": "51d3c801-f658-439f-9036-779df6430b14"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7112399315203
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7112420018953,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7112427437859,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7112427452026
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7112619339682
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7112619548849,
+        "points": 109,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7112620913745,
+        "id": "a7e95556-e168-4c84-8647-44dc3114a304"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7112741829369,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7112773565619,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7112773587338
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7113063453588
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7113227372807
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7113227495463,
+        "points": 79,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7113228364890,
+        "id": "09c3453c-1f26-41ec-ace8-76a604c9f1c3"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7113348872703,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7113404635307,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7113404651453
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7113410692286
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7113519348275
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7113519472807,
+        "points": 66,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7113520332182,
+        "id": "aec6adf1-3890-419a-a408-e0ccab6837f2"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7113640307130
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7113640729161,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7113671606088,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7113671624630
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7113725436713
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7113725574682,
+        "points": 51,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7113726207390,
+        "id": "a2a54e41-3ad8-47cb-b786-11c0dfd412f1"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7113806689057
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7113845979161,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7113854375463,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7113854390827
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7113977599525
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7113984122442,
+        "points": 83,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7113984928067,
+        "id": "899684d1-c073-4fb0-b033-e1b1b80cd870"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7114075354317
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7114106530931,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7114137307494,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7114137318171
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7114367793015
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7114368135150,
+        "points": 141,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7114369416869,
+        "id": "ebd02d7d-8c01-4f22-8d2c-d9f9c5acc8a3"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7114430678848
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7114489889942,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7114512971817,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7114512983379
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7114684798067
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7114684923952,
+        "points": 123,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7114685948171,
+        "id": "1be0fab1-6d6f-4812-b9aa-9fc2395964c4"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7114733583952
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7114809287233,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7114830009525,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7114830021192
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7114937921244
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7114938466608,
+        "points": 100,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7114943400723,
+        "id": "f42a3e54-7dbe-4d3d-a6d7-bb9ecbb6dc07"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7115038024056
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7115066256400,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7115092437129,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7115092448848
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7115344126296
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7115344266139,
+        "points": 148,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7115345463743,
+        "id": "e25fed3d-6331-4e35-92fa-941c3d8aab4a"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7115466669993,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7115488280566,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7115488343066
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7115844254629,
+        "rect": "[778.8096,862.61316][1725.625,1701.2144]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7116004314056
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7116179545306
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7116179653795,
+        "points": 85,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7116180599108,
+        "id": "c46ede05-bfad-4768-8756-095d0b6e0c3d"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7116301762233,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7116307062076,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7116307074524
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7116332965149
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7116502935983
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7116503058066,
+        "points": 89,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7116503991608,
+        "id": "92d1ab3d-8608-4c29-86b3-f0608ab92302"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7116630875514,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7116650284524,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7116650295305
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7116817194889
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7117085794680
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7117086466087,
+        "points": 127,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7117087816347,
+        "id": "e81c665b-3862-4279-b1cb-8ec63918b67a"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7117208355878,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7117227905045,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7117227916764
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7117580100930,
+        "rect": "[1196.7856,868.23816][1720.0,1126.9584]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7118748844576
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7119356786554
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7119358256502,
+        "points": 295,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7119365189992,
+        "id": "e1b93b47-c02c-4f37-abb4-504529c3b949"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7119487267388,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7119496313221,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7119496328429
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7119857769054,
+        "rect": "[1356.994,1009.4286][1460.238,1121.3334]"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7120275445773,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7121583567283,
+        "mode": "GC_full"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7122078162543
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7122439136553
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7122440174730,
+        "points": 170,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7122445563637,
+        "id": "7e11db80-0ac6-412f-a711-c310ebbac364"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7122567411709,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7122593937803,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7122593971501
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7122930649053,
+        "rect": "[1126.637,582.256][1449.6428,1095.9762]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7123128935668
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7123314599209
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7123315848584,
+        "points": 87,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7123316769105,
+        "id": "8614b781-3cf0-4ba0-9d47-c24a5c1e70a8"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7123437061449,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7123463665251,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7123463733115
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7123782392647
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7124441896084
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7124442102073,
+        "points": 302,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7124444815198,
+        "id": "9896fb0d-8dee-43dd-94b3-8f5e47eade67"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7124566196396,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7124570782594,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7124570806865
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7124941939261,
+        "rect": "[1132.262,583.8036][1281.1012,657.7916]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7125255245979
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7125953070927
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7125953289312,
+        "points": 328,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7125958104417,
+        "id": "d8121933-799c-4777-bac8-cbebfb336271"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7126079963739,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7126100537437,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7126100549781
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7126453307802,
+        "rect": "[1142.9762,589.4286][1365.744,664.33923]"
+      },
+      {
+        "name": "native_pen_down_callback",
+        "tNs": 7127048769572
+      },
+      {
+        "name": "native_pen_up_callback",
+        "tNs": 7130359930144
+      },
+      {
+        "name": "stroke_finalized",
+        "tNs": 7130360508061,
+        "points": 1563,
+        "stream": "LIST"
+      },
+      {
+        "name": "software_stroke_committed",
+        "tNs": 7130374139936,
+        "id": "f651b5de-28f1-409e-9336-58428fd570ee"
+      },
+      {
+        "name": "raw_layer_clear_requested",
+        "tNs": 7130502287175,
+        "strategy": "pen_up_refresh",
+        "trigger": "fallback"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7130507159206,
+        "mode": "HAND_WRITING_REPAINT_MODE"
+      },
+      {
+        "name": "persistent_render_completed",
+        "tNs": 7130507182227
+      },
+      {
+        "name": "native_pen_up_refresh_callback",
+        "tNs": 7130859975196,
+        "rect": "[1259.375,598.1191][1492.7678,859.5774]"
+      },
+      {
+        "name": "raw_limit_reconfigured",
+        "tNs": 7132427748372,
+        "limit": "0 0 2479 1417",
+        "screenX": 0,
+        "screenY": 317
+      },
+      {
+        "name": "raw_drawing_closed",
+        "tNs": 7132427772852,
+        "reason": "layout changed"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7132489783477,
+        "mode": "GC_full"
+      },
+      {
+        "name": "hardware_preview_enabled",
+        "tNs": 7132558218633,
+        "rawDrawingCreated": true,
+        "rawRender": true,
+        "inputEnabled": true,
+        "limit": "0 0 2479 1417"
+      },
+      {
+        "name": "raw_limit_reconfigured",
+        "tNs": 7139529929151,
+        "limit": "0 0 1860 1977",
+        "screenX": 0,
+        "screenY": 377
+      },
+      {
+        "name": "raw_drawing_closed",
+        "tNs": 7139529978474,
+        "reason": "layout changed"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7139632025870,
+        "mode": "GC_full"
+      },
+      {
+        "name": "hardware_preview_enabled",
+        "tNs": 7139677172120,
+        "rawDrawingCreated": true,
+        "rawRender": true,
+        "inputEnabled": true,
+        "limit": "0 0 1860 1977"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 7142074587692,
+        "mode": "GC_full"
+      }
+    ],
+    "strokes": [
+      {
+        "id": "1bba944b-42ff-46a0-b819-5111fb239f2d",
+        "points": 311,
+        "api": "onyx-touchhelper",
+        "durationUs": 643000,
+        "stream": "LIST",
+        "moveCount": 312,
+        "listCount": 311,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "92d1193e-73ea-4872-98a5-24e55314ede6",
+        "points": 19,
+        "api": "onyx-touchhelper",
+        "durationUs": 37000,
+        "stream": "LIST",
+        "moveCount": 20,
+        "listCount": 19,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "f416241a-8d85-4c9c-9f58-fc5372422477",
+        "points": 410,
+        "api": "onyx-touchhelper",
+        "durationUs": 848000,
+        "stream": "LIST",
+        "moveCount": 411,
+        "listCount": 410,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 6,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "19668159-b44d-4bd5-a399-eb17e40c576f",
+        "points": 410,
+        "api": "onyx-touchhelper",
+        "durationUs": 848000,
+        "stream": "LIST",
+        "moveCount": 411,
+        "listCount": 410,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "63598c0b-fe4c-4fd3-bf30-a7bf8b798659",
+        "points": 356,
+        "api": "onyx-touchhelper",
+        "durationUs": 736000,
+        "stream": "LIST",
+        "moveCount": 357,
+        "listCount": 356,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 5,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "8d50066b-ac81-4429-9cb7-81f07f6af369",
+        "points": 41,
+        "api": "onyx-touchhelper",
+        "durationUs": 83000,
+        "stream": "LIST",
+        "moveCount": 42,
+        "listCount": 41,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 9,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "99fb7f8c-ffc2-4e72-bb95-9509272cab1b",
+        "points": 466,
+        "api": "onyx-touchhelper",
+        "durationUs": 964000,
+        "stream": "LIST",
+        "moveCount": 467,
+        "listCount": 466,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "634bd9f9-f102-4f40-91dc-af34536777dd",
+        "points": 46,
+        "api": "onyx-touchhelper",
+        "durationUs": 93000,
+        "stream": "LIST",
+        "moveCount": 47,
+        "listCount": 46,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "da0c40a3-5d42-43a9-9d3e-83dc4042a78a",
+        "points": 38,
+        "api": "onyx-touchhelper",
+        "durationUs": 77000,
+        "stream": "LIST",
+        "moveCount": 39,
+        "listCount": 38,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "a85048ff-8414-4203-b192-90c108d52426",
+        "points": 60,
+        "api": "onyx-touchhelper",
+        "durationUs": 120000,
+        "stream": "LIST",
+        "moveCount": 61,
+        "listCount": 60,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "cd3b775f-f191-43e5-9a24-f31f27fde1c3",
+        "points": 192,
+        "api": "onyx-touchhelper",
+        "durationUs": 397000,
+        "stream": "LIST",
+        "moveCount": 193,
+        "listCount": 192,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "0e7fc2b0-7519-4b21-aed4-f566f956a335",
+        "points": 52,
+        "api": "onyx-touchhelper",
+        "durationUs": 105000,
+        "stream": "LIST",
+        "moveCount": 53,
+        "listCount": 52,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 5,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "ee831d53-09d7-43fb-bbb7-a54447b4b851",
+        "points": 963,
+        "api": "onyx-touchhelper",
+        "durationUs": 2040000,
+        "stream": "LIST",
+        "moveCount": 964,
+        "listCount": 963,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 7,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "5b42b589-512a-4f4b-ba6b-b2e57e30097d",
+        "points": 885,
+        "api": "onyx-touchhelper",
+        "durationUs": 1844000,
+        "stream": "LIST",
+        "moveCount": 886,
+        "listCount": 885,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 6,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "da5f7f14-aca7-4411-bdeb-57434744a996",
+        "points": 150,
+        "api": "onyx-touchhelper",
+        "durationUs": 308000,
+        "stream": "LIST",
+        "moveCount": 151,
+        "listCount": 150,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "fb2adde2-e68e-422b-b000-0a15999d11fa",
+        "points": 186,
+        "api": "onyx-touchhelper",
+        "durationUs": 384000,
+        "stream": "LIST",
+        "moveCount": 187,
+        "listCount": 186,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "b11f7cec-1280-4cc3-8d38-94f017347301",
+        "points": 1525,
+        "api": "onyx-touchhelper",
+        "durationUs": 3185000,
+        "stream": "LIST",
+        "moveCount": 1526,
+        "listCount": 1525,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 9,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "f8fa98bf-6796-43e2-80f5-8d5a967c4ca9",
+        "points": 37,
+        "api": "onyx-touchhelper",
+        "durationUs": 73000,
+        "stream": "LIST",
+        "moveCount": 38,
+        "listCount": 37,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 5,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "ea276501-5b7d-4802-9abf-7fb052bf0d25",
+        "points": 301,
+        "api": "onyx-touchhelper",
+        "durationUs": 622000,
+        "stream": "LIST",
+        "moveCount": 302,
+        "listCount": 301,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "899e3f32-73c2-4f5a-b769-9581253e85a9",
+        "points": 126,
+        "api": "onyx-touchhelper",
+        "durationUs": 258000,
+        "stream": "LIST",
+        "moveCount": 127,
+        "listCount": 126,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 6,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "51d3c801-f658-439f-9036-779df6430b14",
+        "points": 128,
+        "api": "onyx-touchhelper",
+        "durationUs": 264000,
+        "stream": "LIST",
+        "moveCount": 129,
+        "listCount": 128,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "a7e95556-e168-4c84-8647-44dc3114a304",
+        "points": 109,
+        "api": "onyx-touchhelper",
+        "durationUs": 224000,
+        "stream": "LIST",
+        "moveCount": 110,
+        "listCount": 109,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "09c3453c-1f26-41ec-ace8-76a604c9f1c3",
+        "points": 79,
+        "api": "onyx-touchhelper",
+        "durationUs": 162000,
+        "stream": "LIST",
+        "moveCount": 80,
+        "listCount": 79,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "aec6adf1-3890-419a-a408-e0ccab6837f2",
+        "points": 66,
+        "api": "onyx-touchhelper",
+        "durationUs": 135000,
+        "stream": "LIST",
+        "moveCount": 67,
+        "listCount": 66,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 5,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "a2a54e41-3ad8-47cb-b786-11c0dfd412f1",
+        "points": 51,
+        "api": "onyx-touchhelper",
+        "durationUs": 103000,
+        "stream": "LIST",
+        "moveCount": 52,
+        "listCount": 51,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "899684d1-c073-4fb0-b033-e1b1b80cd870",
+        "points": 83,
+        "api": "onyx-touchhelper",
+        "durationUs": 170000,
+        "stream": "LIST",
+        "moveCount": 84,
+        "listCount": 83,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "ebd02d7d-8c01-4f22-8d2c-d9f9c5acc8a3",
+        "points": 141,
+        "api": "onyx-touchhelper",
+        "durationUs": 290000,
+        "stream": "LIST",
+        "moveCount": 142,
+        "listCount": 141,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "1be0fab1-6d6f-4812-b9aa-9fc2395964c4",
+        "points": 123,
+        "api": "onyx-touchhelper",
+        "durationUs": 253000,
+        "stream": "LIST",
+        "moveCount": 124,
+        "listCount": 123,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "f42a3e54-7dbe-4d3d-a6d7-bb9ecbb6dc07",
+        "points": 100,
+        "api": "onyx-touchhelper",
+        "durationUs": 205000,
+        "stream": "LIST",
+        "moveCount": 101,
+        "listCount": 100,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 5,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "e25fed3d-6331-4e35-92fa-941c3d8aab4a",
+        "points": 148,
+        "api": "onyx-touchhelper",
+        "durationUs": 305000,
+        "stream": "LIST",
+        "moveCount": 149,
+        "listCount": 148,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 5,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "c46ede05-bfad-4768-8756-095d0b6e0c3d",
+        "points": 85,
+        "api": "onyx-touchhelper",
+        "durationUs": 176000,
+        "stream": "LIST",
+        "moveCount": 86,
+        "listCount": 85,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 5,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "92d1ab3d-8608-4c29-86b3-f0608ab92302",
+        "points": 89,
+        "api": "onyx-touchhelper",
+        "durationUs": 182000,
+        "stream": "LIST",
+        "moveCount": 90,
+        "listCount": 89,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "e81c665b-3862-4279-b1cb-8ec63918b67a",
+        "points": 127,
+        "api": "onyx-touchhelper",
+        "durationUs": 261000,
+        "stream": "LIST",
+        "moveCount": 128,
+        "listCount": 127,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "e1b93b47-c02c-4f37-abb4-504529c3b949",
+        "points": 295,
+        "api": "onyx-touchhelper",
+        "durationUs": 609000,
+        "stream": "LIST",
+        "moveCount": 296,
+        "listCount": 295,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 3,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "7e11db80-0ac6-412f-a711-c310ebbac364",
+        "points": 170,
+        "api": "onyx-touchhelper",
+        "durationUs": 350000,
+        "stream": "LIST",
+        "moveCount": 171,
+        "listCount": 170,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "8614b781-3cf0-4ba0-9d47-c24a5c1e70a8",
+        "points": 87,
+        "api": "onyx-touchhelper",
+        "durationUs": 178000,
+        "stream": "LIST",
+        "moveCount": 88,
+        "listCount": 87,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 4,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "9896fb0d-8dee-43dd-94b3-8f5e47eade67",
+        "points": 302,
+        "api": "onyx-touchhelper",
+        "durationUs": 657000,
+        "stream": "LIST",
+        "moveCount": 303,
+        "listCount": 302,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 7,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "d8121933-799c-4777-bac8-cbebfb336271",
+        "points": 328,
+        "api": "onyx-touchhelper",
+        "durationUs": 697000,
+        "stream": "LIST",
+        "moveCount": 329,
+        "listCount": 328,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 5,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      },
+      {
+        "id": "f651b5de-28f1-409e-9336-58428fd570ee",
+        "points": 1563,
+        "api": "onyx-touchhelper",
+        "durationUs": 3313000,
+        "stream": "LIST",
+        "moveCount": 1564,
+        "listCount": 1563,
+        "timeGaps": 0,
+        "spatialJumps": 0,
+        "medianDtMs": 2,
+        "maxDtMs": 11,
+        "duplicatesRemoved": 0,
+        "outOfBounds": 0
+      }
+    ],
+    "errors": [],
+    "status": {
+      "mode": "BOOX_HARDWARE",
+      "requestedMode": "BOOX_HARDWARE",
+      "sessionState": "open",
+      "tool": "PEN",
+      "brushWidth": 3,
+      "pressure": true,
+      "drawingEnabled": true,
+      "hostAttached": true,
+      "rawCoordinateSpace": "view",
+      "lastError": null,
+      "options": {
+        "rawRenderEnabled": true,
+        "handoff": "PEN_UP_REFRESH",
+        "featureAllCreate": false,
+        "epdRegionLimit": true,
+        "fingerNavigation": true,
+        "fingerDraws": false,
+        "penUpFallbackMs": 120,
+        "renderStyle": "SMOOTH"
+      },
+      "transform": {
+        "scale": 1,
+        "offsetX": 31.999996185302734,
+        "offsetY": 5.3333306312561035,
+        "density": 1.875
+      },
+      "viewSize": {
+        "w": 1860,
+        "h": 1977
+      }
+    },
+    "strokeCount": 39
+  }
+}

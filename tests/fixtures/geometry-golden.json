@@ -1,0 +1,666 @@
+{
+  "description": "Expected strokePieces() output for fixtures/sample-strokes.json. Every port must match within 1e-9.",
+  "widthCases": [
+    {
+      "base": 1.5,
+      "pressure": 0,
+      "pressureEnabled": true,
+      "width": 0.6000000000000001
+    },
+    {
+      "base": 1.5,
+      "pressure": 0,
+      "pressureEnabled": false,
+      "width": 1.5
+    },
+    {
+      "base": 3,
+      "pressure": 0,
+      "pressureEnabled": true,
+      "width": 1.2000000000000002
+    },
+    {
+      "base": 3,
+      "pressure": 0,
+      "pressureEnabled": false,
+      "width": 3
+    },
+    {
+      "base": 6,
+      "pressure": 0,
+      "pressureEnabled": true,
+      "width": 2.4000000000000004
+    },
+    {
+      "base": 6,
+      "pressure": 0,
+      "pressureEnabled": false,
+      "width": 6
+    },
+    {
+      "base": 1.5,
+      "pressure": 0.25,
+      "pressureEnabled": true,
+      "width": 1.0499999999999998
+    },
+    {
+      "base": 1.5,
+      "pressure": 0.25,
+      "pressureEnabled": false,
+      "width": 1.5
+    },
+    {
+      "base": 3,
+      "pressure": 0.25,
+      "pressureEnabled": true,
+      "width": 2.0999999999999996
+    },
+    {
+      "base": 3,
+      "pressure": 0.25,
+      "pressureEnabled": false,
+      "width": 3
+    },
+    {
+      "base": 6,
+      "pressure": 0.25,
+      "pressureEnabled": true,
+      "width": 4.199999999999999
+    },
+    {
+      "base": 6,
+      "pressure": 0.25,
+      "pressureEnabled": false,
+      "width": 6
+    },
+    {
+      "base": 1.5,
+      "pressure": 0.5,
+      "pressureEnabled": true,
+      "width": 1.5
+    },
+    {
+      "base": 1.5,
+      "pressure": 0.5,
+      "pressureEnabled": false,
+      "width": 1.5
+    },
+    {
+      "base": 3,
+      "pressure": 0.5,
+      "pressureEnabled": true,
+      "width": 3
+    },
+    {
+      "base": 3,
+      "pressure": 0.5,
+      "pressureEnabled": false,
+      "width": 3
+    },
+    {
+      "base": 6,
+      "pressure": 0.5,
+      "pressureEnabled": true,
+      "width": 6
+    },
+    {
+      "base": 6,
+      "pressure": 0.5,
+      "pressureEnabled": false,
+      "width": 6
+    },
+    {
+      "base": 1.5,
+      "pressure": 0.75,
+      "pressureEnabled": true,
+      "width": 1.9499999999999997
+    },
+    {
+      "base": 1.5,
+      "pressure": 0.75,
+      "pressureEnabled": false,
+      "width": 1.5
+    },
+    {
+      "base": 3,
+      "pressure": 0.75,
+      "pressureEnabled": true,
+      "width": 3.8999999999999995
+    },
+    {
+      "base": 3,
+      "pressure": 0.75,
+      "pressureEnabled": false,
+      "width": 3
+    },
+    {
+      "base": 6,
+      "pressure": 0.75,
+      "pressureEnabled": true,
+      "width": 7.799999999999999
+    },
+    {
+      "base": 6,
+      "pressure": 0.75,
+      "pressureEnabled": false,
+      "width": 6
+    },
+    {
+      "base": 1.5,
+      "pressure": 1,
+      "pressureEnabled": true,
+      "width": 2.4000000000000004
+    },
+    {
+      "base": 1.5,
+      "pressure": 1,
+      "pressureEnabled": false,
+      "width": 1.5
+    },
+    {
+      "base": 3,
+      "pressure": 1,
+      "pressureEnabled": true,
+      "width": 4.800000000000001
+    },
+    {
+      "base": 3,
+      "pressure": 1,
+      "pressureEnabled": false,
+      "width": 3
+    },
+    {
+      "base": 6,
+      "pressure": 1,
+      "pressureEnabled": true,
+      "width": 9.600000000000001
+    },
+    {
+      "base": 6,
+      "pressure": 1,
+      "pressureEnabled": false,
+      "width": 6
+    },
+    {
+      "base": 1.5,
+      "pressure": 1.5,
+      "pressureEnabled": true,
+      "width": 2.4000000000000004
+    },
+    {
+      "base": 1.5,
+      "pressure": 1.5,
+      "pressureEnabled": false,
+      "width": 1.5
+    },
+    {
+      "base": 3,
+      "pressure": 1.5,
+      "pressureEnabled": true,
+      "width": 4.800000000000001
+    },
+    {
+      "base": 3,
+      "pressure": 1.5,
+      "pressureEnabled": false,
+      "width": 3
+    },
+    {
+      "base": 6,
+      "pressure": 1.5,
+      "pressureEnabled": true,
+      "width": 9.600000000000001
+    },
+    {
+      "base": 6,
+      "pressure": 1.5,
+      "pressureEnabled": false,
+      "width": 6
+    },
+    {
+      "base": 1.5,
+      "pressure": -1,
+      "pressureEnabled": true,
+      "width": 0.6000000000000001
+    },
+    {
+      "base": 1.5,
+      "pressure": -1,
+      "pressureEnabled": false,
+      "width": 1.5
+    },
+    {
+      "base": 3,
+      "pressure": -1,
+      "pressureEnabled": true,
+      "width": 1.2000000000000002
+    },
+    {
+      "base": 3,
+      "pressure": -1,
+      "pressureEnabled": false,
+      "width": 3
+    },
+    {
+      "base": 6,
+      "pressure": -1,
+      "pressureEnabled": true,
+      "width": 2.4000000000000004
+    },
+    {
+      "base": 6,
+      "pressure": -1,
+      "pressureEnabled": false,
+      "width": 6
+    }
+  ],
+  "strokes": [
+    {
+      "id": "sample-dot",
+      "pieces": [
+        {
+          "kind": "dot",
+          "x": 80,
+          "y": 80,
+          "width": 3.4320000000000004
+        }
+      ]
+    },
+    {
+      "id": "sample-line",
+      "pieces": [
+        {
+          "kind": "line",
+          "x0": 100,
+          "y0": 120,
+          "x1": 500,
+          "y1": 140,
+          "width": 3
+        }
+      ]
+    },
+    {
+      "id": "sample-curve",
+      "pieces": [
+        {
+          "kind": "line",
+          "x0": 100,
+          "y0": 300,
+          "x1": 106.25,
+          "y1": 304.78999999999996,
+          "width": 3.12
+        },
+        {
+          "kind": "quad",
+          "x0": 106.25,
+          "y0": 304.78999999999996,
+          "cx": 112.5,
+          "cy": 309.58,
+          "x1": 118.75,
+          "y1": 313.225,
+          "width": 3.3720000000000003
+        },
+        {
+          "kind": "quad",
+          "x0": 118.75,
+          "y0": 313.225,
+          "cx": 125,
+          "cy": 316.87,
+          "x1": 131.25,
+          "y1": 321.56,
+          "width": 3.6312000000000006
+        },
+        {
+          "kind": "quad",
+          "x0": 131.25,
+          "y0": 321.56,
+          "cx": 137.5,
+          "cy": 326.25,
+          "x1": 143.75,
+          "y1": 328.46000000000004,
+          "width": 3.8832
+        },
+        {
+          "kind": "quad",
+          "x0": 143.75,
+          "y0": 328.46000000000004,
+          "cx": 150,
+          "cy": 330.67,
+          "x1": 156.25,
+          "y1": 335.125,
+          "width": 4.1424
+        },
+        {
+          "kind": "quad",
+          "x0": 156.25,
+          "y0": 335.125,
+          "cx": 162.5,
+          "cy": 339.58,
+          "x1": 168.75,
+          "y1": 340.49,
+          "width": 4.3944
+        },
+        {
+          "kind": "quad",
+          "x0": 168.75,
+          "y0": 340.49,
+          "cx": 175,
+          "cy": 341.4,
+          "x1": 181.25,
+          "y1": 345.49,
+          "width": 4.653600000000001
+        },
+        {
+          "kind": "quad",
+          "x0": 181.25,
+          "y0": 345.49,
+          "cx": 187.5,
+          "cy": 349.58,
+          "x1": 193.75,
+          "y1": 349.325,
+          "width": 4.9056
+        },
+        {
+          "kind": "quad",
+          "x0": 193.75,
+          "y0": 349.325,
+          "cx": 200,
+          "cy": 349.07,
+          "x1": 206.25,
+          "y1": 352.65999999999997,
+          "width": 5.1576
+        },
+        {
+          "kind": "quad",
+          "x0": 206.25,
+          "y0": 352.65999999999997,
+          "cx": 212.5,
+          "cy": 356.25,
+          "x1": 218.75,
+          "y1": 354.96000000000004,
+          "width": 5.416799999999999
+        },
+        {
+          "kind": "quad",
+          "x0": 218.75,
+          "y0": 354.96000000000004,
+          "cx": 225,
+          "cy": 353.67,
+          "x1": 231.25,
+          "y1": 356.625,
+          "width": 5.6688
+        },
+        {
+          "kind": "quad",
+          "x0": 231.25,
+          "y0": 356.625,
+          "cx": 237.5,
+          "cy": 359.58,
+          "x1": 243.75,
+          "y1": 357.39,
+          "width": 5.928
+        },
+        {
+          "kind": "quad",
+          "x0": 243.75,
+          "y0": 357.39,
+          "cx": 250,
+          "cy": 355.2,
+          "x1": 256.25,
+          "y1": 357.39,
+          "width": 6.18
+        },
+        {
+          "kind": "quad",
+          "x0": 256.25,
+          "y0": 357.39,
+          "cx": 262.5,
+          "cy": 359.58,
+          "x1": 268.75,
+          "y1": 356.625,
+          "width": 6.432
+        },
+        {
+          "kind": "quad",
+          "x0": 268.75,
+          "y0": 356.625,
+          "cx": 275,
+          "cy": 353.67,
+          "x1": 281.25,
+          "y1": 354.96000000000004,
+          "width": 6.6912
+        },
+        {
+          "kind": "quad",
+          "x0": 281.25,
+          "y0": 354.96000000000004,
+          "cx": 287.5,
+          "cy": 356.25,
+          "x1": 293.75,
+          "y1": 352.65999999999997,
+          "width": 6.9432
+        },
+        {
+          "kind": "quad",
+          "x0": 293.75,
+          "y0": 352.65999999999997,
+          "cx": 300,
+          "cy": 349.07,
+          "x1": 306.25,
+          "y1": 349.325,
+          "width": 7.202400000000001
+        },
+        {
+          "kind": "quad",
+          "x0": 306.25,
+          "y0": 349.325,
+          "cx": 312.5,
+          "cy": 349.58,
+          "x1": 318.75,
+          "y1": 345.49,
+          "width": 7.4544
+        },
+        {
+          "kind": "quad",
+          "x0": 318.75,
+          "y0": 345.49,
+          "cx": 325,
+          "cy": 341.4,
+          "x1": 331.25,
+          "y1": 340.49,
+          "width": 7.7064
+        },
+        {
+          "kind": "quad",
+          "x0": 331.25,
+          "y0": 340.49,
+          "cx": 337.5,
+          "cy": 339.58,
+          "x1": 343.75,
+          "y1": 335.125,
+          "width": 7.965599999999999
+        },
+        {
+          "kind": "quad",
+          "x0": 343.75,
+          "y0": 335.125,
+          "cx": 350,
+          "cy": 330.67,
+          "x1": 356.25,
+          "y1": 328.46000000000004,
+          "width": 8.217600000000001
+        },
+        {
+          "kind": "quad",
+          "x0": 356.25,
+          "y0": 328.46000000000004,
+          "cx": 362.5,
+          "cy": 326.25,
+          "x1": 368.75,
+          "y1": 321.56,
+          "width": 8.476799999999999
+        },
+        {
+          "kind": "quad",
+          "x0": 368.75,
+          "y0": 321.56,
+          "cx": 375,
+          "cy": 316.87,
+          "x1": 381.25,
+          "y1": 313.225,
+          "width": 8.7288
+        },
+        {
+          "kind": "quad",
+          "x0": 381.25,
+          "y0": 313.225,
+          "cx": 387.5,
+          "cy": 309.58,
+          "x1": 393.75,
+          "y1": 304.78999999999996,
+          "width": 8.988000000000001
+        },
+        {
+          "kind": "line",
+          "x0": 393.75,
+          "y0": 304.78999999999996,
+          "x1": 400,
+          "y1": 300,
+          "width": 9.24
+        }
+      ]
+    },
+    {
+      "id": "sample-loop",
+      "pieces": [
+        {
+          "kind": "line",
+          "x0": 600,
+          "y0": 200,
+          "x1": 630,
+          "y1": 190,
+          "width": 1.5
+        },
+        {
+          "kind": "quad",
+          "x0": 630,
+          "y0": 190,
+          "cx": 660,
+          "cy": 180,
+          "x1": 685,
+          "y1": 195,
+          "width": 1.5
+        },
+        {
+          "kind": "quad",
+          "x0": 685,
+          "y0": 195,
+          "cx": 710,
+          "cy": 210,
+          "x1": 720,
+          "y1": 240,
+          "width": 1.5
+        },
+        {
+          "kind": "quad",
+          "x0": 720,
+          "y0": 240,
+          "cx": 730,
+          "cy": 270,
+          "x1": 715,
+          "y1": 300,
+          "width": 1.5
+        },
+        {
+          "kind": "quad",
+          "x0": 715,
+          "y0": 300,
+          "cx": 700,
+          "cy": 330,
+          "x1": 670,
+          "y1": 340,
+          "width": 1.5
+        },
+        {
+          "kind": "quad",
+          "x0": 670,
+          "y0": 340,
+          "cx": 640,
+          "cy": 350,
+          "x1": 612.5,
+          "y1": 335,
+          "width": 1.5
+        },
+        {
+          "kind": "quad",
+          "x0": 612.5,
+          "y0": 335,
+          "cx": 585,
+          "cy": 320,
+          "x1": 575,
+          "y1": 290,
+          "width": 1.5
+        },
+        {
+          "kind": "quad",
+          "x0": 575,
+          "y0": 290,
+          "cx": 565,
+          "cy": 260,
+          "x1": 582.5,
+          "y1": 230,
+          "width": 1.5
+        },
+        {
+          "kind": "line",
+          "x0": 582.5,
+          "y0": 230,
+          "x1": 600,
+          "y1": 200,
+          "width": 1.5
+        }
+      ]
+    },
+    {
+      "id": "sample-mouse",
+      "pieces": [
+        {
+          "kind": "line",
+          "x0": 100,
+          "y0": 500,
+          "x1": 140,
+          "y1": 510,
+          "width": 3
+        },
+        {
+          "kind": "quad",
+          "x0": 140,
+          "y0": 510,
+          "cx": 180,
+          "cy": 520,
+          "x1": 220,
+          "y1": 500,
+          "width": 3
+        },
+        {
+          "kind": "quad",
+          "x0": 220,
+          "y0": 500,
+          "cx": 260,
+          "cy": 480,
+          "x1": 300,
+          "y1": 505,
+          "width": 3
+        },
+        {
+          "kind": "line",
+          "x0": 300,
+          "y0": 505,
+          "x1": 340,
+          "y1": 530,
+          "width": 3
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Linux desktop builds need clang; this machine has only the Swift toolchain clang,
+# whose default GCC (14) lacks libstdc++ dev files. Pin GCC 13. Unneeded once `apt install clang` is done.
+exec "$HOME/.local/share/swiftly/bin/clang++" --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 "$@"

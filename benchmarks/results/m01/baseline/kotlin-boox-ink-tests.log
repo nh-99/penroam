@@ -1,0 +1,32 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :boox-ink:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :boox-ink:preBuild UP-TO-DATE
+> Task :boox-ink:preDebugBuild UP-TO-DATE
+> Task :boox-ink:generateDebugBuildConfig
+> Task :boox-ink:generateDebugResValues
+> Task :boox-ink:generateDebugResources
+> Task :boox-ink:packageDebugResources
+> Task :boox-ink:preDebugUnitTestBuild UP-TO-DATE
+> Task :boox-ink:javaPreCompileDebug
+> Task :boox-ink:javaPreCompileDebugUnitTest
+> Task :boox-ink:parseDebugLocalResources
+> Task :boox-ink:generateDebugRFile
+> Task :boox-ink:generateDebugUnitTestStubRFile
+
+> Task :boox-ink:compileDebugKotlin
+w: file:///home/noah/Documents/code/rust/Penroam/android/boox-ink/src/main/java/dev/opennote/booxink/BooxInkView.kt:664:9 'fun invalidate(p0: Rect!): Unit' is deprecated. Deprecated in Java.
+w: file:///home/noah/Documents/code/rust/Penroam/android/boox-ink/src/main/java/dev/opennote/booxink/BooxInkView.kt:858:9 'fun invalidate(p0: Rect!): Unit' is deprecated. Deprecated in Java.
+
+> Task :boox-ink:compileDebugJavaWithJavac
+> Task :boox-ink:bundleLibRuntimeToJarDebug
+> Task :boox-ink:bundleLibCompileToJarDebug
+> Task :boox-ink:processDebugJavaRes
+> Task :boox-ink:compileDebugUnitTestKotlin
+> Task :boox-ink:compileDebugUnitTestJavaWithJavac NO-SOURCE
+> Task :boox-ink:processDebugUnitTestJavaRes
+> Task :boox-ink:testDebugUnitTest
+
+BUILD SUCCESSFUL in 12s
+17 actionable tasks: 17 executed
+exit 0

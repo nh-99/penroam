@@ -1,0 +1,717 @@
+{
+  "app": "flutter",
+  "workload": "D-native-boox",
+  "mode": "booxHardware",
+  "composition": "hybrid",
+  "exportedAt": "2026-11-02T10:52:37.365818",
+  "system": {
+    "os": "android",
+    "osVersion": "2026-08-03_16-13_4.2.1-rel_0803_eaa32b54f",
+    "dartVersion": "3.13.7 (stable) (Thu Oct 22 14:28:57 2026 -0700) on \"android_arm64\"",
+    "numberOfProcessors": 8,
+    "sessionType": null,
+    "desktop": null,
+    "kernel": null,
+    "releaseMode": true,
+    "profileMode": false
+  },
+  "results": [
+    {
+      "strokes": 100,
+      "trial": 0,
+      "jsonBytes": 233137,
+      "serializeMs": 12.084999999999127,
+      "loadRoundTripMs": 44.947000000000116,
+      "zoomInMs": 14.486000000000786,
+      "zoomOutMs": 26.07799999999952,
+      "panMs": 54.939000000000306,
+      "eraseRemoved": 0,
+      "eraseRoundTripMs": 6.688000000000102,
+      "eraseEventMs": null,
+      "rssBytes": 210800640
+    },
+    {
+      "strokes": 100,
+      "trial": 1,
+      "jsonBytes": 233137,
+      "serializeMs": 15.888999999999214,
+      "loadRoundTripMs": 41.16899999999987,
+      "zoomInMs": 13.871999999999389,
+      "zoomOutMs": 16.1200000000008,
+      "panMs": 24.427999999999884,
+      "eraseRemoved": 0,
+      "eraseRoundTripMs": 17.028000000000247,
+      "eraseEventMs": null,
+      "rssBytes": 212889600
+    },
+    {
+      "strokes": 100,
+      "trial": 2,
+      "jsonBytes": 233137,
+      "serializeMs": 13.248999999999796,
+      "loadRoundTripMs": 37.103000000000975,
+      "zoomInMs": 12.958000000000538,
+      "zoomOutMs": 23.73400000000038,
+      "panMs": 17.822000000000116,
+      "eraseRemoved": 0,
+      "eraseRoundTripMs": 33.15299999999843,
+      "eraseEventMs": null,
+      "rssBytes": 217014272
+    },
+    {
+      "strokes": 1000,
+      "trial": 0,
+      "jsonBytes": 2341139,
+      "serializeMs": 135.14999999999964,
+      "loadRoundTripMs": 271.66899999999987,
+      "zoomInMs": 103.40099999999984,
+      "zoomOutMs": 158.4310000000005,
+      "panMs": 166.79199999999946,
+      "eraseRemoved": 9,
+      "eraseRoundTripMs": 999.1530000000002,
+      "eraseEventMs": 1029.4269999999997,
+      "rssBytes": 268529664
+    },
+    {
+      "strokes": 1000,
+      "trial": 1,
+      "jsonBytes": 2341139,
+      "serializeMs": 124.15999999999985,
+      "loadRoundTripMs": 315.48199999999997,
+      "zoomInMs": 99.14799999999923,
+      "zoomOutMs": 155.1239999999998,
+      "panMs": 167.95800000000054,
+      "eraseRemoved": 9,
+      "eraseRoundTripMs": 991.1150000000016,
+      "eraseEventMs": 996.0090000000018,
+      "rssBytes": 267927552
+    },
+    {
+      "strokes": 1000,
+      "trial": 2,
+      "jsonBytes": 2341139,
+      "serializeMs": 124.15000000000146,
+      "loadRoundTripMs": 295.40300000000207,
+      "zoomInMs": 99.71800000000076,
+      "zoomOutMs": 131.04099999999744,
+      "panMs": 179.98199999999997,
+      "eraseRemoved": 9,
+      "eraseRoundTripMs": 999.2839999999997,
+      "eraseEventMs": 1004.4169999999976,
+      "rssBytes": 278200320
+    },
+    {
+      "strokes": 5000,
+      "trial": 0,
+      "jsonBytes": 11874998,
+      "serializeMs": 658.9860000000008,
+      "loadRoundTripMs": 1368.046000000002,
+      "zoomInMs": 467.47699999999895,
+      "zoomOutMs": 643.5689999999995,
+      "panMs": 700.7510000000002,
+      "eraseRemoved": 31,
+      "eraseRoundTripMs": 15766.606,
+      "eraseEventMs": 15792.618999999999,
+      "rssBytes": 393633792
+    },
+    {
+      "strokes": 5000,
+      "trial": 1,
+      "jsonBytes": 11874998,
+      "serializeMs": 654.3430000000008,
+      "loadRoundTripMs": 1179.349000000002,
+      "zoomInMs": 466.3269999999975,
+      "zoomOutMs": 635.7120000000068,
+      "panMs": 697.6549999999988,
+      "eraseRemoved": 31,
+      "eraseRoundTripMs": 15735.113000000005,
+      "eraseEventMs": 15740.124000000003,
+      "rssBytes": 435310592
+    },
+    {
+      "strokes": 5000,
+      "trial": 2,
+      "jsonBytes": 11874998,
+      "serializeMs": 669.8949999999968,
+      "loadRoundTripMs": 1400.9800000000032,
+      "zoomInMs": 465.61699999999837,
+      "zoomOutMs": 616.2190000000046,
+      "panMs": 695.2079999999987,
+      "eraseRemoved": 31,
+      "eraseRoundTripMs": 15724.218999999997,
+      "eraseEventMs": 15755.494999999995,
+      "rssBytes": 426184704
+    },
+    {
+      "strokes": 10000,
+      "trial": 0,
+      "jsonBytes": 23748866,
+      "serializeMs": 1343.7119999999995,
+      "loadRoundTripMs": 2840.3590000000113,
+      "zoomInMs": 927.0859999999957,
+      "zoomOutMs": 1274.426999999996,
+      "panMs": 1345.5629999999946,
+      "eraseRemoved": 66,
+      "eraseRoundTripMs": 39244.322,
+      "eraseEventMs": 39299.702000000005,
+      "rssBytes": 587542528
+    },
+    {
+      "strokes": 10000,
+      "trial": 1,
+      "jsonBytes": 23748866,
+      "serializeMs": 1359.429999999993,
+      "loadRoundTripMs": 2795.3290000000125,
+      "zoomInMs": 926.2149999999965,
+      "zoomOutMs": 1285.4599999999919,
+      "panMs": 1369.6840000000084,
+      "eraseRemoved": 66,
+      "eraseRoundTripMs": 39172.18400000001,
+      "eraseEventMs": 39202.45000000001,
+      "rssBytes": 600342528
+    },
+    {
+      "strokes": 10000,
+      "trial": 2,
+      "jsonBytes": 23748866,
+      "serializeMs": 1357.9040000000095,
+      "loadRoundTripMs": 2731.0469999999914,
+      "zoomInMs": 926.5869999999995,
+      "zoomOutMs": 1237.3459999999905,
+      "panMs": 1367.804999999993,
+      "eraseRemoved": 66,
+      "eraseRoundTripMs": 39130.231,
+      "eraseEventMs": 39161.59400000001,
+      "rssBytes": 595214336
+    }
+  ],
+  "native": {
+    "clock": "SystemClock.elapsedRealtimeNanos",
+    "counters": {
+      "strokes_loaded": 13,
+      "mode_requested": 2,
+      "host_attach": 1,
+      "full_rebuilds": 259,
+      "epaper_refresh_requested": 62,
+      "hardware_preview_enabled": 2,
+      "raw_limit_reconfigured": 1,
+      "raw_drawing_closed": 1,
+      "strokes_erased": 318
+    },
+    "timings": {
+      "load_parse_ms": {
+        "count": 13,
+        "retained": 13,
+        "median": 163.63514709472656,
+        "p95": 1357.224609375,
+        "max": 1402.996337890625,
+        "min": 0.9238020181655884,
+        "mean": 487.4484702348709
+      },
+      "load_render_ms": {
+        "count": 13,
+        "retained": 13,
+        "median": 137.9387969970703,
+        "p95": 1247.0167236328125,
+        "max": 1248.20751953125,
+        "min": 0.023749999701976776,
+        "mean": 464.22316519514874
+      },
+      "full_rebuild_ms": {
+        "count": 259,
+        "retained": 259,
+        "median": 608.8875732421875,
+        "p95": 1231.631591796875,
+        "max": 1338.628173828125,
+        "min": 6.771874904632568,
+        "mean": 758.4986761656507
+      },
+      "preview_render_submitted_ms": {
+        "count": 89,
+        "retained": 89,
+        "median": 0.026041999459266663,
+        "p95": 0.045469000935554504,
+        "max": 0.1390099972486496,
+        "min": 0.011823000386357307,
+        "mean": 0.02754098871785603
+      },
+      "raw_open_ms": {
+        "count": 2,
+        "retained": 2,
+        "median": 58.685726165771484,
+        "p95": 58.685726165771484,
+        "max": 58.685726165771484,
+        "min": 37.325157165527344,
+        "mean": 48.005441665649414
+      },
+      "programmatic_erase_ms": {
+        "count": 12,
+        "retained": 12,
+        "median": 15718.341796875,
+        "p95": 39165.84765625,
+        "max": 39238.265625,
+        "min": 0.8684369921684265,
+        "mean": 13975.217360248169
+      }
+    },
+    "memory": {
+      "javaHeapUsedBytes": 35369504,
+      "javaHeapMaxBytes": 268435456,
+      "nativeHeapAllocatedBytes": 40998384
+    },
+    "events": [
+      {
+        "name": "strokes_loaded",
+        "tNs": 8618737207285,
+        "count": 0
+      },
+      {
+        "name": "mode_requested",
+        "tNs": 8618746347649,
+        "mode": "BOOX_HARDWARE"
+      },
+      {
+        "name": "host_attach",
+        "tNs": 8618746846035
+      },
+      {
+        "name": "mode_requested",
+        "tNs": 8618750504732,
+        "mode": "BOOX_HARDWARE"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8618802346139,
+        "mode": "GC_full"
+      },
+      {
+        "name": "hardware_preview_enabled",
+        "tNs": 8618867311503,
+        "rawDrawingCreated": true,
+        "rawRender": true,
+        "inputEnabled": true,
+        "limit": "0 0 1860 1977"
+      },
+      {
+        "name": "raw_limit_reconfigured",
+        "tNs": 8618914181451,
+        "limit": "0 0 1860 1977",
+        "screenX": 0,
+        "screenY": 377
+      },
+      {
+        "name": "raw_drawing_closed",
+        "tNs": 8618914222493,
+        "reason": "layout changed"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8618952400097,
+        "mode": "GC_full"
+      },
+      {
+        "name": "hardware_preview_enabled",
+        "tNs": 8619007037701,
+        "rawDrawingCreated": true,
+        "rawRender": true,
+        "inputEnabled": true,
+        "limit": "0 0 1860 1977"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8626047947126,
+        "count": 100
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626068714105,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626069196865,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626122664521,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626167626709,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626189766553,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8626300215719,
+        "count": 100
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626335144834,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626335609105,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626336060615,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626388965615,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626421853323,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8626526072750,
+        "count": 100
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626545053532,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626545644365,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626604957594,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626605062854,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8626653371084,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8627115517073,
+        "count": 1000
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8627225995719,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8627249279260,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8627410517646,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8627577008844,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8627710948687,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8629227315822,
+        "count": 1000
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8629334946656,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8629357765874,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8629516342020,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8629698187437,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8629833966291,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8631296584363,
+        "count": 1000
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8631402980926,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8631403316186,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8631572027488,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8631738764936,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8631875993165,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8635005854414,
+        "count": 5000
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8635484292851,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8635506568893,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8636153331913,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8636842137538,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8637462658423,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8655175937323,
+        "count": 5000
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8655651460083,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8655651799562,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8656311879614,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8657000871541,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8657619530238,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8675516794659,
+        "count": 5000
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8675990463148,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8675990762836,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8676629768252,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8677317368773,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8677938756585,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8698026432775,
+        "count": 10000
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8698963312723,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8698984210431,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8700246875118,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8701607613347,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8702850126680,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8746437225153,
+        "count": 10000
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8747375847704,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8747417066350,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8748684514006,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8750057088537,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8751298489474,
+        "mode": "GC_full"
+      },
+      {
+        "name": "strokes_loaded",
+        "tNs": 8794721151957,
+        "count": 10000
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8795659803675,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8795660141957,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8796921061956,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8798292057112,
+        "mode": "GC_full"
+      },
+      {
+        "name": "epaper_refresh_requested",
+        "tNs": 8799543972580,
+        "mode": "GC_full"
+      }
+    ],
+    "strokes": [],
+    "errors": [],
+    "status": {
+      "mode": "BOOX_HARDWARE",
+      "requestedMode": "BOOX_HARDWARE",
+      "sessionState": "open",
+      "tool": "PEN",
+      "brushWidth": 3,
+      "pressure": true,
+      "drawingEnabled": true,
+      "hostAttached": true,
+      "rawCoordinateSpace": "unknown",
+      "lastError": null,
+      "options": {
+        "rawRenderEnabled": true,
+        "handoff": "PEN_UP_REFRESH",
+        "featureAllCreate": false,
+        "epdRegionLimit": true,
+        "fingerNavigation": true,
+        "fingerDraws": false,
+        "penUpFallbackMs": 120,
+        "renderStyle": "SMOOTH"
+      },
+      "transform": {
+        "scale": 1,
+        "offsetX": 0,
+        "offsetY": 0,
+        "density": 1.875
+      },
+      "viewSize": {
+        "w": 1860,
+        "h": 1977
+      }
+    },
+    "strokeCount": 9934
+  }
+}

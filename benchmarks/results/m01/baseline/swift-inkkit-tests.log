@@ -1,0 +1,49 @@
+Building for debugging...
+[Constructing description]
+[Planning deferred tasks]
+[48 / 87] WebTuning
+[53 / 87] InkCore
+[72 / 96] InkCoreTests-product
+[76 / 96] WebTuning
+[80 / 97] PencilInk
+[81 / 98] PencilInk
+[82 / 98] InkCoreTests-product
+[86 / 100] InkCoreTests-product
+[92 / 100] InkCoreTests-product
+[96 / 103] InkCoreTests-test-runner
+[100 / 103] InkCoreTests-test-runner
+[104 / 104] InkCoreTests-test-runner
+Build complete! (3.61 secs)
+Test Suite 'All tests' started at 2026-11-02 11:53:00.997
+Test Suite 'Debug-linux-x86_64.xctest' started at 2026-11-02 11:53:00.998
+Test Suite 'InkCoreTests' started at 2026-11-02 11:53:00.998
+Test Case 'InkCoreTests.testEraserAndMetrics' started at 2026-11-02 11:53:00.998
+Test Case 'InkCoreTests.testEraserAndMetrics' passed (0.002 seconds)
+Test Case 'InkCoreTests.testScenesMatchFixtures' started at 2026-11-02 11:53:01.000
+Test Case 'InkCoreTests.testScenesMatchFixtures' passed (0.098 seconds)
+Test Case 'InkCoreTests.testWidthAndPiecesMatchGolden' started at 2026-11-02 11:53:01.098
+Test Case 'InkCoreTests.testWidthAndPiecesMatchGolden' passed (0.001 seconds)
+Test Suite 'InkCoreTests' passed at 2026-11-02 11:53:01.099
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.101 (0.101) seconds
+Test Suite 'NativeMappingTests' started at 2026-11-02 11:53:01.099
+Test Case 'NativeMappingTests.testCanonicalJsonRoundTrip' started at 2026-11-02 11:53:01.099
+Test Case 'NativeMappingTests.testCanonicalJsonRoundTrip' passed (0.001 seconds)
+Test Case 'NativeMappingTests.testCompareDetectsDifferences' started at 2026-11-02 11:53:01.100
+Test Case 'NativeMappingTests.testCompareDetectsDifferences' passed (0.0 seconds)
+Test Case 'NativeMappingTests.testForcePressureRoundTrip' started at 2026-11-02 11:53:01.100
+Test Case 'NativeMappingTests.testForcePressureRoundTrip' passed (0.0 seconds)
+Test Case 'NativeMappingTests.testInvertWidthWithQuantizedPressure' started at 2026-11-02 11:53:01.100
+Test Case 'NativeMappingTests.testInvertWidthWithQuantizedPressure' passed (0.0 seconds)
+Test Case 'NativeMappingTests.testTiltRoundTrip' started at 2026-11-02 11:53:01.101
+Test Case 'NativeMappingTests.testTiltRoundTrip' passed (0.0 seconds)
+Test Suite 'NativeMappingTests' passed at 2026-11-02 11:53:01.101
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.002 (0.002) seconds
+Test Suite 'Debug-linux-x86_64.xctest' passed at 2026-11-02 11:53:01.101
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.103 (0.103) seconds
+Test Suite 'All tests' passed at 2026-11-02 11:53:01.101
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.103 (0.103) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.4.2 (288a2328ff84644)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.
+exit 0

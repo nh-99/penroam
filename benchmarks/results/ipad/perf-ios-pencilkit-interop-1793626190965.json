@@ -1,0 +1,158 @@
+{
+  "app" : "ios-pencilkit-interop",
+  "cases" : [
+    {
+      "case" : "canonical->pencilkit->canonical:sample-strokes",
+      "exportMs" : 0.41470833821222186,
+      "geometry" : {
+        "maxPositionError" : 1.3427734359083843e-05,
+        "maxPressureError" : 0.000200000000000089,
+        "maxTiltError" : 3.5083546452363095e-15,
+        "maxTimeErrorUs" : 0,
+        "maxWidthError" : 0,
+        "meanPositionError" : 5.1209984706740836e-06,
+        "orderPreserved" : true,
+        "pointCountMismatches" : 0,
+        "pressureFlagMismatches" : 1,
+        "strokesA" : 5,
+        "strokesB" : 5,
+        "widthMismatches" : 0
+      },
+      "importMs" : 0.91787497512996197,
+      "nativeBytes" : 1526,
+      "nativeBytesStableOnReencode" : false,
+      "nativeDataRoundTripEquivalent" : true,
+      "pencilBoundsVsCanonicalBounds" : {
+        "canonical" : "{{73, 73}, {663, 464}}",
+        "pencil" : "{{78, 78}, {644, 454}}"
+      },
+      "visual_canonicalRender_vs_pencilRender" : {
+        "aCoveredByB_tol" : 0.77950310559006208,
+        "bCoveredByA_tol" : 0.91029659995177237,
+        "coverageA" : 4830,
+        "coverageB" : 4147,
+        "inkRatioBoverA" : 0.85859213250517596,
+        "iou" : 0.52800000000000002
+      }
+    },
+    {
+      "case" : "canonical->pencilkit->canonical:scene-100",
+      "exportMs" : 6.6349999979138374,
+      "geometry" : {
+        "maxPositionError" : 8.2864075997471714e-05,
+        "maxPressureError" : 0.000200000000000089,
+        "maxTiltError" : 3.5083546452363095e-15,
+        "maxTimeErrorUs" : 0,
+        "maxWidthError" : 0,
+        "meanPositionError" : 2.3729045398076512e-05,
+        "orderPreserved" : true,
+        "pointCountMismatches" : 0,
+        "pressureFlagMismatches" : 0,
+        "strokesA" : 100,
+        "strokesB" : 100,
+        "widthMismatches" : 0
+      },
+      "importMs" : 2.4977083667181432,
+      "nativeBytes" : 72016,
+      "nativeBytesStableOnReencode" : false,
+      "nativeDataRoundTripEquivalent" : true,
+      "pencilBoundsVsCanonicalBounds" : {
+        "canonical" : "{{40, -6}, {1504, 1154}}",
+        "pencil" : "{{45, -1}, {1495, 1145}}"
+      },
+      "visual_canonicalRender_vs_pencilRender" : {
+        "aCoveredByB_tol" : 0.88376399655469418,
+        "bCoveredByA_tol" : 0.9833595109733837,
+        "coverageA" : 23220,
+        "coverageB" : 23557,
+        "inkRatioBoverA" : 1.0145133505598622,
+        "iou" : 0.66306395989618516
+      }
+    },
+    {
+      "canonicalBytes" : 159147,
+      "case" : "pencilkit(live)->canonical->pencilkit",
+      "geometry_canonical_vs_reexport" : {
+        "maxPositionError" : 0,
+        "maxPressureError" : 0.00024000000000001798,
+        "maxTiltError" : 0.0091658636290379292,
+        "maxTimeErrorUs" : 0,
+        "maxWidthError" : 0,
+        "meanPositionError" : 0,
+        "orderPreserved" : true,
+        "pointCountMismatches" : 0,
+        "pressureFlagMismatches" : 0,
+        "strokesA" : 7,
+        "strokesB" : 7,
+        "widthMismatches" : 0
+      },
+      "nativeBytes" : 25406,
+      "observedForceRange" : [
+        0,
+        2.2829999999999999
+      ],
+      "pkSizeMedianVsNominal" : [
+        [
+          3.0215871334075928,
+          4.0700000000000003
+        ],
+        [
+          2.7326679229736328,
+          6.7199999999999998
+        ],
+        [
+          2.7355096340179443,
+          6.6699999999999999
+        ],
+        [
+          2.7408440113067627,
+          6.5899999999999999
+        ],
+        [
+          2.7378981113433838,
+          6.5499999999999998
+        ],
+        [
+          2.8413469791412354,
+          5.6900000000000004
+        ],
+        [
+          3.0415985584259033,
+          6.2699999999999996
+        ]
+      ],
+      "strokes" : 7,
+      "visual_original_vs_canonicalRender" : {
+        "aCoveredByB_tol" : 1,
+        "bCoveredByA_tol" : 1,
+        "coverageA" : 6529,
+        "coverageB" : 10803,
+        "inkRatioBoverA" : 1.6546178587838873,
+        "iou" : 0.60436915671572711
+      },
+      "visual_original_vs_reimported" : {
+        "aCoveredByB_tol" : 0.98207995098790013,
+        "bCoveredByA_tol" : 1,
+        "coverageA" : 6529,
+        "coverageB" : 6306,
+        "inkRatioBoverA" : 0.96584469290856179,
+        "iou" : 0.814647250106037
+      }
+    }
+  ],
+  "exportedAt" : "2026-11-02T13:29:48Z",
+  "system" : {
+    "lowPowerMode" : false,
+    "machine" : "iPad13,4",
+    "maxFPS" : 120,
+    "model" : "iPad",
+    "os" : "ios",
+    "osVersion" : "26.6.2",
+    "screen" : {
+      "h" : 834,
+      "w" : 1194
+    },
+    "screenScale" : 2,
+    "thermalState" : 0
+  }
+}

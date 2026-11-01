@@ -1,0 +1,464 @@
+{
+  "app": "flutter",
+  "workload": "D-large-document",
+  "exportedAt": "2026-11-02T09:28:22.514749",
+  "system": {
+    "os": "linux",
+    "osVersion": "Linux 7.2.6-76070206-generic #202609141300~1792433904~24.04~141c6f5 SMP PREEMPT_DYNAMIC Mon O",
+    "dartVersion": "3.13.7 (stable) (Thu Oct 22 14:28:57 2026 -0700) on \"linux_x64\"",
+    "numberOfProcessors": 24,
+    "sessionType": "wayland",
+    "desktop": "GNOME",
+    "kernel": "7.2.6-76070206-generic",
+    "releaseMode": true,
+    "profileMode": false
+  },
+  "viewport": {
+    "width": 1280.0,
+    "height": 720.0,
+    "dpr": 2.0
+  },
+  "results": [
+    {
+      "strokes": 100,
+      "trial": 0,
+      "generateMs": 0.7300000000000182,
+      "recordMs": 2.6849999999999454,
+      "loadToFrameEndMs": 22.98599999999999,
+      "replayFrameMedianMs": 16.841000000000008,
+      "replayFrameMaxMs": 18.55899999999997,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 0,
+      "rssBytes": 222961664
+    },
+    {
+      "strokes": 100,
+      "trial": 1,
+      "generateMs": 0.6140000000000327,
+      "recordMs": 3.7799999999999727,
+      "loadToFrameEndMs": 15.836000000000013,
+      "replayFrameMedianMs": 16.471000000000004,
+      "replayFrameMaxMs": 18.207999999999856,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 0,
+      "rssBytes": 223232000
+    },
+    {
+      "strokes": 100,
+      "trial": 2,
+      "generateMs": 0.5380000000000109,
+      "recordMs": 3.1089999999999236,
+      "loadToFrameEndMs": 14.023000000000138,
+      "replayFrameMedianMs": 16.65599999999995,
+      "replayFrameMaxMs": 18.62700000000018,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 0,
+      "rssBytes": 226324480
+    },
+    {
+      "strokes": 1000,
+      "trial": 0,
+      "generateMs": 4.803000000000338,
+      "recordMs": 21.990999999999985,
+      "loadToFrameEndMs": 32.353000000000065,
+      "replayFrameMedianMs": 16.527000000000044,
+      "replayFrameMaxMs": 18.08699999999999,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 0,
+      "rssBytes": 279855104
+    },
+    {
+      "strokes": 1000,
+      "trial": 1,
+      "generateMs": 4.573999999999614,
+      "recordMs": 16.84900000000016,
+      "loadToFrameEndMs": 27.679000000000087,
+      "replayFrameMedianMs": 16.90599999999995,
+      "replayFrameMaxMs": 18.259000000000015,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 0,
+      "rssBytes": 295456768
+    },
+    {
+      "strokes": 1000,
+      "trial": 2,
+      "generateMs": 2.731999999999971,
+      "recordMs": 27.023999999999887,
+      "loadToFrameEndMs": 45.547000000000025,
+      "replayFrameMedianMs": 16.722999999999956,
+      "replayFrameMaxMs": 17.59999999999991,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 56,
+      "rssBytes": 298000384
+    },
+    {
+      "strokes": 5000,
+      "trial": 0,
+      "generateMs": 20.977000000000317,
+      "recordMs": 109.94799999999987,
+      "loadToFrameEndMs": 138.95600000000013,
+      "replayFrameMedianMs": 52.75799999999981,
+      "replayFrameMaxMs": 67.9010000000003,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 36,
+      "rssBytes": 494641152
+    },
+    {
+      "strokes": 5000,
+      "trial": 1,
+      "generateMs": 31.63299999999981,
+      "recordMs": 129.3729999999996,
+      "loadToFrameEndMs": 163.42799999999988,
+      "replayFrameMedianMs": 52.414999999999964,
+      "replayFrameMaxMs": 84.90200000000004,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 41,
+      "rssBytes": 530157568
+    },
+    {
+      "strokes": 5000,
+      "trial": 2,
+      "generateMs": 16.94799999999941,
+      "recordMs": 141.26200000000063,
+      "loadToFrameEndMs": 175.27099999999973,
+      "replayFrameMedianMs": 53.449000000000524,
+      "replayFrameMaxMs": 72.90999999999985,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 18,
+      "rssBytes": 540528640
+    },
+    {
+      "strokes": 10000,
+      "trial": 0,
+      "generateMs": 41.71299999999974,
+      "recordMs": 264.14800000000105,
+      "loadToFrameEndMs": 351.9200000000001,
+      "replayFrameMedianMs": 120.08100000000013,
+      "replayFrameMaxMs": 138.71500000000015,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 39,
+      "rssBytes": 747696128
+    },
+    {
+      "strokes": 10000,
+      "trial": 1,
+      "generateMs": 37.39499999999862,
+      "recordMs": 270.366,
+      "loadToFrameEndMs": 326.5410000000011,
+      "replayFrameMedianMs": 118.20399999999972,
+      "replayFrameMaxMs": 178.87099999999919,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 30,
+      "rssBytes": 762753024
+    },
+    {
+      "strokes": 10000,
+      "trial": 2,
+      "generateMs": 38.82899999999972,
+      "recordMs": 291.10599999999977,
+      "loadToFrameEndMs": 335.65500000000065,
+      "replayFrameMedianMs": 128.6229999999996,
+      "replayFrameMaxMs": 179.87099999999919,
+      "replayFrames": 25,
+      "rasterTimingsSoFar": 18,
+      "rssBytes": 769921024
+    }
+  ],
+  "metrics": {
+    "clock": "Stopwatch (monotonic)",
+    "counters": {
+      "full_rebuilds": 14,
+      "frames_over_budget": 171,
+      "framework_frame_presented": 338,
+      "stroke_finalized": 12,
+      "clear_canvas": 1
+    },
+    "timings": {
+      "picture_record_ms": {
+        "count": 14,
+        "retained": 14,
+        "median": 27.023999999999887,
+        "p95": 270.366,
+        "max": 291.10599999999977,
+        "min": 0.001,
+        "mean": 91.55664285714303
+      },
+      "committed_paint_ms": {
+        "count": 27,
+        "retained": 27,
+        "median": 4.190000000000055,
+        "p95": 46.29100000000108,
+        "max": 60.57799999999952,
+        "min": 0.002999999999985903,
+        "mean": 15.795703703703818
+      },
+      "preview_render_submitted_ms": {
+        "count": 315,
+        "retained": 315,
+        "median": 0.04399999999986903,
+        "p95": 0.09799999999995634,
+        "max": 1.0150000000003274,
+        "min": 0.0,
+        "mean": 0.050434920634951856
+      },
+      "startup_to_first_frame_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 200.00000001164153,
+        "p95": 200.00000001164153,
+        "max": 200.00000001164153,
+        "min": 200.00000001164153,
+        "mean": 200.00000001164153
+      },
+      "frame_build_ms": {
+        "count": 338,
+        "retained": 338,
+        "median": 0.206,
+        "p95": 4.11,
+        "max": 64.149,
+        "min": 0.024,
+        "mean": 1.6034349112426036
+      },
+      "frame_raster_ms": {
+        "count": 338,
+        "retained": 338,
+        "median": 16.642,
+        "p95": 126.224,
+        "max": 179.774,
+        "min": 0.622,
+        "mean": 47.43961242603552
+      },
+      "frame_total_span_ms": {
+        "count": 338,
+        "retained": 338,
+        "median": 26.472,
+        "p95": 247.678,
+        "max": 544.847,
+        "min": 2.004,
+        "mean": 91.1815443786982
+      },
+      "frame_vsync_overhead_ms": {
+        "count": 338,
+        "retained": 338,
+        "median": 2.264,
+        "p95": 5.443,
+        "max": 336.415,
+        "min": 1.124,
+        "mean": 5.126855029585798
+      },
+      "persistent_render_completed_ms": {
+        "count": 12,
+        "retained": 12,
+        "median": 67.48199999999997,
+        "p95": 170.83299999999872,
+        "max": 178.6329999999998,
+        "min": 15.966999999999985,
+        "mean": 70.93291666666643
+      }
+    },
+    "events": [
+      {
+        "name": "stroke_finalized",
+        "t": 995.578,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 1494.831,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 1994.509,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 2511.204,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 3028.849,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 3563.747,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 5145.283,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 6845.91,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 8545.773,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 12012.667,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 15594.708,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 19245.344,
+        "points": 25
+      },
+      {
+        "name": "clear_canvas",
+        "t": 19418.001
+      }
+    ],
+    "strokes": [
+      {
+        "id": "5ba690e6-66fd-4317-7a85-c1cf6f56761a",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 398.7950000000001,
+        "medianDtMs": 16.841000000000008,
+        "maxDtMs": 18.559999999999945,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "c0a652ce-2d13-47a3-f69f-304a7ec5675c",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 399.0569999999998,
+        "medianDtMs": 16.507000000000062,
+        "maxDtMs": 18.208999999999833,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "eadf1041-ef6a-4aaf-0707-abf9835119cf",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 398.2729999999999,
+        "medianDtMs": 16.656999999999925,
+        "maxDtMs": 18.628000000000156,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "9d907e8b-6c09-4560-6820-7e450aef1b07",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 394.5239999999999,
+        "medianDtMs": 16.771000000000186,
+        "maxDtMs": 18.08699999999999,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "4cb87d5d-8b22-4045-9524-f78c0371316c",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 396.40200000000004,
+        "medianDtMs": 16.90599999999995,
+        "maxDtMs": 18.26000000000022,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "7955d47c-de5e-4302-1f1c-8516ea957af7",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 397.69500000000016,
+        "medianDtMs": 16.72400000000016,
+        "maxDtMs": 17.600999999999658,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "2fc715ee-fd46-4fb5-8389-0473250f3d9e",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 1300.6009999999997,
+        "medianDtMs": 53.235999999999876,
+        "maxDtMs": 67.904,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "03ba085a-83e6-444f-1872-401b079b3408",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 1293.531,
+        "medianDtMs": 52.414999999999964,
+        "maxDtMs": 84.90300000000025,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "9eb4581e-6a57-4b56-85cc-be85e8078741",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 1319.7070000000003,
+        "medianDtMs": 53.45099999999911,
+        "maxDtMs": 72.91100000000006,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "2724bf43-ccc0-4980-a032-f3f3875cfd3a",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 2836.011999999999,
+        "medianDtMs": 120.3680000000004,
+        "maxDtMs": 138.71700000000055,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "b4651731-e0e9-4c0f-1c59-4a72cbaf651e",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 2868.1269999999986,
+        "medianDtMs": 118.21500000000015,
+        "maxDtMs": 178.87099999999919,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "d16721ae-93d1-4499-b595-394acc0777e4",
+        "device": "script",
+        "samples": 25,
+        "durationMs": 2945.249,
+        "medianDtMs": 130.6239999999998,
+        "maxDtMs": 179.8719999999994,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      }
+    ],
+    "errors": [],
+    "info": {
+      "system": {
+        "os": "linux",
+        "osVersion": "Linux 7.2.6-76070206-generic #202609141300~1792433904~24.04~141c6f5 SMP PREEMPT_DYNAMIC Mon O",
+        "dartVersion": "3.13.7 (stable) (Thu Oct 22 14:28:57 2026 -0700) on \"linux_x64\"",
+        "numberOfProcessors": 24,
+        "sessionType": "wayland",
+        "desktop": "GNOME",
+        "kernel": "7.2.6-76070206-generic",
+        "releaseMode": true,
+        "profileMode": false
+      },
+      "startupMs": 200.00000001164153,
+      "lastRasterFinishUs": 89246681104
+    }
+  }
+}

@@ -1,0 +1,3 @@
+[default]
+description = "Allows the frontend to drive the BOOX native ink overlay."
+permissions = ["allow-call", "allow-registerListener", "allow-remove-listener"]

@@ -1,0 +1,203 @@
+[
+  {
+    "fontSize": 14.0,
+    "lines": [
+      {
+        "end": 0,
+        "start": 0,
+        "text": "",
+        "width": 0.0
+      }
+    ],
+    "text": "",
+    "width": 200.0
+  },
+  {
+    "fontSize": 14.0,
+    "lines": [
+      {
+        "end": 11,
+        "start": 0,
+        "text": "Hello world",
+        "width": 69.23
+      }
+    ],
+    "text": "Hello world",
+    "width": 200.0
+  },
+  {
+    "fontSize": 14.0,
+    "lines": [
+      {
+        "end": 6,
+        "start": 0,
+        "text": "Hello ",
+        "width": 31.892
+      },
+      {
+        "end": 11,
+        "start": 6,
+        "text": "world",
+        "width": 33.446
+      }
+    ],
+    "text": "Hello world",
+    "width": 40.0
+  },
+  {
+    "fontSize": 12.0,
+    "lines": [
+      {
+        "end": 20,
+        "start": 0,
+        "text": "The quick brown fox ",
+        "width": 107.376
+      },
+      {
+        "end": 40,
+        "start": 20,
+        "text": "jumps over the lazy ",
+        "width": 103.368
+      },
+      {
+        "end": 43,
+        "start": 40,
+        "text": "dog",
+        "width": 20.016
+      }
+    ],
+    "text": "The quick brown fox jumps over the lazy dog",
+    "width": 120.0
+  },
+  {
+    "fontSize": 16.0,
+    "lines": [
+      {
+        "end": 8,
+        "start": 0,
+        "text": "Line one",
+        "width": 61.376
+      },
+      {
+        "end": 17,
+        "start": 9,
+        "text": "Line two",
+        "width": 59.584
+      },
+      {
+        "end": 18,
+        "start": 18,
+        "text": "",
+        "width": 0.0
+      },
+      {
+        "end": 30,
+        "start": 19,
+        "text": "After blank",
+        "width": 76.48
+      }
+    ],
+    "text": "Line one\nLine two\n\nAfter blank",
+    "width": 300.0
+  },
+  {
+    "fontSize": 18.0,
+    "lines": [
+      {
+        "end": 9,
+        "start": 0,
+        "text": "Supercali",
+        "width": 75.024
+      },
+      {
+        "end": 20,
+        "start": 9,
+        "text": "fragilistic",
+        "width": 70.002
+      },
+      {
+        "end": 29,
+        "start": 20,
+        "text": "expialido",
+        "width": 71.028
+      },
+      {
+        "end": 34,
+        "start": 29,
+        "text": "cious",
+        "width": 42.012
+      }
+    ],
+    "text": "Supercalifragilisticexpialidocious",
+    "width": 80.0
+  },
+  {
+    "fontSize": 10.0,
+    "lines": [
+      {
+        "end": 9,
+        "start": 0,
+        "text": "trailing ",
+        "width": 29.45
+      },
+      {
+        "end": 18,
+        "start": 9,
+        "text": "spaces   ",
+        "width": 31.68
+      },
+      {
+        "end": 32,
+        "start": 19,
+        "text": "and  double  ",
+        "width": 52.26
+      },
+      {
+        "end": 38,
+        "start": 32,
+        "text": "spaces",
+        "width": 31.68
+      }
+    ],
+    "text": "trailing spaces   \nand  double  spaces",
+    "width": 60.0
+  },
+  {
+    "fontSize": 14.0,
+    "lines": [
+      {
+        "end": 8,
+        "start": 0,
+        "text": "Ünïcödé ",
+        "width": 52.136
+      },
+      {
+        "end": 24,
+        "start": 8,
+        "text": "‘quotes’ – dash ",
+        "width": 94.164
+      },
+      {
+        "end": 29,
+        "start": 24,
+        "text": "€ 日本語",
+        "width": 36.876
+      }
+    ],
+    "text": "Ünïcödé ‘quotes’ – dash € 日本語",
+    "width": 100.0
+  },
+  {
+    "fontSize": 12.0,
+    "lines": [
+      {
+        "end": 4,
+        "start": 0,
+        "text": "\ttab",
+        "width": 30.024
+      }
+    ],
+    "text": "\ttab",
+    "width": 100.0
+  }
+]

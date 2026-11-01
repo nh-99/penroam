@@ -1,0 +1,16 @@
+[package]
+name = "tauri-plugin-native-ink"
+description = "Penroam NativeInkSurface: hosts platform ink views (BOOX Onyx on Android, UIKit Pencil on iOS) next to the Tauri WebView"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+links = "tauri-plugin-native-ink"
+
+[dependencies]
+tauri = { version = "2.12.5" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+tauri-plugin = { version = "2.7.2", features = ["build"] }
