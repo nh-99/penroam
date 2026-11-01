@@ -32,7 +32,9 @@ pub fn run() {
             if !lib.recovery.warnings.is_empty() {
                 eprintln!("penroam: recovery: {:?}", lib.recovery);
             }
-            app.manage(AppState { lib: Mutex::new(lib) });
+            app.manage(AppState {
+                lib: Mutex::new(lib),
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

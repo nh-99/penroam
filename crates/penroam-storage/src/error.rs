@@ -67,7 +67,9 @@ impl From<std::io::Error> for StorageError {
 impl From<penroam_core::ApplyError> for StorageError {
     fn from(e: penroam_core::ApplyError) -> Self {
         match e {
-            penroam_core::ApplyError::RevisionConflict { .. } => StorageError::Conflict(e.to_string()),
+            penroam_core::ApplyError::RevisionConflict { .. } => {
+                StorageError::Conflict(e.to_string())
+            }
             _ => StorageError::Invalid(e.to_string()),
         }
     }

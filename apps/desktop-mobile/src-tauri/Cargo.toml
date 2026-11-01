@@ -24,3 +24,6 @@ penroam-core.workspace = true
 penroam-storage.workspace = true
 penroam-pdf.workspace = true
 tauri-plugin-native-ink = { path = "../../../plugins/tauri-plugin-native-ink" }
+
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc = "0.2"

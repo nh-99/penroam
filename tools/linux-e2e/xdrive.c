@@ -11,6 +11,7 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/XTest.h>
 #include <X11/keysym.h>
+#include <X11/XKBlib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,12 +55,14 @@ int main(void) {
       key_sym(ks, ctrl, shift);
     }
     else if (strncmp(line, "type ", 5) == 0) {
+      // printable ASCII keysyms equal their character codes; "\\" types Return
       for (const char *p = line + 5; *p; p++) {
-        char buf[2] = {*p, 0};
-        KeySym ks = *p == ' ' ? XK_space : *p == '\\' ? XK_Return : XStringToKeysym(buf);
-        int shift = (*p >= 'A' && *p <= 'Z');
-        if (*p == '.') ks = XK_period; else if (*p == ',') ks = XK_comma; else if (*p == '!') { ks = XK_1; shift = 1; }
-        if (ks != NoSymbol) key_sym(ks, 0, shift);
+        if (*p == '\\') { key_sym(XK_Return, 0, 0); continue; }
+        KeySym ks = (KeySym)(unsigned char)*p;
+        KeyCode kc = XKeysymToKeycode(d, ks);
+        if (!kc) continue;
+        int shift = XkbKeycodeToKeysym(d, kc, 0, 0) != ks;
+        key_sym(ks, 0, shift);
       }
     }
     else if (sscanf(line, "sleep %d", &a) == 1) usleep(a * 1000);

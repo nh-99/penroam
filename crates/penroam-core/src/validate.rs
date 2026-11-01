@@ -35,7 +35,9 @@ pub fn is_color(s: &str) -> bool {
 }
 
 pub fn is_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
 pub fn validate_title(t: &str) -> Result<(), ValidationError> {
@@ -83,15 +85,24 @@ pub fn validate_element(e: &Element) -> Result<(), ValidationError> {
                 return err(format!("stroke {} opacity out of range", s.id));
             }
             if !is_color(&s.color) {
-                return err(format!("stroke {} has an invalid colour {:?}", s.id, s.color));
+                return err(format!(
+                    "stroke {} has an invalid colour {:?}",
+                    s.id, s.color
+                ));
             }
             for p in &s.points {
                 finite(p.x, "x")?;
                 finite(p.y, "y")?;
                 if !p.pressure.is_finite() || !(0.0..=1.0).contains(&p.pressure) {
-                    return err(format!("stroke {} pressure out of range: {}", s.id, p.pressure));
+                    return err(format!(
+                        "stroke {} pressure out of range: {}",
+                        s.id, p.pressure
+                    ));
                 }
-                if !p.tilt_x.is_finite() || !p.tilt_y.is_finite() || p.twist.is_some_and(|t| !t.is_finite()) {
+                if !p.tilt_x.is_finite()
+                    || !p.tilt_y.is_finite()
+                    || p.twist.is_some_and(|t| !t.is_finite())
+                {
                     return err(format!("stroke {} has a non-finite tilt/twist", s.id));
                 }
             }
@@ -133,7 +144,10 @@ pub fn validate_element(e: &Element) -> Result<(), ValidationError> {
 
 pub fn validate_page(p: &Page) -> Result<(), ValidationError> {
     if p.schema_version != SCHEMA_VERSION {
-        return err(format!("page schema version {} (expected {SCHEMA_VERSION})", p.schema_version));
+        return err(format!(
+            "page schema version {} (expected {SCHEMA_VERSION})",
+            p.schema_version
+        ));
     }
     validate_size(&p.size)?;
     validate_template(&p.template)?;
@@ -152,7 +166,10 @@ pub fn validate_page(p: &Page) -> Result<(), ValidationError> {
             return err("PDF background has an invalid asset hash");
         }
         if ![0, 90, 180, 270].contains(&bg.rotation) {
-            return err(format!("PDF background rotation {} is not a multiple of 90", bg.rotation));
+            return err(format!(
+                "PDF background rotation {} is not a multiple of 90",
+                bg.rotation
+            ));
         }
         for v in bg.crop_box.iter().chain(bg.media_box.iter()) {
             finite(*v, "PDF box")?;
@@ -163,7 +180,10 @@ pub fn validate_page(p: &Page) -> Result<(), ValidationError> {
 
 pub fn validate_notebook(n: &Notebook) -> Result<(), ValidationError> {
     if n.schema_version != SCHEMA_VERSION {
-        return err(format!("notebook schema version {} (expected {SCHEMA_VERSION})", n.schema_version));
+        return err(format!(
+            "notebook schema version {} (expected {SCHEMA_VERSION})",
+            n.schema_version
+        ));
     }
     validate_title(&n.title)?;
     validate_template(&n.defaults.template)?;

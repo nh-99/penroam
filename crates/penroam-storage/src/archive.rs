@@ -95,39 +95,64 @@ fn zerr(e: impl std::fmt::Display) -> StorageError {
 
 impl Library {
     /// Writes a snapshot of a notebook (live pages only) as a `.penroam` archive.
-    pub fn export_archive<W: Write + Seek>(&mut self, nb_id: Uuid, out: W, generator: &str) -> Result<Manifest> {
+    pub fn export_archive<W: Write + Seek>(
+        &mut self,
+        nb_id: Uuid,
+        out: W,
+        generator: &str,
+    ) -> Result<Manifest> {
         let nb = self.notebook(nb_id)?.clone();
         let mut zip = zip::ZipWriter::new(out);
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).large_file(true);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .large_file(true);
         zip.start_file("mimetype", stored).map_err(zerr)?;
         zip.write_all(MIMETYPE.as_bytes())?;
 
         let mut pages = Vec::new();
         let mut used_assets: Vec<String> = Vec::new();
         for pid in nb.page_order.clone() {
-            let bytes = self.with_page(nb_id, pid, |p| {
-                for a in p.asset_refs() {
-                    if !used_assets.iter().any(|u| u == a) {
-                        used_assets.push(a.to_string());
+            let bytes = self
+                .with_page(nb_id, pid, |p| {
+                    for a in p.asset_refs() {
+                        if !used_assets.iter().any(|u| u == a) {
+                            used_assets.push(a.to_string());
+                        }
                     }
-                }
-                serde_json::to_vec(p)
-            })?
-            .map_err(|e| StorageError::Io(e.to_string()))?;
+                    serde_json::to_vec(p)
+                })?
+                .map_err(|e| StorageError::Io(e.to_string()))?;
             let path = format!("pages/{pid}.json");
             zip.start_file(&path, deflated).map_err(zerr)?;
             zip.write_all(&bytes)?;
-            pages.push(ManifestPage { id: pid, path, sha256: sha256_hex(&bytes), bytes: bytes.len() as u64 });
+            pages.push(ManifestPage {
+                id: pid,
+                path,
+                sha256: sha256_hex(&bytes),
+                bytes: bytes.len() as u64,
+            });
         }
         let mut assets = Vec::new();
         for hash in &used_assets {
-            let meta = nb.assets.iter().find(|a| &a.sha256 == hash).ok_or_else(|| StorageError::Corrupt(format!("page references unknown asset {hash}")))?;
+            let meta = nb
+                .assets
+                .iter()
+                .find(|a| &a.sha256 == hash)
+                .ok_or_else(|| {
+                    StorageError::Corrupt(format!("page references unknown asset {hash}"))
+                })?;
             let bytes = self.read_asset(nb_id, hash)?;
             let path = format!("assets/{hash}");
             zip.start_file(&path, deflated).map_err(zerr)?;
             zip.write_all(&bytes)?;
-            assets.push(ManifestAsset { sha256: hash.clone(), path, media_type: meta.media_type.clone(), byte_size: bytes.len() as u64 });
+            assets.push(ManifestAsset {
+                sha256: hash.clone(),
+                path,
+                media_type: meta.media_type.clone(),
+                byte_size: bytes.len() as u64,
+            });
         }
         let mut snapshot = nb.clone();
         snapshot.trashed_pages.clear();
@@ -139,12 +164,15 @@ impl Library {
             schema_version: SCHEMA_VERSION,
             generator: generator.into(),
             exported_at: now_ms(),
-            notebook: serde_json::to_value(&snapshot).map_err(|e| StorageError::Io(e.to_string()))?,
+            notebook: serde_json::to_value(&snapshot)
+                .map_err(|e| StorageError::Io(e.to_string()))?,
             pages,
             assets,
         };
         zip.start_file("manifest.json", deflated).map_err(zerr)?;
-        zip.write_all(&serde_json::to_vec_pretty(&manifest).map_err(|e| StorageError::Io(e.to_string()))?)?;
+        zip.write_all(
+            &serde_json::to_vec_pretty(&manifest).map_err(|e| StorageError::Io(e.to_string()))?,
+        )?;
         let mut w = zip.finish().map_err(zerr)?;
         w.flush()?;
         Ok(manifest)
@@ -154,7 +182,10 @@ impl Library {
     pub fn import_archive<R: Read + Seek>(&mut self, input: R) -> Result<ImportReport> {
         let mut zip = zip::ZipArchive::new(input).map_err(zerr)?;
         if zip.len() > limits::MAX_ENTRIES {
-            return Err(StorageError::TooLarge(format!("archive has {} entries", zip.len())));
+            return Err(StorageError::TooLarge(format!(
+                "archive has {} entries",
+                zip.len()
+            )));
         }
         let mut warnings = Vec::new();
         // ---- inventory and name whitelist
@@ -168,7 +199,9 @@ impl Library {
             }
             if f.is_dir() {
                 if !matches!(name.as_str(), "pages/" | "assets/") {
-                    return Err(StorageError::Archive(format!("unexpected directory {name}")));
+                    return Err(StorageError::Archive(format!(
+                        "unexpected directory {name}"
+                    )));
                 }
                 continue;
             }
@@ -181,12 +214,16 @@ impl Library {
             }
             let (size, comp) = (f.size(), f.compressed_size());
             if size > 1 << 20 && size / comp.max(1) > limits::MAX_RATIO {
-                return Err(StorageError::Archive(format!("entry {name} has a suspicious compression ratio")));
+                return Err(StorageError::Archive(format!(
+                    "entry {name} has a suspicious compression ratio"
+                )));
             }
             declared_total = declared_total.saturating_add(size);
         }
         if declared_total > limits::MAX_TOTAL {
-            return Err(StorageError::TooLarge("archive expands to more than 4 GiB".into()));
+            return Err(StorageError::TooLarge(
+                "archive expands to more than 4 GiB".into(),
+            ));
         }
         // ---- mimetype + manifest
         if names.contains("mimetype") {
@@ -195,14 +232,23 @@ impl Library {
                 return Err(StorageError::Archive("wrong mimetype".into()));
             }
         }
-        let manifest: Manifest = serde_json::from_slice(&read_entry(&mut zip, "manifest.json", limits::MAX_MANIFEST)?).map_err(|e| StorageError::Archive(format!("manifest.json: {e}")))?;
+        let manifest: Manifest = serde_json::from_slice(&read_entry(
+            &mut zip,
+            "manifest.json",
+            limits::MAX_MANIFEST,
+        )?)
+        .map_err(|e| StorageError::Archive(format!("manifest.json: {e}")))?;
         if manifest.format != FORMAT {
-            return Err(StorageError::Archive(format!("unknown format {:?}", manifest.format)));
+            return Err(StorageError::Archive(format!(
+                "unknown format {:?}",
+                manifest.format
+            )));
         }
         if manifest.format_version > FORMAT_VERSION {
             return Err(StorageError::Archive(format!("archive format version {} is newer than this app supports ({FORMAT_VERSION}); please update Penroam", manifest.format_version)));
         }
-        let mut nb = notebook_from_value(manifest.notebook.clone()).map_err(|e| StorageError::Archive(format!("notebook: {e}")))?;
+        let mut nb = notebook_from_value(manifest.notebook.clone())
+            .map_err(|e| StorageError::Archive(format!("notebook: {e}")))?;
         validate_notebook(&nb).map_err(|e| StorageError::Archive(format!("notebook: {}", e.0)))?;
         if !nb.trashed_pages.is_empty() {
             warnings.push("archive listed trashed pages; they were not imported".into());
@@ -211,16 +257,23 @@ impl Library {
         nb.deleted_at = None;
         let listed: Vec<Uuid> = manifest.pages.iter().map(|p| p.id).collect();
         if listed != nb.page_order {
-            return Err(StorageError::Archive("manifest page list does not match the notebook page order".into()));
+            return Err(StorageError::Archive(
+                "manifest page list does not match the notebook page order".into(),
+            ));
         }
         // ---- stage
         let renamed_copy = self.contains_notebook(nb.id);
         let old_id = nb.id;
         if renamed_copy {
             nb.id = Uuid::new_v4();
-            nb.title = format!("{} (imported)", nb.title).chars().take(penroam_core::validate::limits::MAX_TITLE_CHARS).collect();
+            nb.title = format!("{} (imported)", nb.title)
+                .chars()
+                .take(penroam_core::validate::limits::MAX_TITLE_CHARS)
+                .collect();
         }
-        let stage = self.staging_dir().join(format!("import-{}", Uuid::new_v4()));
+        let stage = self
+            .staging_dir()
+            .join(format!("import-{}", Uuid::new_v4()));
         let res = (|| -> Result<()> {
             fs::create_dir_all(stage.join("pages"))?;
             fs::create_dir_all(stage.join("assets"))?;
@@ -232,22 +285,33 @@ impl Library {
                 }
                 let bytes = read_entry(&mut zip, &a.path, limits::MAX_ASSET)?;
                 if sha256_hex(&bytes) != a.sha256 {
-                    return Err(StorageError::Archive(format!("asset {} is corrupt (checksum mismatch)", a.sha256)));
+                    return Err(StorageError::Archive(format!(
+                        "asset {} is corrupt (checksum mismatch)",
+                        a.sha256
+                    )));
                 }
                 if bytes.len() as u64 != a.byte_size {
-                    return Err(StorageError::Archive(format!("asset {} has the wrong size", a.sha256)));
+                    return Err(StorageError::Archive(format!(
+                        "asset {} has the wrong size",
+                        a.sha256
+                    )));
                 }
                 crate::fsutil::write_atomic(&stage.join("assets").join(&a.sha256), &bytes)?;
                 have_assets.insert(a.sha256.clone(), a.byte_size);
             }
             for a in &nb.assets {
                 if !have_assets.contains_key(&a.sha256) {
-                    return Err(StorageError::Archive(format!("notebook lists asset {} which is missing", a.sha256)));
+                    return Err(StorageError::Archive(format!(
+                        "notebook lists asset {} which is missing",
+                        a.sha256
+                    )));
                 }
             }
             for h in have_assets.keys() {
                 if !nb.assets.iter().any(|a| &a.sha256 == h) {
-                    return Err(StorageError::Archive(format!("asset {h} is not listed by the notebook")));
+                    return Err(StorageError::Archive(format!(
+                        "asset {h} is not listed by the notebook"
+                    )));
                 }
             }
             // pages
@@ -257,23 +321,40 @@ impl Library {
                 }
                 let bytes = read_entry(&mut zip, &mp.path, limits::MAX_PAGE)?;
                 if sha256_hex(&bytes) != mp.sha256 {
-                    return Err(StorageError::Archive(format!("page {} is corrupt (checksum mismatch)", mp.id)));
+                    return Err(StorageError::Archive(format!(
+                        "page {} is corrupt (checksum mismatch)",
+                        mp.id
+                    )));
                 }
-                let page = page_from_slice(&bytes).map_err(|e| StorageError::Archive(format!("page {}: {e}", mp.id)))?;
-                validate_page(&page).map_err(|e| StorageError::Archive(format!("page {}: {}", mp.id, e.0)))?;
+                let page = page_from_slice(&bytes)
+                    .map_err(|e| StorageError::Archive(format!("page {}: {e}", mp.id)))?;
+                validate_page(&page)
+                    .map_err(|e| StorageError::Archive(format!("page {}: {}", mp.id, e.0)))?;
                 if page.id != mp.id {
-                    return Err(StorageError::Archive(format!("page file {} contains page {}", mp.id, page.id)));
+                    return Err(StorageError::Archive(format!(
+                        "page file {} contains page {}",
+                        mp.id, page.id
+                    )));
                 }
                 for a in page.asset_refs() {
                     if !have_assets.contains_key(a) {
-                        return Err(StorageError::Archive(format!("page {} references missing asset {a}", mp.id)));
+                        return Err(StorageError::Archive(format!(
+                            "page {} references missing asset {a}",
+                            mp.id
+                        )));
                     }
                 }
                 // canonical bytes are written verbatim: lossless
-                crate::fsutil::write_atomic(&stage.join("pages").join(format!("{}.json", mp.id)), &bytes)?;
+                crate::fsutil::write_atomic(
+                    &stage.join("pages").join(format!("{}.json", mp.id)),
+                    &bytes,
+                )?;
             }
             nb.updated_at = nb.updated_at.max(manifest.exported_at);
-            crate::fsutil::write_atomic(&stage.join("notebook.json"), &serde_json::to_vec_pretty(&nb).map_err(|e| StorageError::Io(e.to_string()))?)?;
+            crate::fsutil::write_atomic(
+                &stage.join("notebook.json"),
+                &serde_json::to_vec_pretty(&nb).map_err(|e| StorageError::Io(e.to_string()))?,
+            )?;
             Ok(())
         })();
         if let Err(e) = res {
@@ -281,12 +362,18 @@ impl Library {
             return Err(e);
         }
         if renamed_copy {
-            warnings.push(format!("a notebook with id {old_id} already exists; imported as a copy"));
+            warnings.push(format!(
+                "a notebook with id {old_id} already exists; imported as a copy"
+            ));
         }
         let nb = self.insert_imported(nb, &stage).inspect_err(|_| {
             let _ = fs::remove_dir_all(&stage);
         })?;
-        Ok(ImportReport { notebook: nb, renamed_copy, warnings })
+        Ok(ImportReport {
+            notebook: nb,
+            renamed_copy,
+            warnings,
+        })
     }
 }
 
@@ -297,7 +384,9 @@ fn safe_name(name: &str) -> bool {
         && !name.contains('\\')
         && !name.contains(':')
         && !name.contains('\0')
-        && name.split('/').all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+        && name
+            .split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
 }
 
 fn entry_name_ok(name: &str) -> bool {
@@ -305,7 +394,9 @@ fn entry_name_ok(name: &str) -> bool {
         return true;
     }
     if let Some(rest) = name.strip_prefix("pages/") {
-        return rest.strip_suffix(".json").is_some_and(|id| Uuid::parse_str(id).is_ok_and(|u| u.to_string() == id));
+        return rest
+            .strip_suffix(".json")
+            .is_some_and(|id| Uuid::parse_str(id).is_ok_and(|u| u.to_string() == id));
     }
     if let Some(h) = name.strip_prefix("assets/") {
         return is_sha256_hex(h);
@@ -314,15 +405,26 @@ fn entry_name_ok(name: &str) -> bool {
 }
 
 /// Reads one entry, enforcing `limit` on the actual decompressed byte count.
-fn read_entry<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>> {
-    let f = zip.by_name(name).map_err(|_| StorageError::Archive(format!("missing entry {name}")))?;
+fn read_entry<R: Read + Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    name: &str,
+    limit: u64,
+) -> Result<Vec<u8>> {
+    let f = zip
+        .by_name(name)
+        .map_err(|_| StorageError::Archive(format!("missing entry {name}")))?;
     if f.size() > limit {
         return Err(StorageError::TooLarge(format!("{name} is too large")));
     }
     let mut buf = Vec::with_capacity(f.size().min(64 << 20) as usize);
-    let n = f.take(limit + 1).read_to_end(&mut buf).map_err(|e| StorageError::Archive(format!("{name}: {e}")))?;
+    let n = f
+        .take(limit + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| StorageError::Archive(format!("{name}: {e}")))?;
     if n as u64 > limit {
-        return Err(StorageError::TooLarge(format!("{name} expands beyond its limit")));
+        return Err(StorageError::TooLarge(format!(
+            "{name} expands beyond its limit"
+        )));
     }
     Ok(buf)
 }

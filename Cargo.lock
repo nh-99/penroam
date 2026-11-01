@@ -2399,6 +2399,7 @@ dependencies = [
 name = "penroam-app"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "penroam-core",
  "penroam-pdf",
  "penroam-storage",

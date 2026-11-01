@@ -65,79 +65,128 @@ pub enum ApplyError {
 
 /// Applies a batch atomically: either every operation applies or the page is
 /// left untouched. Returns the new revision.
-pub fn apply_batch(page: &mut Page, batch: &OperationBatch, now: Timestamp) -> Result<u64, ApplyError> {
+pub fn apply_batch(
+    page: &mut Page,
+    batch: &OperationBatch,
+    now: Timestamp,
+) -> Result<u64, ApplyError> {
+    check_batch(page, batch)?;
+    Ok(apply_checked(page, batch, None, now))
+}
+
+/// Validates a batch against the page without modifying it (revision, ids,
+/// element data). After `Ok`, [`apply_checked`] cannot fail. This avoids
+/// copying the whole page per batch (a 10k-stroke page is ~20 MB).
+pub fn check_batch(page: &Page, batch: &OperationBatch) -> Result<(), ApplyError> {
     if batch.base_revision != page.revision {
-        return Err(ApplyError::RevisionConflict { expected: batch.base_revision, actual: page.revision });
+        return Err(ApplyError::RevisionConflict {
+            expected: batch.base_revision,
+            actual: page.revision,
+        });
     }
     if batch.ops.is_empty() {
         return Err(ApplyError::Empty);
     }
-    let mut next = page.elements.clone();
-    let mut template = page.template.clone();
-    for op in &batch.ops {
-        apply_op(&mut next, &mut template, &op.kind)?;
+    check_ops(page, &batch.ops)
+}
+
+fn check_ops(page: &Page, ops: &[PageOperation]) -> Result<(), ApplyError> {
+    let mut ids: HashSet<Uuid> = page.elements.iter().map(Element::id).collect();
+    for op in ops {
+        match &op.kind {
+            OpKind::AddElements { elements } => {
+                for e in elements {
+                    validate_element(e)?;
+                    if !ids.insert(e.id()) {
+                        return Err(ApplyError::DuplicateElement(e.id()));
+                    }
+                }
+            }
+            OpKind::RemoveElements { ids: rm } => {
+                for id in rm {
+                    if !ids.remove(id) {
+                        // removing the same id twice in one op is also missing
+                        return Err(ApplyError::MissingElement(*id));
+                    }
+                }
+            }
+            OpKind::ReplaceElements { elements } => {
+                for e in elements {
+                    validate_element(e)?;
+                    if !ids.contains(&e.id()) {
+                        return Err(ApplyError::MissingElement(e.id()));
+                    }
+                }
+            }
+            OpKind::SetTemplate { template } => crate::validate::validate_template(template)?,
+        }
     }
-    page.elements = next;
-    page.template = template;
-    page.revision += 1;
+    Ok(())
+}
+
+/// Applies a batch that passed [`check_batch`] in place. `revision`
+/// overrides the new revision (journal replay); otherwise it is +1.
+pub fn apply_checked(
+    page: &mut Page,
+    batch: &OperationBatch,
+    revision: Option<u64>,
+    now: Timestamp,
+) -> u64 {
+    for op in &batch.ops {
+        apply_op_unchecked(&mut page.elements, &mut page.template, &op.kind);
+    }
+    page.revision = revision.unwrap_or(page.revision + 1);
     page.updated_at = now;
-    Ok(page.revision)
+    page.revision
 }
 
 /// Applies a batch that is already known to be valid (journal replay). Skips
 /// the revision check but still refuses inconsistent operations.
-pub fn replay_batch(page: &mut Page, batch: &OperationBatch, revision: u64, now: Timestamp) -> Result<(), ApplyError> {
-    let mut next = page.elements.clone();
-    let mut template = page.template.clone();
-    for op in &batch.ops {
-        apply_op(&mut next, &mut template, &op.kind)?;
-    }
-    page.elements = next;
-    page.template = template;
-    page.revision = revision;
-    page.updated_at = now;
+pub fn replay_batch(
+    page: &mut Page,
+    batch: &OperationBatch,
+    revision: u64,
+    now: Timestamp,
+) -> Result<(), ApplyError> {
+    check_ops(page, &batch.ops)?;
+    apply_checked(page, batch, Some(revision), now);
     Ok(())
 }
 
-fn apply_op(elements: &mut Vec<Element>, template: &mut Template, op: &OpKind) -> Result<(), ApplyError> {
+fn apply_op_unchecked(elements: &mut Vec<Element>, template: &mut Template, op: &OpKind) {
     match op {
         OpKind::AddElements { elements: add } => {
-            let mut ids: HashSet<Uuid> = elements.iter().map(Element::id).collect();
-            for e in add {
-                validate_element(e)?;
-                if !ids.insert(e.id()) {
-                    return Err(ApplyError::DuplicateElement(e.id()));
-                }
-            }
+            let max_z = elements.last().map(Element::z).unwrap_or(i64::MIN);
+            let sorted = add.windows(2).all(|w| w[0].z() <= w[1].z());
             elements.extend(add.iter().cloned());
-            sort_by_z(elements);
+            if !(sorted && add.first().is_none_or(|e| e.z() >= max_z)) {
+                sort_by_z(elements);
+            }
         }
         OpKind::RemoveElements { ids } => {
-            let remove: HashSet<Uuid> = ids.iter().copied().collect();
-            for id in &remove {
-                if !elements.iter().any(|e| e.id() == *id) {
-                    return Err(ApplyError::MissingElement(*id));
+            if ids.len() == 1 {
+                if let Some(i) = elements.iter().position(|e| e.id() == ids[0]) {
+                    elements.remove(i);
                 }
+            } else {
+                let remove: HashSet<Uuid> = ids.iter().copied().collect();
+                elements.retain(|e| !remove.contains(&e.id()));
             }
-            elements.retain(|e| !remove.contains(&e.id()));
         }
         OpKind::ReplaceElements { elements: repl } => {
+            let mut resort = false;
             for e in repl {
-                validate_element(e)?;
-                let slot = elements
-                    .iter_mut()
-                    .find(|x| x.id() == e.id())
-                    .ok_or(ApplyError::MissingElement(e.id()))?;
-                *slot = e.clone();
+                if let Some(slot) = elements.iter_mut().find(|x| x.id() == e.id()) {
+                    resort |= slot.z() != e.z();
+                    *slot = e.clone();
+                }
             }
-            sort_by_z(elements);
+            if resort {
+                sort_by_z(elements);
+            }
         }
-        OpKind::SetTemplate { template: t } => {
-            crate::validate::validate_template(t)?;
-            *template = t.clone();
-        }
+        OpKind::SetTemplate { template: t } => *template = t.clone(),
     }
-    Ok(())
 }
 
 /// Stable sort: equal z keeps insertion order.

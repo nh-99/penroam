@@ -30,8 +30,39 @@ async function until<T>(f: () => T | null | undefined, ms = 60000): Promise<T> {
   }
 }
 
+/**
+ * Steady state: a fresh process opens the largest page of the newest
+ * "Benchmark" notebook (created by a previous run) — no import garbage.
+ */
+async function openLargest(mode: string, startupMs: number) {
+  const lib = useLibrary();
+  const nbs = (await api.listNotebooks()).filter((n) => n.title.startsWith("Benchmark")).sort((a, b) => b.createdAt - a.createdAt);
+  if (!nbs.length) throw new Error("no benchmark notebook: run PENROAM_AUTOBENCH=<name> first");
+  const nb = await api.getNotebook(nbs[0].id);
+  const pageId = nb.pageOrder[nb.pageOrder.length - 1];
+  const editor = await until(() => benchHooks.editor ?? (lib.current ? null : (void lib.open(nb.id, pageId), null)));
+  const t0 = performance.now();
+  await until(() => editor.session?.page.id === pageId && editor.session.page.elements.length > 0);
+  const openMs = performance.now() - t0;
+  const n = editor.session!.page.elements.length;
+  editor.benchView(1);
+  const full = [editor.fullRedraw(), editor.fullRedraw(), editor.fullRedraw()];
+  const visible = [editor.visibleRedraw(), editor.visibleRedraw(), editor.visibleRedraw()];
+  await editor.renderer.whenComplete();
+  await sleep(2000);
+  const proc = await api.procStats().catch(() => null);
+  const out = {
+    app: "penroam-m01", workload: "D-steady-state-open", exportedAt: new Date().toISOString(), startupMs, strokes: n, openMs,
+    fullRedrawMs: full, visibleRedrawMs: visible, treeRssBytes: proc?.treeRssBytes ?? null, mainRssBytes: proc?.rssBytes ?? null,
+    processes: (proc as any)?.breakdown ?? null, devicePixelRatio: window.devicePixelRatio, system: await api.systemInfo().catch(() => null),
+  };
+  await api.writePerf(`m01-steady-open-${mode.split(",")[0]}`, JSON.stringify(out, null, 2));
+  if (mode.includes("exit")) await api.exitApp();
+}
+
 export async function runAutobench(mode: string) {
   const startupMs = await api.startupMs();
+  if (mode.includes("open")) return openLargest(mode, startupMs);
   const lib = useLibrary();
   const quick = mode.includes("quick");
   const sizes = quick ? [1000] : [1000, 5000, 10000];
@@ -61,8 +92,15 @@ export async function runAutobench(mode: string) {
       // M00 comparability: zoom 1.0 at the display's devicePixelRatio
       editor.benchView(1);
       const redraws = [editor.fullRedraw(), editor.fullRedraw(), editor.fullRedraw()];
+      const visible = [editor.visibleRedraw(), editor.visibleRedraw(), editor.visibleRedraw()];
+      await editor.renderer.whenComplete();
+      const vr = editor.visibleDocRect();
       const frames = await editor.replay(replayPts);
       const iv = editor.lastReplayIntervals;
+      // pen-up -> durable on disk for one stroke on this page (journal + fsync)
+      const tc = performance.now();
+      await editor.session!.flush();
+      const commitDurableMs = performance.now() - tc;
       await sleep(50);
       const proc = await api.procStats().catch(() => null);
       results.push({
@@ -73,15 +111,20 @@ export async function runAutobench(mode: string) {
         loadAndRenderMs,
         fullRedrawMs: redraws,
         fullRedrawMedianMs: median(redraws),
+        visibleRedrawMs: visible,
+        visibleRedrawMedianMs: median(visible),
+        visibleDocRect: vr.map((v) => Math.round(v)),
         replayFrameMedianMs: median(frames),
         replayFrameMaxMs: Math.max(...frames),
         replayFrames: frames.length,
+        commitDurableMs,
         replayIntervalMedianMs: median(iv),
         replayIntervalP95Ms: pct(iv, 0.95),
         replayIntervalMaxMs: Math.max(...iv),
         jsHeapBytes: (performance as any).memory?.usedJSHeapSize ?? null,
         treeRssBytes: proc?.treeRssBytes ?? null,
         mainRssBytes: proc?.rssBytes ?? null,
+        processes: (proc as any)?.breakdown ?? null,
         backingPx: { w: editor.renderer.ink.width, h: editor.renderer.ink.height },
       });
     }

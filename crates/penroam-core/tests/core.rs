@@ -1,5 +1,7 @@
 use penroam_core::geometry::{stroke_pieces, width_for, Piece};
-use penroam_core::migrate::{elements_to_m00, m00_strokes_to_elements, page_from_slice, page_from_value};
+use penroam_core::migrate::{
+    elements_to_m00, m00_strokes_to_elements, page_from_slice, page_from_value,
+};
 use penroam_core::ops::*;
 use penroam_core::*;
 use serde_json::{json, Value};
@@ -7,7 +9,9 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 fn fixture(p: &str) -> String {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(p);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures")
+        .join(p);
     std::fs::read_to_string(&root).unwrap_or_else(|e| panic!("{}: {e}", root.display()))
 }
 
@@ -27,18 +31,27 @@ fn ink(e: &Element) -> &InkStroke {
 fn geometry_matches_m00_golden() {
     let golden: Value = serde_json::from_str(&fixture("geometry-golden.json")).unwrap();
     for c in golden["widthCases"].as_array().unwrap() {
-        let w = width_for(c["base"].as_f64().unwrap(), c["pressure"].as_f64().unwrap(), c["pressureEnabled"].as_bool().unwrap());
+        let w = width_for(
+            c["base"].as_f64().unwrap(),
+            c["pressure"].as_f64().unwrap(),
+            c["pressureEnabled"].as_bool().unwrap(),
+        );
         assert!((w - c["width"].as_f64().unwrap()).abs() < 1e-12);
     }
     let els = sample_elements();
     for g in golden["strokes"].as_array().unwrap() {
         let id = g["id"].as_str().unwrap();
-        let s = els.iter().map(ink).find(|s| s.input["m00Id"] == id).unwrap();
+        let s = els
+            .iter()
+            .map(ink)
+            .find(|s| s.input["m00Id"] == id)
+            .unwrap();
         let pieces = stroke_pieces(&s.points, s.width, s.pressure);
         let gp = g["pieces"].as_array().unwrap();
         assert_eq!(pieces.len(), gp.len(), "{id}");
         for (p, e) in pieces.iter().zip(gp) {
-            let close = |k: &str, v: f64| assert!((e[k].as_f64().unwrap() - v).abs() < 1e-9, "{id} {k}");
+            let close =
+                |k: &str, v: f64| assert!((e[k].as_f64().unwrap() - v).abs() < 1e-9, "{id} {k}");
             match *p {
                 Piece::Dot { x, y, width } => {
                     assert_eq!(e["kind"], "dot");
@@ -46,15 +59,43 @@ fn geometry_matches_m00_golden() {
                     close("y", y);
                     close("width", width);
                 }
-                Piece::Line { x0, y0, x1, y1, width } => {
+                Piece::Line {
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    width,
+                } => {
                     assert_eq!(e["kind"], "line");
-                    for (k, v) in [("x0", x0), ("y0", y0), ("x1", x1), ("y1", y1), ("width", width)] {
+                    for (k, v) in [
+                        ("x0", x0),
+                        ("y0", y0),
+                        ("x1", x1),
+                        ("y1", y1),
+                        ("width", width),
+                    ] {
                         close(k, v);
                     }
                 }
-                Piece::Quad { x0, y0, cx, cy, x1, y1, width } => {
+                Piece::Quad {
+                    x0,
+                    y0,
+                    cx,
+                    cy,
+                    x1,
+                    y1,
+                    width,
+                } => {
                     assert_eq!(e["kind"], "quad");
-                    for (k, v) in [("x0", x0), ("y0", y0), ("cx", cx), ("cy", cy), ("x1", x1), ("y1", y1), ("width", width)] {
+                    for (k, v) in [
+                        ("x0", x0),
+                        ("y0", y0),
+                        ("cx", cx),
+                        ("cy", cy),
+                        ("x1", x1),
+                        ("y1", y1),
+                        ("width", width),
+                    ] {
                         close(k, v);
                     }
                 }
@@ -79,7 +120,10 @@ fn m00_import_is_lossless() {
         for (k, v) in o["input"].as_object().unwrap() {
             assert_eq!(&b["input"][k], v, "input.{k}");
         }
-        let (op, bp) = (o["points"].as_array().unwrap(), b["points"].as_array().unwrap());
+        let (op, bp) = (
+            o["points"].as_array().unwrap(),
+            b["points"].as_array().unwrap(),
+        );
         assert_eq!(op.len(), bp.len());
         for (p, q) in op.iter().zip(bp) {
             for k in ["x", "y", "pressure", "tiltX", "tiltY"] {
@@ -91,7 +135,13 @@ fn m00_import_is_lossless() {
 }
 
 fn page_with(elements: Vec<Element>) -> Page {
-    let mut p = Page::new(Uuid::new_v4(), Paper::Letter, Paper::Letter.size().unwrap(), Template::default(), 1);
+    let mut p = Page::new(
+        Uuid::new_v4(),
+        Paper::Letter,
+        Paper::Letter.size().unwrap(),
+        Template::default(),
+        1,
+    );
     p.elements = elements;
     p
 }
@@ -116,7 +166,13 @@ fn batch(base: u64, ops: Vec<OpKind>) -> OperationBatch {
     OperationBatch {
         batch_id: Uuid::new_v4(),
         base_revision: base,
-        ops: ops.into_iter().map(|kind| PageOperation { op_id: Uuid::new_v4(), kind }).collect(),
+        ops: ops
+            .into_iter()
+            .map(|kind| PageOperation {
+                op_id: Uuid::new_v4(),
+                kind,
+            })
+            .collect(),
     }
 }
 
@@ -140,7 +196,10 @@ fn schema_version_guard() {
     let p = page_with(vec![]);
     let mut v = serde_json::to_value(&p).unwrap();
     v["schemaVersion"] = json!(2);
-    assert!(matches!(page_from_value(v.clone()), Err(migrate::MigrateError::TooNew { found: 2 })));
+    assert!(matches!(
+        page_from_value(v.clone()),
+        Err(migrate::MigrateError::TooNew { found: 2 })
+    ));
     v.as_object_mut().unwrap().remove("schemaVersion");
     assert!(page_from_value(v).is_err());
 }
@@ -150,38 +209,100 @@ fn operations_apply_in_order_with_stable_ids_and_are_atomic() {
     let mut p = page_with(vec![]);
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
-    let rev = apply_batch(&mut p, &batch(0, vec![OpKind::AddElements { elements: vec![text(a, 1, "a"), text(b, 2, "b")] }]), 5).unwrap();
+    let rev = apply_batch(
+        &mut p,
+        &batch(
+            0,
+            vec![OpKind::AddElements {
+                elements: vec![text(a, 1, "a"), text(b, 2, "b")],
+            }],
+        ),
+        5,
+    )
+    .unwrap();
     assert_eq!(rev, 1);
-    assert_eq!(p.elements.iter().map(Element::id).collect::<Vec<_>>(), vec![a, b]);
+    assert_eq!(
+        p.elements.iter().map(Element::id).collect::<Vec<_>>(),
+        vec![a, b]
+    );
 
     // stale base revision
     assert_eq!(
-        apply_batch(&mut p, &batch(0, vec![OpKind::RemoveElements { ids: vec![a] }]), 6),
-        Err(ApplyError::RevisionConflict { expected: 0, actual: 1 })
+        apply_batch(
+            &mut p,
+            &batch(0, vec![OpKind::RemoveElements { ids: vec![a] }]),
+            6
+        ),
+        Err(ApplyError::RevisionConflict {
+            expected: 0,
+            actual: 1
+        })
     );
     // second op fails -> first op must not be applied
     let before = p.clone();
     let r = apply_batch(
         &mut p,
-        &batch(1, vec![OpKind::RemoveElements { ids: vec![a] }, OpKind::RemoveElements { ids: vec![Uuid::new_v4()] }]),
+        &batch(
+            1,
+            vec![
+                OpKind::RemoveElements { ids: vec![a] },
+                OpKind::RemoveElements {
+                    ids: vec![Uuid::new_v4()],
+                },
+            ],
+        ),
         7,
     );
     assert!(matches!(r, Err(ApplyError::MissingElement(_))));
     assert_eq!(p, before);
     // duplicates refused
     assert!(matches!(
-        apply_batch(&mut p, &batch(1, vec![OpKind::AddElements { elements: vec![text(a, 3, "dup")] }]), 8),
+        apply_batch(
+            &mut p,
+            &batch(
+                1,
+                vec![OpKind::AddElements {
+                    elements: vec![text(a, 3, "dup")]
+                }]
+            ),
+            8
+        ),
         Err(ApplyError::DuplicateElement(_))
     ));
     // replace + z reorder
-    apply_batch(&mut p, &batch(1, vec![OpKind::ReplaceElements { elements: vec![text(a, 10, "a2")] }]), 9).unwrap();
-    assert_eq!(p.elements.iter().map(Element::id).collect::<Vec<_>>(), vec![b, a]);
+    apply_batch(
+        &mut p,
+        &batch(
+            1,
+            vec![OpKind::ReplaceElements {
+                elements: vec![text(a, 10, "a2")],
+            }],
+        ),
+        9,
+    )
+    .unwrap();
+    assert_eq!(
+        p.elements.iter().map(Element::id).collect::<Vec<_>>(),
+        vec![b, a]
+    );
     // invalid data refused
     let mut bad = text(Uuid::new_v4(), 1, "x");
     if let Element::Text(t) = &mut bad {
         t.color = "red".into();
     }
-    assert!(matches!(apply_batch(&mut p, &batch(2, vec![OpKind::AddElements { elements: vec![bad] }]), 10), Err(ApplyError::Invalid(_))));
+    assert!(matches!(
+        apply_batch(
+            &mut p,
+            &batch(
+                2,
+                vec![OpKind::AddElements {
+                    elements: vec![bad]
+                }]
+            ),
+            10
+        ),
+        Err(ApplyError::Invalid(_))
+    ));
     assert_eq!(p.revision, 2);
 }
 
@@ -190,14 +311,35 @@ fn undo_by_inverse_batch_restores_exact_state() {
     let mut p = page_with(sample_elements());
     let original = p.elements.clone();
     let victim = original[2].clone();
-    apply_batch(&mut p, &batch(0, vec![OpKind::RemoveElements { ids: vec![victim.id()] }]), 1).unwrap();
-    apply_batch(&mut p, &batch(1, vec![OpKind::AddElements { elements: vec![victim] }]), 2).unwrap();
+    apply_batch(
+        &mut p,
+        &batch(
+            0,
+            vec![OpKind::RemoveElements {
+                ids: vec![victim.id()],
+            }],
+        ),
+        1,
+    )
+    .unwrap();
+    apply_batch(
+        &mut p,
+        &batch(
+            1,
+            vec![OpKind::AddElements {
+                elements: vec![victim],
+            }],
+        ),
+        2,
+    )
+    .unwrap();
     assert_eq!(p.elements, original);
 }
 
 #[test]
 fn pdf_matrix_maps_display_corners() {
-    let apply = |m: [f64; 6], x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+    let apply =
+        |m: [f64; 6], x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
     let crop = [10.0, 20.0, 210.0, 320.0]; // 200 x 300
     for (rot, (w, h), expect_tl) in [
         (0, (200.0, 300.0), (10.0, 320.0)),
@@ -205,14 +347,23 @@ fn pdf_matrix_maps_display_corners() {
         (180, (200.0, 300.0), (210.0, 20.0)),
         (270, (300.0, 200.0), (210.0, 320.0)),
     ] {
-        let bg = PdfBackgroundRef { asset_hash: "0".repeat(64), page_index: 0, media_box: crop, crop_box: crop, rotation: rot };
+        let bg = PdfBackgroundRef {
+            asset_hash: "0".repeat(64),
+            page_index: 0,
+            media_box: crop,
+            crop_box: crop,
+            rotation: rot,
+        };
         assert_eq!((bg.display_size().width, bg.display_size().height), (w, h));
         let m = bg.doc_to_pdf_matrix();
         assert_eq!(apply(m, 0.0, 0.0), expect_tl, "rot {rot}");
         // every display corner lands on a crop box corner
         for (x, y) in [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)] {
             let (px, py) = apply(m, x, y);
-            assert!([10.0, 210.0].contains(&px) && [20.0, 320.0].contains(&py), "rot {rot} corner {x},{y} -> {px},{py}");
+            assert!(
+                [10.0, 210.0].contains(&px) && [20.0, 320.0].contains(&py),
+                "rot {rot} corner {x},{y} -> {px},{py}"
+            );
         }
     }
 }
@@ -237,7 +388,8 @@ fn text_layout_matches_golden() {
             json!({ "text": t, "fontSize": fs, "width": w, "lines": lines })
         })
         .collect();
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/text-layout-golden.json");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/text-layout-golden.json");
     if std::env::var("UPDATE_GOLDEN").is_ok() || !path.exists() {
         std::fs::write(&path, serde_json::to_string_pretty(&actual).unwrap() + "\n").unwrap();
     }
@@ -249,10 +401,16 @@ fn text_layout_matches_golden() {
 fn text_layout_rules() {
     use penroam_core::text::*;
     let l = layout("aaa bbb", 10.0, measure("aaa b", 10.0));
-    assert_eq!(l.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), vec!["aaa ", "bbb"]);
+    assert_eq!(
+        l.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+        vec!["aaa ", "bbb"]
+    );
     assert!((l[0].width - measure("aaa", 10.0)).abs() < 1e-9);
     let l = layout("abcdef", 10.0, measure("abc", 10.0) + 0.01);
-    assert_eq!(l.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), vec!["abc", "def"]);
+    assert_eq!(
+        l.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+        vec!["abc", "def"]
+    );
     assert_eq!(layout("a\n\nb", 10.0, 100.0).len(), 3);
     // narrower than one glyph still makes progress
     assert_eq!(layout("abc", 10.0, 0.5).len(), 3);

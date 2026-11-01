@@ -65,6 +65,11 @@ export class PageRenderer {
   opts: RenderOptions = { mono: false };
   /** last full ink redraw duration (ms, flushed) */
   lastFullRedrawMs = 0;
+  /** last synchronous (visible-first) part of a progressive redraw (ms, flushed) */
+  lastVisibleRedrawMs = 0;
+  private bands: Rect[] = [];
+  private bandTimer: number | null = null;
+  private idleWaiters: (() => void)[] = [];
 
   constructor(
     host: HTMLElement,
@@ -113,10 +118,76 @@ export class PageRenderer {
     ctx.lineJoin = "round";
   }
 
-  renderAll() {
+  /**
+   * Repaints everything. With `visible` (doc pt) the visible region is drawn
+   * synchronously and the rest of the page follows in bands over the next
+   * frames (tile invalidation by horizontal bands), so large pages show up
+   * as fast as a viewport-sized canvas would.
+   */
+  renderAll(visible: Rect | null = null) {
     this.renderBackground();
-    this.renderInk(null);
     this.renderText(null);
+    this.renderInkProgressive(visible);
+  }
+
+  renderInkProgressive(visible: Rect | null) {
+    this.cancelBands();
+    if (!visible) return this.renderInk(null);
+    const pad = 8;
+    const v: Rect = [Math.max(0, visible[0] - pad), Math.max(0, visible[1] - pad), Math.min(this.width, visible[2] + pad), Math.min(this.height, visible[3] + pad)];
+    if (v[2] <= v[0] || v[3] <= v[1] || ((v[2] - v[0]) * (v[3] - v[1])) / (this.width * this.height) > 0.85) {
+      this.renderInk(null);
+      this.lastVisibleRedrawMs = this.lastFullRedrawMs;
+      return;
+    }
+    const t0 = performance.now();
+    const ctx = this.ictx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    this.renderInk(v);
+    ctx.getImageData(0, 0, 1, 1);
+    this.lastVisibleRedrawMs = performance.now() - t0;
+    // remaining page area in bands, nearest to the viewport first
+    const bandH = 160;
+    const cy = (v[1] + v[3]) / 2;
+    const bands: Rect[] = [];
+    for (let y = 0; y < this.height; y += bandH) {
+      const b: Rect = [0, y, this.width, Math.min(this.height, y + bandH)];
+      const fullyVisible = b[1] >= v[1] && b[3] <= v[3] && v[0] <= 0 && v[2] >= this.width;
+      if (!fullyVisible) bands.push(b);
+    }
+    bands.sort((a, b) => Math.abs((a[1] + a[3]) / 2 - cy) - Math.abs((b[1] + b[3]) / 2 - cy));
+    this.bands = bands;
+    this.scheduleBands();
+  }
+
+  private scheduleBands() {
+    if (this.bandTimer !== null) return;
+    this.bandTimer = window.setTimeout(() => {
+      this.bandTimer = null;
+      const t0 = performance.now();
+      while (this.bands.length && performance.now() - t0 < 10) this.renderInk(this.bands.shift()!);
+      if (this.bands.length) this.scheduleBands();
+      else this.resolveIdle();
+    }, 0);
+  }
+
+  private cancelBands() {
+    if (this.bandTimer !== null) clearTimeout(this.bandTimer);
+    this.bandTimer = null;
+    this.bands = [];
+  }
+
+  private resolveIdle() {
+    const w = this.idleWaiters;
+    this.idleWaiters = [];
+    w.forEach((f) => f());
+  }
+
+  /** Resolves once every band of a progressive redraw has been painted. */
+  whenComplete(): Promise<void> {
+    if (!this.bands.length && this.bandTimer === null) return Promise.resolve();
+    return new Promise((r) => this.idleWaiters.push(r));
   }
 
   renderBackground() {
@@ -159,6 +230,7 @@ export class PageRenderer {
 
   /** Redraws ink inside `rect` (doc pt) or everything when rect is null. */
   renderInk(rect: Rect | null) {
+    if (!rect) this.cancelBands();
     const t0 = performance.now();
     const ctx = this.ictx;
     this.clip(ctx, rect);
@@ -206,6 +278,7 @@ export class PageRenderer {
 
   /** Small PNG of the current page for the sidebar / library. */
   async thumbnail(maxWidth = 240): Promise<Uint8Array | null> {
+    await this.whenComplete();
     const scale = maxWidth / this.width;
     const c = document.createElement("canvas");
     c.width = Math.max(1, Math.round(this.width * scale));

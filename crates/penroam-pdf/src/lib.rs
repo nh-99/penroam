@@ -10,10 +10,10 @@
 //!   Blank/template pages become new PDF pages. The editable data stays in
 //!   the notebook; the PDF is a one-way rendering.
 
+use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use penroam_core::geometry::{stroke_pieces, Piece};
 use penroam_core::text::{layout, metrics};
 use penroam_core::*;
-use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -49,7 +49,13 @@ pub struct PdfPageInfo {
 
 impl PdfPageInfo {
     pub fn background(&self, asset_hash: &str) -> PdfBackgroundRef {
-        PdfBackgroundRef { asset_hash: asset_hash.to_string(), page_index: self.index, media_box: self.media_box, crop_box: self.crop_box, rotation: self.rotation }
+        PdfBackgroundRef {
+            asset_hash: asset_hash.to_string(),
+            page_index: self.index,
+            media_box: self.media_box,
+            crop_box: self.crop_box,
+            rotation: self.rotation,
+        }
     }
 }
 
@@ -78,7 +84,11 @@ pub fn inspect(bytes: &[u8]) -> Result<Vec<PdfPageInfo>, PdfError> {
     if pages.len() > MAX_PAGES {
         return Err(PdfError::TooManyPages(pages.len()));
     }
-    pages.values().enumerate().map(|(i, id)| page_info(&doc, *id, i as u32)).collect()
+    pages
+        .values()
+        .enumerate()
+        .map(|(i, id)| page_info(&doc, *id, i as u32))
+        .collect()
 }
 
 fn num(doc: &Document, o: &Object) -> Option<f64> {
@@ -95,7 +105,12 @@ fn rect(doc: &Document, o: &Object) -> Option<[f64; 4]> {
     if v.len() != 4 || v.iter().any(|x| !x.is_finite()) {
         return None;
     }
-    Some([v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    Some([
+        v[0].min(v[2]),
+        v[1].min(v[3]),
+        v[0].max(v[2]),
+        v[1].max(v[3]),
+    ])
 }
 
 /// Looks up a page attribute, following `/Parent` for inheritable keys.
@@ -112,19 +127,46 @@ fn inherited<'a>(doc: &'a Document, page: ObjectId, key: &[u8]) -> Option<&'a Ob
 }
 
 fn page_info(doc: &Document, id: ObjectId, index: u32) -> Result<PdfPageInfo, PdfError> {
-    let media = inherited(doc, id, b"MediaBox").and_then(|o| rect(doc, o)).unwrap_or([0.0, 0.0, 612.0, 792.0]);
-    let crop = inherited(doc, id, b"CropBox").and_then(|o| rect(doc, o)).unwrap_or(media);
+    let media = inherited(doc, id, b"MediaBox")
+        .and_then(|o| rect(doc, o))
+        .unwrap_or([0.0, 0.0, 612.0, 792.0]);
+    let crop = inherited(doc, id, b"CropBox")
+        .and_then(|o| rect(doc, o))
+        .unwrap_or(media);
     // PDF.js shows the intersection of the crop box and the media box.
-    let crop = [crop[0].max(media[0]), crop[1].max(media[1]), crop[2].min(media[2]), crop[3].min(media[3])];
-    let crop = if crop[2] - crop[0] < 1.0 || crop[3] - crop[1] < 1.0 { media } else { crop };
-    let rot = inherited(doc, id, b"Rotate").and_then(|o| num(doc, o)).unwrap_or(0.0) as i64;
-    let rotation = if rot % 90 == 0 { rot.rem_euclid(360) as u32 } else { 0 };
+    let crop = [
+        crop[0].max(media[0]),
+        crop[1].max(media[1]),
+        crop[2].min(media[2]),
+        crop[3].min(media[3]),
+    ];
+    let crop = if crop[2] - crop[0] < 1.0 || crop[3] - crop[1] < 1.0 {
+        media
+    } else {
+        crop
+    };
+    let rot = inherited(doc, id, b"Rotate")
+        .and_then(|o| num(doc, o))
+        .unwrap_or(0.0) as i64;
+    let rotation = if rot % 90 == 0 {
+        rot.rem_euclid(360) as u32
+    } else {
+        0
+    };
     let w = crop[2] - crop[0];
     let h = crop[3] - crop[1];
     if !(1.0..=14_400.0).contains(&w) || !(1.0..=14_400.0).contains(&h) {
-        return Err(PdfError::Parse(format!("page {} has an unsupported size {w}x{h}", index + 1)));
+        return Err(PdfError::Parse(format!(
+            "page {} has an unsupported size {w}x{h}",
+            index + 1
+        )));
     }
-    Ok(PdfPageInfo { index, media_box: media, crop_box: crop, rotation })
+    Ok(PdfPageInfo {
+        index,
+        media_box: media,
+        crop_box: crop,
+        rotation,
+    })
 }
 
 // ------------------------------------------------------------------ export --
@@ -167,15 +209,24 @@ pub fn export_annotated(
     for page in pages {
         let mut gs: BTreeMap<String, f64> = BTreeMap::new();
         let annot = annotation_content(page, &mut gs, &mut report);
-        let annot_id = out.add_object(Stream::new(Dictionary::new(), annot.into_bytes()).with_compression(true));
+        let annot_id = out
+            .add_object(Stream::new(Dictionary::new(), annot.into_bytes()).with_compression(true));
         let mut ext = Dictionary::new();
         for (n, alpha) in &gs {
-            ext.set(n.as_bytes().to_vec(), Object::Dictionary(Dictionary::from_iter(vec![("Type", name("ExtGState")), ("CA", Object::Real(*alpha as f32)), ("ca", Object::Real(*alpha as f32))])));
+            ext.set(
+                n.as_bytes().to_vec(),
+                Object::Dictionary(Dictionary::from_iter(vec![
+                    ("Type", name("ExtGState")),
+                    ("CA", Object::Real(*alpha as f32)),
+                    ("ca", Object::Real(*alpha as f32)),
+                ])),
+            );
         }
 
         let page_dict = if let Some(bg) = &page.background {
             if !sources.contains_key(&bg.asset_hash) {
-                let bytes = asset(&bg.asset_hash).ok_or_else(|| PdfError::MissingSource(bg.asset_hash.clone()))?;
+                let bytes = asset(&bg.asset_hash)
+                    .ok_or_else(|| PdfError::MissingSource(bg.asset_hash.clone()))?;
                 let mut src = load(&bytes)?;
                 src.renumber_objects_with(out.max_id + 1);
                 let ids: Vec<ObjectId> = src.get_pages().values().copied().collect();
@@ -183,7 +234,10 @@ pub fn export_annotated(
                 // resolve inherited attributes now, while the source page tree exists
                 let mut resolved = Vec::new();
                 for id in &ids {
-                    let mut d = src.get_dictionary(*id).map_err(|e| PdfError::Parse(e.to_string()))?.clone();
+                    let mut d = src
+                        .get_dictionary(*id)
+                        .map_err(|e| PdfError::Parse(e.to_string()))?
+                        .clone();
                     for key in [&b"Resources"[..], b"MediaBox", b"CropBox", b"Rotate"] {
                         if !d.has(key) {
                             if let Some(v) = inherited(&src, *id, key) {
@@ -199,8 +253,19 @@ pub fn export_annotated(
                 }
                 sources.insert(bg.asset_hash.clone(), ids);
             }
-            let src_id = *sources[&bg.asset_hash].get(bg.page_index as usize).ok_or_else(|| PdfError::MissingSource(format!("page {} of {}", bg.page_index + 1, bg.asset_hash)))?;
-            let mut d = out.get_dictionary(src_id).map_err(|e| PdfError::Parse(e.to_string()))?.clone();
+            let src_id = *sources[&bg.asset_hash]
+                .get(bg.page_index as usize)
+                .ok_or_else(|| {
+                    PdfError::MissingSource(format!(
+                        "page {} of {}",
+                        bg.page_index + 1,
+                        bg.asset_hash
+                    ))
+                })?;
+            let mut d = out
+                .get_dictionary(src_id)
+                .map_err(|e| PdfError::Parse(e.to_string()))?
+                .clone();
             // wrap the original content so its graphics state cannot leak into ours
             let q = out.add_object(Stream::new(Dictionary::new(), b"q\n".to_vec()));
             let qq = out.add_object(Stream::new(Dictionary::new(), b"\nQ\n".to_vec()));
@@ -217,7 +282,11 @@ pub fn export_annotated(
             contents.push(Object::Reference(annot_id));
             d.set("Contents", Object::Array(contents));
             let mut res = match d.get(b"Resources") {
-                Ok(o) => out.dereference(o).ok().and_then(|(_, o)| o.as_dict().ok().cloned()).unwrap_or_default(),
+                Ok(o) => out
+                    .dereference(o)
+                    .ok()
+                    .and_then(|(_, o)| o.as_dict().ok().cloned())
+                    .unwrap_or_default(),
                 Err(_) => Dictionary::new(),
             };
             merge_resources(&out, &mut res, font, ext);
@@ -230,7 +299,15 @@ pub fn export_annotated(
             Dictionary::from_iter(vec![
                 ("Type", name("Page")),
                 ("Parent", Object::Reference(pages_root)),
-                ("MediaBox", Object::Array(vec![0.into(), 0.into(), Object::Real(page.size.width as f32), Object::Real(page.size.height as f32)])),
+                (
+                    "MediaBox",
+                    Object::Array(vec![
+                        0.into(),
+                        0.into(),
+                        Object::Real(page.size.width as f32),
+                        Object::Real(page.size.height as f32),
+                    ]),
+                ),
                 ("Contents", Object::Reference(annot_id)),
                 ("Resources", Object::Dictionary(res)),
             ])
@@ -243,21 +320,33 @@ pub fn export_annotated(
     }
     out.objects.insert(
         pages_root,
-        Object::Dictionary(Dictionary::from_iter(vec![("Type", name("Pages")), ("Count", Object::Integer(kids.len() as i64)), ("Kids", Object::Array(kids))])),
+        Object::Dictionary(Dictionary::from_iter(vec![
+            ("Type", name("Pages")),
+            ("Count", Object::Integer(kids.len() as i64)),
+            ("Kids", Object::Array(kids)),
+        ])),
     );
-    let catalog = out.add_object(Dictionary::from_iter(vec![("Type", name("Catalog")), ("Pages", Object::Reference(pages_root))]));
+    let catalog = out.add_object(Dictionary::from_iter(vec![
+        ("Type", name("Catalog")),
+        ("Pages", Object::Reference(pages_root)),
+    ]));
     out.trailer = Dictionary::new();
     out.trailer.set("Root", Object::Reference(catalog));
     out.prune_objects();
     out.compress();
     let mut buf = Vec::new();
-    out.save_to(&mut buf).map_err(|e| PdfError::Write(e.to_string()))?;
+    out.save_to(&mut buf)
+        .map_err(|e| PdfError::Write(e.to_string()))?;
     Ok((buf, report))
 }
 
 fn merge_resources(out: &Document, res: &mut Dictionary, font: ObjectId, ext: Dictionary) {
     let sub = |key: &[u8], res: &Dictionary| -> Dictionary {
-        res.get(key).ok().and_then(|o| out.dereference(o).ok()).and_then(|(_, o)| o.as_dict().ok().cloned()).unwrap_or_default()
+        res.get(key)
+            .ok()
+            .and_then(|o| out.dereference(o).ok())
+            .and_then(|(_, o)| o.as_dict().ok().cloned())
+            .unwrap_or_default()
     };
     let mut fonts = sub(b"Font", res);
     fonts.set("PRHelv", Object::Reference(font));
@@ -272,23 +361,46 @@ fn merge_resources(out: &Document, res: &mut Dictionary, font: ObjectId, ext: Di
 }
 
 fn rgb(hex: &str) -> (f64, f64, f64) {
-    let p = |i: usize| u8::from_str_radix(hex.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f64 / 255.0;
+    let p = |i: usize| {
+        u8::from_str_radix(hex.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f64 / 255.0
+    };
     (p(1), p(3), p(5))
 }
 
 fn f(v: f64) -> String {
     let s = format!("{v:.3}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".into() } else { s.to_string() }
+    if s == "-0" {
+        "0".into()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Content stream with the page template, ink and text in display
 /// coordinates (y down), mapped to PDF user space by one `cm`.
-fn annotation_content(page: &Page, gs: &mut BTreeMap<String, f64>, report: &mut ExportReport) -> String {
+fn annotation_content(
+    page: &Page,
+    gs: &mut BTreeMap<String, f64>,
+    report: &mut ExportReport,
+) -> String {
     let mut s = String::new();
-    let m = page.background.as_ref().map(PdfBackgroundRef::doc_to_pdf_matrix).unwrap_or([1.0, 0.0, 0.0, -1.0, 0.0, page.size.height]);
+    let m = page
+        .background
+        .as_ref()
+        .map(PdfBackgroundRef::doc_to_pdf_matrix)
+        .unwrap_or([1.0, 0.0, 0.0, -1.0, 0.0, page.size.height]);
     let (w, h) = (page.size.width, page.size.height);
-    let _ = writeln!(s, "q\n{} {} {} {} {} {} cm", f(m[0]), f(m[1]), f(m[2]), f(m[3]), f(m[4]), f(m[5]));
+    let _ = writeln!(
+        s,
+        "q\n{} {} {} {} {} {} cm",
+        f(m[0]),
+        f(m[1]),
+        f(m[2]),
+        f(m[3]),
+        f(m[4]),
+        f(m[5])
+    );
     let _ = writeln!(s, "0 0 {} {} re W n", f(w), f(h));
     template_content(&mut s, &page.template, w, h);
     s.push_str("1 J 1 j\n");
@@ -310,7 +422,9 @@ fn annotation_content(page: &Page, gs: &mut BTreeMap<String, f64>, report: &mut 
                 report.text_blocks += 1;
                 text_content(&mut s, t, report);
             }
-            Element::Image(_) => report.warnings.push("image elements are not included in the PDF export yet".into()),
+            Element::Image(_) => report
+                .warnings
+                .push("image elements are not included in the PDF export yet".into()),
         }
     }
     s.push_str("Q\n");
@@ -330,7 +444,13 @@ pub fn template_content(s: &mut String, t: &Template, w: f64, h: f64) {
                 let _ = writeln!(s, "0 {} m {} {} l S", f(y), f(w), f(y));
                 y += sp;
             }
-            let _ = writeln!(s, "0.941 0.706 0.706 RG 0.6 w {} 0 m {} {} l S", f(sp * 3.0), f(sp * 3.0), f(h));
+            let _ = writeln!(
+                s,
+                "0.941 0.706 0.706 RG 0.6 w {} 0 m {} {} l S",
+                f(sp * 3.0),
+                f(sp * 3.0),
+                f(h)
+            );
         }
         TemplateKind::Grid => {
             s.push_str("0.835 0.867 0.902 RG 0.4 w\n");
@@ -372,14 +492,31 @@ fn piece_path(s: &mut String, p: &Piece, mv: bool) {
             }
             let _ = write!(s, "{} {} l ", f(x1), f(y1));
         }
-        Piece::Quad { x0, y0, cx, cy, x1, y1, .. } => {
+        Piece::Quad {
+            x0,
+            y0,
+            cx,
+            cy,
+            x1,
+            y1,
+            ..
+        } => {
             if mv {
                 let _ = write!(s, "{} {} m ", f(x0), f(y0));
             }
             // quadratic -> cubic
             let (c1x, c1y) = (x0 + 2.0 / 3.0 * (cx - x0), y0 + 2.0 / 3.0 * (cy - y0));
             let (c2x, c2y) = (x1 + 2.0 / 3.0 * (cx - x1), y1 + 2.0 / 3.0 * (cy - y1));
-            let _ = write!(s, "{} {} {} {} {} {} c ", f(c1x), f(c1y), f(c2x), f(c2y), f(x1), f(y1));
+            let _ = write!(
+                s,
+                "{} {} {} {} {} {} c ",
+                f(c1x),
+                f(c1y),
+                f(c2x),
+                f(c2y),
+                f(x1),
+                f(y1)
+            );
         }
     }
 }
@@ -387,13 +524,26 @@ fn piece_path(s: &mut String, p: &Piece, mv: bool) {
 fn ink_content(s: &mut String, st: &InkStroke, gs: &mut BTreeMap<String, f64>) {
     let (r, g, b) = rgb(&st.color);
     s.push_str("q ");
-    let alpha = if st.tool == InkTool::Highlighter { st.opacity.min(1.0) } else { st.opacity };
+    let alpha = if st.tool == InkTool::Highlighter {
+        st.opacity.min(1.0)
+    } else {
+        st.opacity
+    };
     if alpha < 0.999 {
         let key = format!("PRgs{}", (alpha * 1000.0).round() as i64);
         gs.insert(key.clone(), alpha);
         let _ = write!(s, "/{key} gs ");
     }
-    let _ = writeln!(s, "{} {} {} RG {} {} {} rg", f(r), f(g), f(b), f(r), f(g), f(b));
+    let _ = writeln!(
+        s,
+        "{} {} {} RG {} {} {} rg",
+        f(r),
+        f(g),
+        f(b),
+        f(r),
+        f(g),
+        f(b)
+    );
     let pieces = stroke_pieces(&st.points, st.width, st.pressure);
     let variable = st.pressure && st.tool == InkTool::Pen && pieces.len() > 1;
     if variable {
@@ -404,7 +554,11 @@ fn ink_content(s: &mut String, st: &InkStroke, gs: &mut BTreeMap<String, f64>) {
             s.push_str("S\n");
         }
     } else {
-        let _ = write!(s, "{} w ", f(pieces.first().map(|p| p.width()).unwrap_or(st.width)));
+        let _ = write!(
+            s,
+            "{} w ",
+            f(pieces.first().map(|p| p.width()).unwrap_or(st.width))
+        );
         for (i, p) in pieces.iter().enumerate() {
             piece_path(s, p, i == 0);
         }
@@ -419,10 +573,33 @@ fn winansi(c: char) -> Option<u8> {
     match cp {
         0x20..=0x7e | 0xa0..=0xff => Some(cp as u8),
         _ => Some(match cp {
-            0x20ac => 0x80, 0x201a => 0x82, 0x192 => 0x83, 0x201e => 0x84, 0x2026 => 0x85, 0x2020 => 0x86, 0x2021 => 0x87,
-            0x2c6 => 0x88, 0x2030 => 0x89, 0x160 => 0x8a, 0x2039 => 0x8b, 0x152 => 0x8c, 0x17d => 0x8e, 0x2018 => 0x91,
-            0x2019 => 0x92, 0x201c => 0x93, 0x201d => 0x94, 0x2022 => 0x95, 0x2013 => 0x96, 0x2014 => 0x97, 0x2dc => 0x98,
-            0x2122 => 0x99, 0x161 => 0x9a, 0x203a => 0x9b, 0x153 => 0x9c, 0x17e => 0x9e, 0x178 => 0x9f,
+            0x20ac => 0x80,
+            0x201a => 0x82,
+            0x192 => 0x83,
+            0x201e => 0x84,
+            0x2026 => 0x85,
+            0x2020 => 0x86,
+            0x2021 => 0x87,
+            0x2c6 => 0x88,
+            0x2030 => 0x89,
+            0x160 => 0x8a,
+            0x2039 => 0x8b,
+            0x152 => 0x8c,
+            0x17d => 0x8e,
+            0x2018 => 0x91,
+            0x2019 => 0x92,
+            0x201c => 0x93,
+            0x201d => 0x94,
+            0x2022 => 0x95,
+            0x2013 => 0x96,
+            0x2014 => 0x97,
+            0x2dc => 0x98,
+            0x2122 => 0x99,
+            0x161 => 0x9a,
+            0x203a => 0x9b,
+            0x153 => 0x9c,
+            0x17e => 0x9e,
+            0x178 => 0x9f,
             _ => return None,
         }),
     }
@@ -433,7 +610,14 @@ fn text_content(s: &mut String, t: &TextBlock, report: &mut ExportReport) {
     let (r, g, b) = rgb(&t.color);
     let lh = m.line_height(t.font_size);
     let base = m.first_baseline(t.font_size);
-    let _ = writeln!(s, "BT /PRHelv {} Tf {} {} {} rg", f(t.font_size), f(r), f(g), f(b));
+    let _ = writeln!(
+        s,
+        "BT /PRHelv {} Tf {} {} {} rg",
+        f(t.font_size),
+        f(r),
+        f(g),
+        f(b)
+    );
     for (i, line) in layout(&t.text, t.font_size, t.width).iter().enumerate() {
         let dx = match t.align {
             TextAlign::Left => 0.0,
@@ -464,10 +648,20 @@ fn text_content(s: &mut String, t: &TextBlock, report: &mut ExportReport) {
                 }
             }
         }
-        let _ = writeln!(s, "1 0 0 -1 {} {} Tm ({lit}) Tj", f(t.x + dx), f(t.y + base + i as f64 * lh));
+        let _ = writeln!(
+            s,
+            "1 0 0 -1 {} {} Tm ({lit}) Tj",
+            f(t.x + dx),
+            f(t.y + base + i as f64 * lh)
+        );
     }
     s.push_str("ET\n");
-    if report.replaced_characters > 0 && !report.warnings.iter().any(|w| w.starts_with("Some characters")) {
+    if report.replaced_characters > 0
+        && !report
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("Some characters"))
+    {
         report.warnings.push("Some characters are outside the PDF standard font and were exported as \"?\" (the notebook keeps the original text).".into());
     }
 }

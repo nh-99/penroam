@@ -29,15 +29,25 @@ tauri::ios_plugin_binding!(init_plugin_native_ink);
 struct Native<R: Runtime>(tauri::plugin::PluginHandle<R>);
 
 #[tauri::command]
-async fn call<R: Runtime>(app: AppHandle<R>, method: String, args: serde_json::Value) -> Result<serde_json::Value, String> {
+async fn call<R: Runtime>(
+    app: AppHandle<R>,
+    method: String,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     #[cfg(mobile)]
     {
-        app.state::<Native<R>>().0.run_mobile_plugin::<serde_json::Value>(&method, args).map_err(|e| format!("{method}: {e}"))
+        app.state::<Native<R>>()
+            .0
+            .run_mobile_plugin::<serde_json::Value>(&method, args)
+            .map_err(|e| format!("{method}: {e}"))
     }
     #[cfg(not(mobile))]
     {
         let _ = (&app, &args);
-        Err(format!("native-ink.{method}: no native ink surface on {} (the web canvas is used)", std::env::consts::OS))
+        Err(format!(
+            "native-ink.{method}: no native ink surface on {} (the web canvas is used)",
+            std::env::consts::OS
+        ))
     }
 }
 
@@ -47,7 +57,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         .setup(|_app, _api| {
             #[cfg(target_os = "android")]
             {
-                let handle = _api.register_android_plugin("dev.penroam.nativeink", "NativeInkPlugin")?;
+                let handle =
+                    _api.register_android_plugin("dev.penroam.nativeink", "NativeInkPlugin")?;
                 _app.manage(Native(handle));
             }
             #[cfg(target_os = "ios")]

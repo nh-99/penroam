@@ -36,7 +36,12 @@ pub fn metrics() -> &'static TextMetrics {
         m.by_char = m
             .widths
             .iter()
-            .filter_map(|(k, v)| k.parse::<u32>().ok().and_then(char::from_u32).map(|c| (c, *v)))
+            .filter_map(|(k, v)| {
+                k.parse::<u32>()
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(|c| (c, *v))
+            })
             .collect();
         m
     })
@@ -85,8 +90,14 @@ pub fn layout(text: &str, font_size: f64, box_width: f64) -> Vec<Line> {
     let mut lines = Vec::new();
     let mut para_start = 0;
     loop {
-        let para_end = chars[para_start..].iter().position(|&c| c == '\n').map(|i| para_start + i).unwrap_or(chars.len());
-        wrap_paragraph(&chars, para_start, para_end, box_width, scale, m, &mut lines);
+        let para_end = chars[para_start..]
+            .iter()
+            .position(|&c| c == '\n')
+            .map(|i| para_start + i)
+            .unwrap_or(chars.len());
+        wrap_paragraph(
+            &chars, para_start, para_end, box_width, scale, m, &mut lines,
+        );
         if para_end >= chars.len() {
             break;
         }
@@ -95,7 +106,15 @@ pub fn layout(text: &str, font_size: f64, box_width: f64) -> Vec<Line> {
     lines
 }
 
-fn wrap_paragraph(chars: &[char], start: usize, end: usize, box_w: f64, scale: f64, m: &TextMetrics, out: &mut Vec<Line>) {
+fn wrap_paragraph(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    box_w: f64,
+    scale: f64,
+    m: &TextMetrics,
+    out: &mut Vec<Line>,
+) {
     let push = |out: &mut Vec<Line>, s: usize, e: usize| {
         // trim trailing spaces from the measured width (not from the text range)
         let mut te = e;
@@ -105,7 +124,12 @@ fn wrap_paragraph(chars: &[char], start: usize, end: usize, box_w: f64, scale: f
         let width = chars[s..te].iter().fold(0.0, |a, &c| a + m.advance(c)) * scale;
         // rounded so the TS port and the golden file agree bit-for-bit
         let width = (width * 1e6).round() / 1e6 + 0.0;
-        out.push(Line { start: s, end: e, text: chars[s..e].iter().collect(), width });
+        out.push(Line {
+            start: s,
+            end: e,
+            text: chars[s..e].iter().collect(),
+            width,
+        });
     };
     if start == end {
         push(out, start, end);
@@ -133,7 +157,11 @@ fn wrap_paragraph(chars: &[char], start: usize, end: usize, box_w: f64, scale: f
                 line_start = i;
             }
             last_break = None;
-            width = chars[line_start..i].iter().map(|&c| m.advance(c)).sum::<f64>() * scale;
+            width = chars[line_start..i]
+                .iter()
+                .map(|&c| m.advance(c))
+                .sum::<f64>()
+                * scale;
             continue;
         }
         width += w;

@@ -30,7 +30,10 @@ const PAGE_MIGRATIONS: &[Step] = &[];
 const NOTEBOOK_MIGRATIONS: &[Step] = &[];
 
 fn run_chain(mut v: Value, chain: &[Step]) -> Result<Value, MigrateError> {
-    let found = v.get("schemaVersion").and_then(Value::as_u64).ok_or(MigrateError::NoVersion)?;
+    let found = v
+        .get("schemaVersion")
+        .and_then(Value::as_u64)
+        .ok_or(MigrateError::NoVersion)?;
     if found == 0 {
         return Err(MigrateError::NoVersion);
     }
@@ -72,7 +75,9 @@ pub fn m00_strokes_to_elements(doc: &Value, first_z: i64) -> Result<Vec<Element>
             if o.get("format").and_then(Value::as_str) != Some("m00-strokes") {
                 return Err(MigrateError::NotM00);
             }
-            o.get("strokes").and_then(Value::as_array).ok_or(MigrateError::NotM00)?
+            o.get("strokes")
+                .and_then(Value::as_array)
+                .ok_or(MigrateError::NotM00)?
         }
         _ => return Err(MigrateError::NotM00),
     };
@@ -80,7 +85,11 @@ pub fn m00_strokes_to_elements(doc: &Value, first_z: i64) -> Result<Vec<Element>
     for (i, s) in arr.iter().enumerate() {
         let empty = Map::new();
         let brush = s.get("brush").and_then(Value::as_object).unwrap_or(&empty);
-        let mut input = s.get("input").and_then(Value::as_object).cloned().unwrap_or_default();
+        let mut input = s
+            .get("input")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         let raw_id = s.get("id").and_then(Value::as_str).unwrap_or("");
         let id = match Uuid::parse_str(raw_id) {
             Ok(u) => u,
@@ -116,7 +125,11 @@ pub fn m00_strokes_to_elements(doc: &Value, first_z: i64) -> Result<Vec<Element>
             continue;
         }
         let mut extra = Map::new();
-        if let Some(t) = brush.get("type").and_then(Value::as_str).filter(|t| *t != "pen") {
+        if let Some(t) = brush
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|t| *t != "pen")
+        {
             extra.insert("m00BrushType".into(), Value::String(t.to_string()));
         }
         out.push(Element::Ink(InkStroke {
@@ -131,8 +144,15 @@ pub fn m00_strokes_to_elements(doc: &Value, first_z: i64) -> Result<Vec<Element>
                 .to_lowercase(),
             opacity: 1.0,
             width: brush.get("width").and_then(Value::as_f64).unwrap_or(3.0),
-            pressure: brush.get("pressure").and_then(Value::as_bool).unwrap_or(true),
-            source: s.get("source").and_then(Value::as_str).unwrap_or("unknown").to_string(),
+            pressure: brush
+                .get("pressure")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            source: s
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
             input,
             points,
             extra,

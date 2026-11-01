@@ -322,7 +322,7 @@ export class InkEditor {
     this.transform = this.fitTransform("width");
     this.applyTransform(false);
     this.renderer.setResolution(this.wantedRes());
-    this.renderer.renderAll();
+    this.renderer.renderAll(this.visibleDocRect());
     this.emitAll();
     if (this.native) {
       if (this.nativeMounted) this.nativeCall((n) => n.loadCommittedInk(this.inkElements()));
@@ -433,10 +433,17 @@ export class InkEditor {
       const cur = this.renderer.res;
       if (Math.abs(want - cur) / cur > 0.08) {
         this.renderer.setResolution(want);
-        this.renderer.renderAll();
+        this.renderer.renderAll(this.visibleDocRect());
         if (this.background) void this.renderPdf();
       }
     }, 160);
+  }
+
+  /** Page area currently on screen (doc pt). */
+  visibleDocRect(): Rect {
+    const [x0, y0] = toDoc(this.transform, 0, 0);
+    const [x1, y1] = toDoc(this.transform, this.viewW, this.viewH);
+    return [x0, y0, x1, y1];
   }
 
   private viewportPoint(e: { clientX: number; clientY: number }): [number, number] {
@@ -1395,7 +1402,13 @@ export class InkEditor {
     this.applyTransform(false);
     if (this.settleTimer) clearTimeout(this.settleTimer);
     this.renderer.setResolution(scale * this.dpr);
-    this.renderer.renderAll();
+    this.renderer.renderAll(null);
+  }
+
+  /** Visible-first redraw (what a zoom settle or page open costs before the first frame); ms, GPU-flushed. */
+  visibleRedraw(): number {
+    this.renderer.renderInkProgressive(this.visibleDocRect());
+    return this.renderer.lastVisibleRedrawMs;
   }
 
   /** Full redraw of all layers' ink at the current resolution; ms (GPU-flushed). */

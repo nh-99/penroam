@@ -88,7 +88,10 @@ pub struct PageDefaults {
 
 impl Default for PageDefaults {
     fn default() -> Self {
-        Self { paper: Paper::Letter, template: Template::default() }
+        Self {
+            paper: Paper::Letter,
+            template: Template::default(),
+        }
     }
 }
 
@@ -108,8 +111,14 @@ impl Paper {
     /// Portrait size in points.
     pub fn size(self) -> Option<Size> {
         match self {
-            Paper::Letter => Some(Size { width: 612.0, height: 792.0 }),
-            Paper::A4 => Some(Size { width: 595.276, height: 841.89 }),
+            Paper::Letter => Some(Size {
+                width: 612.0,
+                height: 792.0,
+            }),
+            Paper::A4 => Some(Size {
+                width: 595.276,
+                height: 841.89,
+            }),
             Paper::Custom | Paper::Pdf => None,
         }
     }
@@ -144,7 +153,10 @@ pub struct Template {
 
 impl Default for Template {
     fn default() -> Self {
-        Self { kind: TemplateKind::Ruled, spacing: 24.0 }
+        Self {
+            kind: TemplateKind::Ruled,
+            spacing: 24.0,
+        }
     }
 }
 
@@ -213,9 +225,15 @@ impl PdfBackgroundRef {
         let [x0, y0, x1, y1] = self.crop_box;
         let (w, h) = ((x1 - x0).abs(), (y1 - y0).abs());
         if self.rotation % 180 == 90 {
-            Size { width: h, height: w }
+            Size {
+                width: h,
+                height: w,
+            }
         } else {
-            Size { width: w, height: h }
+            Size {
+                width: w,
+                height: h,
+            }
         }
     }
 }
@@ -428,7 +446,13 @@ impl Page {
 }
 
 impl Notebook {
-    pub fn new(id: Uuid, title: String, defaults: PageDefaults, cover: String, now: Timestamp) -> Self {
+    pub fn new(
+        id: Uuid,
+        title: String,
+        defaults: PageDefaults,
+        cover: String,
+        now: Timestamp,
+    ) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             id,
@@ -448,6 +472,9 @@ impl Notebook {
 
     /// All pages with files on disk (live and trashed).
     pub fn all_page_ids(&self) -> impl Iterator<Item = Uuid> + '_ {
-        self.page_order.iter().copied().chain(self.trashed_pages.iter().map(|t| t.id))
+        self.page_order
+            .iter()
+            .copied()
+            .chain(self.trashed_pages.iter().map(|t| t.id))
     }
 }

@@ -94,7 +94,34 @@ export function drawPieces(ctx: CanvasRenderingContext2D, s: StrokeLike, from: n
     ctx.stroke();
     return;
   }
-  for (let k = from; k < to; k++) drawPiece(ctx, piece(pts, k, base, s.pressure && s.tool !== "highlighter"));
+  // Variable width: consecutive pieces whose widths round to the same 1/16 pt
+  // share one path (round joins == the round caps of separate pieces), so a
+  // stroke costs a few stroke() calls instead of one per sample.
+  const pe = s.pressure && s.tool !== "highlighter";
+  let curW = -1;
+  let open = false;
+  for (let k = from; k < to; k++) {
+    const pc = piece(pts, k, base, pe);
+    if (pc.kind === "dot") {
+      if (open) ctx.stroke();
+      open = false;
+      curW = -1;
+      dot(ctx, pc.x, pc.y, pc.width);
+      continue;
+    }
+    const w = Math.round(pc.width * 16) / 16;
+    if (w !== curW) {
+      if (open) ctx.stroke();
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(pc.x0, pc.y0);
+      curW = w;
+      open = true;
+    }
+    if (pc.kind === "line") ctx.lineTo(pc.x1, pc.y1);
+    else ctx.quadraticCurveTo(pc.cx, pc.cy, pc.x1, pc.y1);
+  }
+  if (open) ctx.stroke();
 }
 
 /** Draws a whole stroke including its opacity (highlighter: one path, one alpha). */

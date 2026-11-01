@@ -27,38 +27,63 @@ export interface Persist {
 
 export class ApplyLocalError extends Error {}
 
-/** Mirrors penroam-core ops::apply_op (validation is done by Rust). */
-export function applyOpLocal(page: Page, op: OpKind): void {
+export interface OpEffect {
+  added: Element[];
+  removed: Element[];
+  templateChanged: boolean;
+}
+
+/**
+ * Mirrors penroam-core ops (validation of element data is done by Rust).
+ * `index` (id -> element) is kept in sync so large pages are not rescanned
+ * per stroke; pass none to build one.
+ */
+export function applyOpLocal(page: Page, op: OpKind, index: Map<string, Element> = new Map(page.elements.map((e) => [e.id, e]))): OpEffect {
+  const fx: OpEffect = { added: [], removed: [], templateChanged: false };
   switch (op.op) {
     case "addElements": {
-      const ids = new Set(page.elements.map((e) => e.id));
+      const seen = new Set<string>();
       for (const e of op.elements) {
-        if (ids.has(e.id)) throw new ApplyLocalError(`element ${e.id} already exists`);
-        ids.add(e.id);
+        if (index.has(e.id) || seen.has(e.id)) throw new ApplyLocalError(`element ${e.id} already exists`);
+        seen.add(e.id);
       }
-      page.elements.push(...op.elements);
-      sortByZ(page.elements);
+      const els = page.elements;
+      const maxZ = els.length ? els[els.length - 1].z : -Infinity;
+      const inOrder = op.elements.every((e, i) => e.z >= (i ? op.elements[i - 1].z : maxZ));
+      els.push(...op.elements);
+      if (!inOrder) sortByZ(els);
+      for (const e of op.elements) index.set(e.id, e);
+      fx.added.push(...op.elements);
       break;
     }
     case "removeElements": {
+      for (const id of op.ids) if (!index.has(id)) throw new ApplyLocalError(`element ${id} does not exist`);
       const rm = new Set(op.ids);
-      for (const id of rm) if (!page.elements.some((e) => e.id === id)) throw new ApplyLocalError(`element ${id} does not exist`);
-      page.elements = page.elements.filter((e) => !rm.has(e.id));
+      for (const id of rm) fx.removed.push(index.get(id)!);
+      page.elements = rm.size === 1 ? page.elements.filter((e) => e.id !== op.ids[0]) : page.elements.filter((e) => !rm.has(e.id));
+      for (const id of rm) index.delete(id);
       break;
     }
     case "replaceElements": {
+      for (const e of op.elements) if (!index.has(e.id)) throw new ApplyLocalError(`element ${e.id} does not exist`);
+      let resort = false;
       for (const e of op.elements) {
-        const i = page.elements.findIndex((x) => x.id === e.id);
-        if (i < 0) throw new ApplyLocalError(`element ${e.id} does not exist`);
+        const i = page.elements.indexOf(index.get(e.id)!);
+        fx.removed.push(page.elements[i]);
+        resort ||= page.elements[i].z !== e.z;
         page.elements[i] = e;
+        index.set(e.id, e);
+        fx.added.push(e);
       }
-      sortByZ(page.elements);
+      if (resort) sortByZ(page.elements);
       break;
     }
     case "setTemplate":
       page.template = op.template;
+      fx.templateChanged = true;
       break;
   }
+  return fx;
 }
 
 function sortByZ(els: Element[]) {
@@ -82,6 +107,7 @@ export class PageSession {
   private inflight: Promise<void> | null = null;
   private revision: number;
   private closed = false;
+  private index: Map<string, Element>;
   events: SessionEvents = {};
 
   constructor(
@@ -91,6 +117,7 @@ export class PageSession {
     private historyLimit = 200,
   ) {
     this.revision = page.revision;
+    this.index = new Map(page.elements.map((e) => [e.id, e]));
   }
 
   get canUndo() {
@@ -104,13 +131,12 @@ export class PageSession {
   }
 
   elementById(id: string): Element | undefined {
-    return this.page.elements.find((e) => e.id === id);
+    return this.index.get(id);
   }
 
   nextZ(): number {
-    let z = 0;
-    for (const e of this.page.elements) if (e.z > z) z = e.z;
-    return z + 1;
+    const els = this.page.elements; // sorted by z
+    return (els.length ? Math.max(0, els[els.length - 1].z) : 0) + 1;
   }
 
   /** Applies a change locally, records it for undo and queues it for saving. */
@@ -146,18 +172,21 @@ export class PageSession {
   }
 
   private applyLocal(ops: OpKind[]) {
-    const before = new Map(this.page.elements.map((e) => [e.id, e]));
-    let templateChanged = false;
-    for (const op of ops) {
-      applyOpLocal(this.page, op);
-      if (op.op === "setTemplate") templateChanged = true;
-    }
-    const after = new Map(this.page.elements.map((e) => [e.id, e]));
     const added: Element[] = [];
     const removed: Element[] = [];
-    for (const [id, e] of after) if (before.get(id) !== e) added.push(e);
-    for (const [id, e] of before) if (after.get(id) !== e) removed.push(e);
-    this.events.onElementsChanged?.({ added, removed, templateChanged });
+    let templateChanged = false;
+    for (const op of ops) {
+      const fx = applyOpLocal(this.page, op, this.index);
+      added.push(...fx.added);
+      removed.push(...fx.removed);
+      templateChanged ||= fx.templateChanged;
+    }
+    // report net effect: what is on the page now vs what left it
+    this.events.onElementsChanged?.({
+      added: added.filter((e) => this.index.get(e.id) === e),
+      removed: removed.filter((e) => this.index.get(e.id) !== e),
+      templateChanged,
+    });
   }
 
   private emitHistory() {
