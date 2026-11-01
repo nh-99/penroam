@@ -23,6 +23,9 @@ pub struct SystemInfo {
     tauri_version: &'static str,
     app_version: String,
     session_type: Option<String>,
+    /// Display server this process actually uses on Linux: "wayland" or "x11"
+    /// (XWayland counts as x11). The session type alone does not tell.
+    display_server: Option<&'static str>,
     desktop: Option<String>,
 }
 
@@ -38,7 +41,32 @@ pub fn system_info(app: AppHandle) -> SystemInfo {
         tauri_version: tauri::VERSION,
         app_version: app.package_info().version.to_string(),
         session_type: std::env::var("XDG_SESSION_TYPE").ok(),
+        display_server: display_server(),
         desktop: std::env::var("XDG_CURRENT_DESKTOP").ok(),
+    }
+}
+
+/// Mirrors GDK's backend choice: GDK_BACKEND wins, otherwise Wayland when a
+/// compositor socket is advertised, otherwise X11.
+fn display_server() -> Option<&'static str> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    match env("GDK_BACKEND")
+        .as_deref()
+        .map(|b| b.split(',').next().unwrap_or("").trim().to_string())
+    {
+        Some(b) if b == "x11" => return Some("x11"),
+        Some(b) if b == "wayland" => return Some("wayland"),
+        _ => {}
+    }
+    if env("WAYLAND_DISPLAY").is_some() {
+        Some("wayland")
+    } else if env("DISPLAY").is_some() {
+        Some("x11")
+    } else {
+        None
     }
 }
 

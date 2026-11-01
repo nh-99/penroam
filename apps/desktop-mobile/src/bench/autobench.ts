@@ -205,6 +205,11 @@ export async function runAutobench(mode: string) {
     system: await api.systemInfo().catch(() => null),
     devicePixelRatio: window.devicePixelRatio,
     viewport: { w: window.innerWidth, h: window.innerHeight },
+    inputApis: {
+      pointerRawUpdate: "onpointerrawupdate" in window,
+      coalescedEvents: typeof PointerEvent.prototype.getCoalescedEvents === "function",
+      predictedEvents: typeof (PointerEvent.prototype as any).getPredictedEvents === "function",
+    },
     userAgent: navigator.userAgent,
     method:
       "Same as M00 Workload D: deterministic scene (seed = N), full redraw timed with a getImageData GPU flush, one replayed sample per rAF. M01 differences: the whole 1600x1200 pt page is rendered into a page-sized cache (M00 culled to the 1280x900 viewport), and the scene is persisted through Rust first.",

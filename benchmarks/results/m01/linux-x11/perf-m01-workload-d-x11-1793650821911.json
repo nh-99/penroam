@@ -1,0 +1,507 @@
+{
+  "app": "penroam-m01",
+  "workload": "D-large-document",
+  "exportedAt": "2026-11-02T20:20:21.909Z",
+  "startupMs": 3960.0000000209548,
+  "system": {
+    "os": "linux",
+    "arch": "x86_64",
+    "kernel": "7.2.6-76070206-generic",
+    "webviewVersion": "2.52.6",
+    "tauriVersion": "2.12.5",
+    "appVersion": "0.1.0",
+    "sessionType": "wayland",
+    "desktop": "GNOME"
+  },
+  "devicePixelRatio": 1,
+  "viewport": {
+    "w": 1280,
+    "h": 900
+  },
+  "inputApis": {
+    "pointerRawUpdate": false,
+    "coalescedEvents": true,
+    "predictedEvents": true
+  },
+  "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+  "method": "Same as M00 Workload D: deterministic scene (seed = N), full redraw timed with a getImageData GPU flush, one replayed sample per rAF. M01 differences: the whole 1600x1200 pt page is rendered into a page-sized cache (M00 culled to the 1280x900 viewport), and the scene is persisted through Rust first.",
+  "results": [
+    {
+      "strokes": 1000,
+      "trial": 0,
+      "generateMs": 8,
+      "persistMs": 102,
+      "loadAndRenderMs": 120,
+      "fullRedrawMs": [
+        46,
+        49,
+        48.000000000000114
+      ],
+      "fullRedrawMedianMs": 48.000000000000114,
+      "visibleRedrawMs": [
+        28.999999999999886,
+        24,
+        26
+      ],
+      "visibleRedrawMedianMs": 26,
+      "visibleDocRect": [
+        0,
+        0,
+        1104,
+        798
+      ],
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "commitDurableMs": 7,
+      "replayIntervalMedianMs": 6,
+      "replayIntervalP95Ms": 7,
+      "replayIntervalMaxMs": 8,
+      "jsHeapBytes": null,
+      "treeRssBytes": 599687168,
+      "mainRssBytes": 203845632,
+      "processes": [
+        [
+          "penroam-app",
+          203845632
+        ],
+        [
+          "WebKitWebProces",
+          342695936
+        ],
+        [
+          "WebKitNetworkPr",
+          53145600
+        ]
+      ],
+      "backingPx": {
+        "w": 1600,
+        "h": 1200
+      }
+    },
+    {
+      "strokes": 1000,
+      "trial": 1,
+      "generateMs": 7.000000000000227,
+      "persistMs": 97,
+      "loadAndRenderMs": 97,
+      "fullRedrawMs": [
+        36,
+        45,
+        45.00000000000023
+      ],
+      "fullRedrawMedianMs": 45,
+      "visibleRedrawMs": [
+        23.999999999999773,
+        22,
+        22
+      ],
+      "visibleRedrawMedianMs": 22,
+      "visibleDocRect": [
+        0,
+        0,
+        1104,
+        798
+      ],
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "commitDurableMs": 8,
+      "replayIntervalMedianMs": 6,
+      "replayIntervalP95Ms": 7,
+      "replayIntervalMaxMs": 8,
+      "jsHeapBytes": null,
+      "treeRssBytes": 619184128,
+      "mainRssBytes": 211197952,
+      "processes": [
+        [
+          "penroam-app",
+          211197952
+        ],
+        [
+          "WebKitWebProces",
+          354856960
+        ],
+        [
+          "WebKitNetworkPr",
+          53129216
+        ]
+      ],
+      "backingPx": {
+        "w": 1600,
+        "h": 1200
+      }
+    },
+    {
+      "strokes": 1000,
+      "trial": 2,
+      "generateMs": 7,
+      "persistMs": 102,
+      "loadAndRenderMs": 100,
+      "fullRedrawMs": [
+        45,
+        43,
+        38
+      ],
+      "fullRedrawMedianMs": 43,
+      "visibleRedrawMs": [
+        20,
+        18,
+        18
+      ],
+      "visibleRedrawMedianMs": 18,
+      "visibleDocRect": [
+        0,
+        0,
+        1104,
+        798
+      ],
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "commitDurableMs": 8.999999999999545,
+      "replayIntervalMedianMs": 6,
+      "replayIntervalP95Ms": 7,
+      "replayIntervalMaxMs": 7.000000000000455,
+      "jsHeapBytes": null,
+      "treeRssBytes": 672808960,
+      "mainRssBytes": 213204992,
+      "processes": [
+        [
+          "penroam-app",
+          213204992
+        ],
+        [
+          "WebKitWebProces",
+          406355968
+        ],
+        [
+          "WebKitNetworkPr",
+          53248000
+        ]
+      ],
+      "backingPx": {
+        "w": 1600,
+        "h": 1200
+      }
+    },
+    {
+      "strokes": 5000,
+      "trial": 0,
+      "generateMs": 26,
+      "persistMs": 399,
+      "loadAndRenderMs": 385.99999999999955,
+      "fullRedrawMs": [
+        162,
+        135,
+        130
+      ],
+      "fullRedrawMedianMs": 135,
+      "visibleRedrawMs": [
+        67,
+        61,
+        59.99999999999909
+      ],
+      "visibleRedrawMedianMs": 61,
+      "visibleDocRect": [
+        0,
+        0,
+        1104,
+        798
+      ],
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 0,
+      "replayFrames": 25,
+      "commitDurableMs": 9.00000000000091,
+      "replayIntervalMedianMs": 6,
+      "replayIntervalP95Ms": 6.0000000000009095,
+      "replayIntervalMaxMs": 7,
+      "jsHeapBytes": null,
+      "treeRssBytes": 867319808,
+      "mainRssBytes": 223031296,
+      "processes": [
+        [
+          "penroam-app",
+          223031296
+        ],
+        [
+          "WebKitWebProces",
+          590880768
+        ],
+        [
+          "WebKitNetworkPr",
+          53407744
+        ]
+      ],
+      "backingPx": {
+        "w": 1600,
+        "h": 1200
+      }
+    },
+    {
+      "strokes": 5000,
+      "trial": 1,
+      "generateMs": 8,
+      "persistMs": 349,
+      "loadAndRenderMs": 214,
+      "fullRedrawMs": [
+        138,
+        133,
+        131
+      ],
+      "fullRedrawMedianMs": 133,
+      "visibleRedrawMs": [
+        73,
+        62,
+        62.00000000000091
+      ],
+      "visibleRedrawMedianMs": 62.00000000000091,
+      "visibleDocRect": [
+        0,
+        0,
+        1104,
+        798
+      ],
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 0.9999999999990905,
+      "replayFrames": 25,
+      "commitDurableMs": 7,
+      "replayIntervalMedianMs": 6,
+      "replayIntervalP95Ms": 6.0000000000009095,
+      "replayIntervalMaxMs": 7.0000000000009095,
+      "jsHeapBytes": null,
+      "treeRssBytes": 848203776,
+      "mainRssBytes": 238882816,
+      "processes": [
+        [
+          "penroam-app",
+          238882816
+        ],
+        [
+          "WebKitWebProces",
+          556015616
+        ],
+        [
+          "WebKitNetworkPr",
+          53305344
+        ]
+      ],
+      "backingPx": {
+        "w": 1600,
+        "h": 1200
+      }
+    },
+    {
+      "strokes": 5000,
+      "trial": 2,
+      "generateMs": 10,
+      "persistMs": 310,
+      "loadAndRenderMs": 236,
+      "fullRedrawMs": [
+        131.9999999999991,
+        132,
+        126
+      ],
+      "fullRedrawMedianMs": 131.9999999999991,
+      "visibleRedrawMs": [
+        68,
+        64,
+        61
+      ],
+      "visibleRedrawMedianMs": 64,
+      "visibleDocRect": [
+        0,
+        0,
+        1104,
+        798
+      ],
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 0,
+      "replayFrames": 25,
+      "commitDurableMs": 9,
+      "replayIntervalMedianMs": 6,
+      "replayIntervalP95Ms": 6.000000000001819,
+      "replayIntervalMaxMs": 7,
+      "jsHeapBytes": null,
+      "treeRssBytes": 906551296,
+      "mainRssBytes": 247861248,
+      "processes": [
+        [
+          "penroam-app",
+          247861248
+        ],
+        [
+          "WebKitWebProces",
+          605327360
+        ],
+        [
+          "WebKitNetworkPr",
+          53362688
+        ]
+      ],
+      "backingPx": {
+        "w": 1600,
+        "h": 1200
+      }
+    },
+    {
+      "strokes": 10000,
+      "trial": 0,
+      "generateMs": 17,
+      "persistMs": 691,
+      "loadAndRenderMs": 423,
+      "fullRedrawMs": [
+        235,
+        242,
+        238.00000000000182
+      ],
+      "fullRedrawMedianMs": 238.00000000000182,
+      "visibleRedrawMs": [
+        130.99999999999818,
+        122,
+        121
+      ],
+      "visibleRedrawMedianMs": 122,
+      "visibleDocRect": [
+        0,
+        0,
+        1104,
+        798
+      ],
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 0,
+      "replayFrames": 25,
+      "commitDurableMs": 9,
+      "replayIntervalMedianMs": 6,
+      "replayIntervalP95Ms": 6.000000000001819,
+      "replayIntervalMaxMs": 7,
+      "jsHeapBytes": null,
+      "treeRssBytes": 991924224,
+      "mainRssBytes": 267595776,
+      "processes": [
+        [
+          "penroam-app",
+          267595776
+        ],
+        [
+          "WebKitWebProces",
+          670920704
+        ],
+        [
+          "WebKitNetworkPr",
+          53407744
+        ]
+      ],
+      "backingPx": {
+        "w": 1600,
+        "h": 1200
+      }
+    },
+    {
+      "strokes": 10000,
+      "trial": 1,
+      "generateMs": 14,
+      "persistMs": 620.0000000000018,
+      "loadAndRenderMs": 433.9999999999982,
+      "fullRedrawMs": [
+        238,
+        240,
+        245.00000000000182
+      ],
+      "fullRedrawMedianMs": 240,
+      "visibleRedrawMs": [
+        134.99999999999818,
+        132,
+        127.00000000000182
+      ],
+      "visibleRedrawMedianMs": 132,
+      "visibleDocRect": [
+        0,
+        0,
+        1104,
+        798
+      ],
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1.000000000001819,
+      "replayFrames": 25,
+      "commitDurableMs": 8,
+      "replayIntervalMedianMs": 6,
+      "replayIntervalP95Ms": 7,
+      "replayIntervalMaxMs": 8,
+      "jsHeapBytes": null,
+      "treeRssBytes": 1105928192,
+      "mainRssBytes": 290095104,
+      "processes": [
+        [
+          "penroam-app",
+          290095104
+        ],
+        [
+          "WebKitWebProces",
+          762298368
+        ],
+        [
+          "WebKitNetworkPr",
+          53534720
+        ]
+      ],
+      "backingPx": {
+        "w": 1600,
+        "h": 1200
+      }
+    },
+    {
+      "strokes": 10000,
+      "trial": 2,
+      "generateMs": 17,
+      "persistMs": 572,
+      "loadAndRenderMs": 443.9999999999982,
+      "fullRedrawMs": [
+        242,
+        242,
+        270.00000000000364
+      ],
+      "fullRedrawMedianMs": 242,
+      "visibleRedrawMs": [
+        144.99999999999636,
+        132,
+        135
+      ],
+      "visibleRedrawMedianMs": 135,
+      "visibleDocRect": [
+        0,
+        0,
+        1104,
+        798
+      ],
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "commitDurableMs": 8.999999999996362,
+      "replayIntervalMedianMs": 6,
+      "replayIntervalP95Ms": 7,
+      "replayIntervalMaxMs": 8,
+      "jsHeapBytes": null,
+      "treeRssBytes": 1121808384,
+      "mainRssBytes": 305324032,
+      "processes": [
+        [
+          "penroam-app",
+          305324032
+        ],
+        [
+          "WebKitWebProces",
+          762904576
+        ],
+        [
+          "WebKitNetworkPr",
+          53579776
+        ]
+      ],
+      "backingPx": {
+        "w": 1600,
+        "h": 1200
+      }
+    }
+  ]
+}
