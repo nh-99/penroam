@@ -194,6 +194,14 @@ class NativeInkPlugin(private val activity: Activity) : Plugin(activity) {
         ui(invoke) { invoke.resolve(JSObject().put("removed", view().eraseAlongDoc(pts))) }
     }
 
+    /** On-device plumbing test only (see BooxInkView.injectTestStroke). Points: [x, y, pressure, ...] in doc units. */
+    @Command
+    fun injectTestStroke(invoke: Invoke) {
+        val arr = invoke.getArgs().getJSONArray("points")
+        val pts = (0 until arr.length() / 3).map { InkPoint(arr.getDouble(3 * it).toFloat(), arr.getDouble(3 * it + 1).toFloat(), arr.getDouble(3 * it + 2).toFloat(), timeUs = it * 4000L) }
+        ui(invoke) { view().injectTestStroke(pts); invoke.resolve() }
+    }
+
     @Command
     fun exportStrokes(invoke: Invoke) = ui(invoke) {
         invoke.resolve(JSObject().put("strokes", view().exportStrokes()))

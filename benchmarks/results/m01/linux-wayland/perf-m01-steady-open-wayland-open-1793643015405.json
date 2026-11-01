@@ -1,0 +1,45 @@
+{
+  "app": "penroam-m01",
+  "workload": "D-steady-state-open",
+  "exportedAt": "2026-11-02T18:10:15.404Z",
+  "startupMs": 649.9999999650754,
+  "strokes": 10001,
+  "openMs": 1065.0000000000002,
+  "fullRedrawMs": [
+    331,
+    320,
+    325
+  ],
+  "visibleRedrawMs": [
+    193,
+    172,
+    174
+  ],
+  "treeRssBytes": 1007579136,
+  "mainRssBytes": 294924288,
+  "processes": [
+    [
+      "penroam-app",
+      294924288
+    ],
+    [
+      "WebKitWebProces",
+      659451904
+    ],
+    [
+      "WebKitNetworkPr",
+      53202944
+    ]
+  ],
+  "devicePixelRatio": 2,
+  "system": {
+    "os": "linux",
+    "arch": "x86_64",
+    "kernel": "7.2.6-76070206-generic",
+    "webviewVersion": "2.52.6",
+    "tauriVersion": "2.12.5",
+    "appVersion": "0.1.0",
+    "sessionType": "wayland",
+    "desktop": "GNOME"
+  }
+}

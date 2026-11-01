@@ -1,0 +1,31 @@
+move 120 210
+down 1
+up 1
+sleep 2500
+move 1212 24
+down 1
+up 1
+sleep 600
+move 1108 119
+down 1
+up 1
+sleep 2000
+shot save-dialog
+key C-a
+type OUT/annotated.pdf
+key Return
+sleep 4000
+shot after-pdf-export
+move 1212 24
+down 1
+up 1
+sleep 600
+move 1108 78
+down 1
+up 1
+sleep 2000
+key C-a
+type OUT/PDF-annotations.penroam
+key Return
+sleep 4000
+shot after-penroam-export

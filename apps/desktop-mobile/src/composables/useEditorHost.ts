@@ -1,6 +1,8 @@
 import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, type Ref } from "vue";
 import { InkEditor, type EditorState } from "../editor/engine";
-import { PdfCache } from "../editor/pdf";
+import { PdfCache, PdfPageRenderer } from "../editor/pdf";
+import { PageRenderer } from "../editor/renderer";
+import type { Page } from "../generated/Page";
 import { PageSession, errorMessage } from "../editor/session";
 import { api } from "../platform/ipc";
 import { detectNativeInk, type NativeInkSurface } from "../platform/nativeInk";
@@ -63,6 +65,40 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     if (!e || !pid) return;
     const png = await e.renderer.thumbnail(240);
     if (png && session?.page.id === pid) await lib.saveThumb(pid, png);
+  }
+
+  /** Renders a page that is not open into a small PNG (detached canvases). */
+  async function renderOffscreenThumb(page: Page): Promise<Uint8Array | null> {
+    const host = document.createElement("div");
+    const r = new PageRenderer(host, () => page.elements);
+    r.setPage(page.size.width, page.size.height, page.template);
+    r.opts.mono = settings.effectiveTheme() === "epaper";
+    const res = Math.min(2, 480 / page.size.width);
+    r.setResolution(res);
+    if (page.background && pdfCache) {
+      r.pdfBitmap = await new PdfPageRenderer().render(pdfCache, page.background, res).catch(() => null);
+    }
+    r.renderAll(null);
+    return r.thumbnail(240);
+  }
+
+  /** Imported notebooks have no thumbnails: render the missing ones in the background. */
+  async function fillMissingThumbs(nbId: string) {
+    await new Promise((r) => setTimeout(r, 1500));
+    for (const pid of [...(lib.current?.pageOrder ?? [])]) {
+      if (lib.current?.id !== nbId || !editor.value) return;
+      if (lib.thumbs[pid] || pid === session?.page.id) continue;
+      if (await api.getThumbnail(nbId, pid).catch(() => null)) continue;
+      try {
+        const page = await api.loadPage(nbId, pid);
+        if (page.elements.length > 20000) continue;
+        const png = await renderOffscreenThumb(page);
+        if (png && lib.current?.id === nbId) await lib.saveThumb(pid, png);
+      } catch (e) {
+        console.warn("thumbnail", pid, e);
+      }
+      await new Promise((r) => setTimeout(r, 30));
+    }
   }
 
   /** Flushes the current page; throws (and keeps the data in memory) if saving fails. */
@@ -130,6 +166,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     unregister = registerFlusher(flush);
     document.addEventListener("visibilitychange", onVisibility);
     await openPage(lib.currentPageId);
+    if (lib.current) void fillMissingThumbs(lib.current.id);
     const n = await detectNativeInk();
     if (n && editor.value === e) {
       native.value = n;

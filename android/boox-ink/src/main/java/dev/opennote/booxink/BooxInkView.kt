@@ -628,6 +628,27 @@ class BooxInkView @JvmOverloads constructor(
         metrics.event("strokes_removed", mapOf("count" to before - strokes.size))
     }
 
+    /**
+     * Test hook for on-device plumbing checks (M01): commits a stroke exactly as
+     * the Onyx path does after pen-up (bitmap, listener, ePaper hand-off), with
+     * the samples supplied by the caller. Marked `simulated` in its metadata.
+     * It does NOT exercise Onyx input; real pen tests remain manual.
+     */
+    fun injectTestStroke(points: List<InkPoint>) {
+        if (points.isEmpty()) return
+        val stroke = InkStroke(
+            source = "stylus",
+            input = InkInput("test-injected", "stylus", mapOf("simulated" to true, "mode" to mode.name)),
+            brush = currentBrush(),
+            points = points,
+        )
+        strokes.add(stroke)
+        drawStrokeIntoBitmap(stroke)
+        metrics.event("test_stroke_injected", mapOf("points" to points.size))
+        listener?.onStrokeCommitted(stroke)
+        scheduleHandoff(stroke)
+    }
+
     private fun currentBrush(pressureCapable: Boolean = true) = InkBrush(
         type = brushType,
         width = brushWidth,

@@ -1,0 +1,31 @@
+move 1037 32
+down 1
+up 1
+sleep 500
+type Physics lecture
+key Return
+sleep 2000
+shot editor-empty
+drag 300 300 360 380 20
+drag 360 300 300 380 20
+drag 420 300 420 380 15
+drag 450 330 520 330 12
+drag 450 360 520 360 12
+drag 560 300 600 380 15
+drag 600 380 640 300 15
+key m
+drag 290 460 700 460 30
+key p
+key t
+move 300 560
+down 1
+up 1
+sleep 400
+type Newton second law F equals m a\Units are newtons
+key Escape
+sleep 2500
+shot editor-drawn
+quit
+start
+sleep 1500
+shot library-after-restart

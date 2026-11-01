@@ -197,3 +197,11 @@ pub fn autobench_requested() -> Option<String> {
         .ok()
         .filter(|v| !v.is_empty() && v != "0")
 }
+
+/// Mobile diagnostics: the WebView console is not visible in release builds,
+/// so the frontend forwards warnings/errors here (stderr -> logcat).
+#[tauri::command]
+pub fn log_line(level: String, message: String) {
+    let msg: String = message.chars().take(2000).collect();
+    eprintln!("penroam[{level}]: {msg}");
+}

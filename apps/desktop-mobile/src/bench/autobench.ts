@@ -60,9 +60,77 @@ async function openLargest(mode: string, startupMs: number) {
   if (mode.includes("exit")) await api.exitApp();
 }
 
+/**
+ * On-device plumbing check for the BOOX native surface (M01.5). Everything
+ * after Onyx input is real: native commit + bitmap + ePaper hand-off, plugin
+ * event, web model, Rust journal, web<->native sync on undo/redo, and the
+ * native/web layer switch (screenshots are taken by the operator script
+ * during the timed pauses). The stroke itself is injected (no pen).
+ */
+async function booxPlumbing(startupMs: number) {
+  const lib = useLibrary();
+  const log: Record<string, unknown> = { startupMs };
+  const mark = (k: string, v: unknown) => {
+    log[k] = v;
+    console.info("boox-check", k, v);
+  };
+  const nb = await lib.createNotebook(`BOOX check ${new Date().toISOString()}`, "letter", { kind: "ruled", spacing: 24 });
+  if (!nb) throw new Error("could not create notebook");
+  const editor = await until(() => benchHooks.editor);
+  await until(() => editor.session && editor.nativeIsVisible, 30000);
+  mark("nativeKind", editor.nativeSurface?.kind);
+  mark("nativeCapabilities", editor.nativeSurface?.capabilities);
+  await sleep(1500);
+  const pts: number[] = [];
+  for (let i = 0; i <= 40; i++) pts.push(90 + i * 11, 200 + (i % 2 ? 36 : 0) + i * 2, 0.25 + i * 0.015);
+  const t0 = performance.now();
+  await editor.nativeSurface!.injectTestStroke!(pts);
+  await until(() => editor.session!.page.elements.length === 1, 10000);
+  mark("nativeEventToModelMs", performance.now() - t0);
+  const t1 = performance.now();
+  await editor.session!.flush();
+  mark("modelToDurableMs", performance.now() - t1);
+  const el = editor.session!.page.elements[0] as any;
+  mark("stroke", { points: el.points.length, input: el.input, first: el.points[0], last: el.points[el.points.length - 1], width: el.width, color: el.color });
+  mark("phaseA_nativeVisible_at", Date.now());
+  await sleep(8000); // screenshot A: native layer owns the ink
+  editor.setTool("text");
+  mark("phaseB_webVisible_at", Date.now());
+  await sleep(8000); // screenshot B: web layer shows the same stroke (alignment)
+  editor.setTool("pen");
+  await until(() => editor.nativeIsVisible, 10000);
+  editor.undo();
+  await sleep(2500);
+  mark("afterUndo", { model: editor.session!.page.elements.length, native: ((await editor.nativeMetrics()) as any)?.strokeCount });
+  editor.redo();
+  await sleep(2500);
+  mark("afterRedo", { model: editor.session!.page.elements.length, native: ((await editor.nativeMetrics()) as any)?.strokeCount });
+  await editor.session!.flush();
+  // large document through the native surface (M00 "Bench B" equivalent: load)
+  for (const n of [1000, 5000, 10000]) {
+    const { notebook, page } = await api.createPage(nb.id, undefined, { kind: "blank", spacing: 24 }, "custom", { width: SCENE_WIDTH, height: SCENE_HEIGHT });
+    await api.importM00Strokes(nb.id, page.id, JSON.stringify(generateScene(n)));
+    lib.current = notebook;
+    const tl = performance.now();
+    lib.currentPageId = page.id;
+    await until(() => editor.session?.page.id === page.id && editor.session.page.elements.length === n, 120000);
+    const loadMs = performance.now() - tl;
+    await sleep(3000);
+    const m = (await editor.nativeMetrics()) as any;
+    const series = m?.timings ?? m?.series ?? {};
+    const redraw = editor.fullRedraw();
+    const proc = await api.procStats().catch(() => null);
+    mark(`scene${n}`, { webLoadMs: loadMs, nativeStrokeCount: m?.strokeCount, nativeLoadRender: series.load_render_ms ?? null, nativeLoadParse: series.load_parse_ms ?? null, webFullRedrawMs: redraw, rssBytes: proc?.rssBytes ?? null });
+  }
+  log.metrics = await editor.nativeMetrics().catch(() => null);
+  await api.writePerf(`m01-boox-check`, JSON.stringify(log, null, 2));
+  mark("done", true);
+}
+
 export async function runAutobench(mode: string) {
   const startupMs = await api.startupMs();
   if (mode.includes("open")) return openLargest(mode, startupMs);
+  if (mode.includes("boox")) return booxPlumbing(startupMs);
   const lib = useLibrary();
   const quick = mode.includes("quick");
   const sizes = quick ? [1000] : [1000, 5000, 10000];

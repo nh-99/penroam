@@ -166,7 +166,7 @@ pub fn create_page(
     let mut lib = lib!(state);
     if let Some(size) = size {
         // explicit size (custom paper): used by the benchmark harness
-        let t = template.unwrap_or_else(|| Template {
+        let t = template.unwrap_or(Template {
             kind: TemplateKind::Blank,
             spacing: 24.0,
         });

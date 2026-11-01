@@ -31,3 +31,4 @@ plugins/tauri-plugin-native-ink/ios/.tauri/
 plugins/*/permissions/schemas/
 reference/m00-tauri-app/plugins/*/android/.tauri/
 reference/m00-tauri-app/plugins/*/ios/.tauri/
+plugins/*/.tauri/

@@ -1,0 +1,19 @@
+move 1037 32
+down 1
+up 1
+sleep 500
+type PDF annotations
+key Return
+sleep 2000
+move 1170 24
+down 1
+up 1
+sleep 2000
+shot dialog
+key C-l
+sleep 300
+type /home/noah/Documents/code/rust/Penroam/tests/fixtures/pdf/mixed-sizes-rotations.pdf
+sleep 300
+key Return
+sleep 4000
+shot pdf-imported

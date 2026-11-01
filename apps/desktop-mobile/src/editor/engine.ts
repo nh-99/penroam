@@ -1390,6 +1390,14 @@ export class InkEditor {
     await this.nativeQueue;
   }
 
+  get nativeSurface(): NativeInkSurface | null {
+    return this.native;
+  }
+
+  get nativeIsVisible(): boolean {
+    return this.nativeVisible;
+  }
+
   async nativeMetrics() {
     return this.native && this.nativeMounted ? this.native.metrics() : null;
   }

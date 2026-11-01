@@ -83,6 +83,7 @@ pub fn run() {
             bench::startup_ms,
             bench::write_perf,
             bench::autobench_requested,
+            bench::log_line,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Penroam")

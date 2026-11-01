@@ -1,0 +1,554 @@
+{
+  "app": "tauri",
+  "workload": "D-large-document",
+  "exportedAt": "2026-11-02T18:09:38.390Z",
+  "system": {
+    "os": "linux",
+    "arch": "x86_64",
+    "family": "unix",
+    "kernel": "7.2.6-76070206-generic",
+    "webviewVersion": "2.52.6",
+    "tauriVersion": "2.12.5",
+    "appVersion": "0.1.0",
+    "sessionType": "wayland",
+    "desktop": "GNOME"
+  },
+  "viewport": {
+    "width": 1280,
+    "height": 733,
+    "dpr": 2
+  },
+  "apis": {
+    "pointerEvents": true,
+    "pointerRawUpdate": false,
+    "getCoalescedEvents": true,
+    "getPredictedEvents": true,
+    "setPointerCapture": true,
+    "offscreenCanvas": true,
+    "timestampClockOk": null,
+    "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+    "devicePixelRatio": 2
+  },
+  "results": [
+    {
+      "strokes": 100,
+      "trial": 0,
+      "generateMs": 2,
+      "initialRenderMs": 18,
+      "rebuildMs": 4,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 16.000000000000114,
+      "replayIntervalMaxMs": 19,
+      "jsHeapBytes": null,
+      "treeRssBytes": 525905920,
+      "mainRssBytes": 222965760
+    },
+    {
+      "strokes": 100,
+      "trial": 1,
+      "generateMs": 2,
+      "initialRenderMs": 4,
+      "rebuildMs": 4,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1.0000000000001137,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 16.000000000000114,
+      "replayIntervalMaxMs": 20,
+      "jsHeapBytes": null,
+      "treeRssBytes": 527679488,
+      "mainRssBytes": 222957568
+    },
+    {
+      "strokes": 100,
+      "trial": 2,
+      "generateMs": 0,
+      "initialRenderMs": 4,
+      "rebuildMs": 4,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 16,
+      "replayIntervalMaxMs": 20.000000000000227,
+      "jsHeapBytes": null,
+      "treeRssBytes": 526491648,
+      "mainRssBytes": 222978048
+    },
+    {
+      "strokes": 1000,
+      "trial": 0,
+      "generateMs": 5,
+      "initialRenderMs": 27,
+      "rebuildMs": 27,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 17,
+      "replayIntervalMaxMs": 22.999999999999773,
+      "jsHeapBytes": null,
+      "treeRssBytes": 539140096,
+      "mainRssBytes": 222908416
+    },
+    {
+      "strokes": 1000,
+      "trial": 1,
+      "generateMs": 4,
+      "initialRenderMs": 25,
+      "rebuildMs": 26,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 17,
+      "replayIntervalMaxMs": 20,
+      "jsHeapBytes": null,
+      "treeRssBytes": 547049472,
+      "mainRssBytes": 222920704
+    },
+    {
+      "strokes": 1000,
+      "trial": 2,
+      "generateMs": 7,
+      "initialRenderMs": 25,
+      "rebuildMs": 26.000000000000455,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 17,
+      "replayIntervalMaxMs": 20,
+      "jsHeapBytes": null,
+      "treeRssBytes": 554229760,
+      "mainRssBytes": 222932992
+    },
+    {
+      "strokes": 5000,
+      "trial": 0,
+      "generateMs": 19,
+      "initialRenderMs": 131,
+      "rebuildMs": 131,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 17,
+      "replayIntervalMaxMs": 20,
+      "jsHeapBytes": null,
+      "treeRssBytes": 627752960,
+      "mainRssBytes": 222916608
+    },
+    {
+      "strokes": 5000,
+      "trial": 1,
+      "generateMs": 20,
+      "initialRenderMs": 120,
+      "rebuildMs": 131,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1.0000000000009095,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 16,
+      "replayIntervalMaxMs": 20,
+      "jsHeapBytes": null,
+      "treeRssBytes": 662409216,
+      "mainRssBytes": 222920704
+    },
+    {
+      "strokes": 5000,
+      "trial": 2,
+      "generateMs": 19,
+      "initialRenderMs": 120,
+      "rebuildMs": 130,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 17,
+      "replayIntervalMaxMs": 24.99999999999909,
+      "jsHeapBytes": null,
+      "treeRssBytes": 700125184,
+      "mainRssBytes": 222924800
+    },
+    {
+      "strokes": 10000,
+      "trial": 0,
+      "generateMs": 36,
+      "initialRenderMs": 241,
+      "rebuildMs": 217,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 17,
+      "replayIntervalMaxMs": 20,
+      "jsHeapBytes": null,
+      "treeRssBytes": 734760960,
+      "mainRssBytes": 222924800
+    },
+    {
+      "strokes": 10000,
+      "trial": 1,
+      "generateMs": 33,
+      "initialRenderMs": 223.0000000000009,
+      "rebuildMs": 187.9999999999991,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1.0000000000009095,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 16,
+      "replayIntervalMaxMs": 20.00000000000091,
+      "jsHeapBytes": null,
+      "treeRssBytes": 736985088,
+      "mainRssBytes": 222924800
+    },
+    {
+      "strokes": 10000,
+      "trial": 2,
+      "generateMs": 31,
+      "initialRenderMs": 203,
+      "rebuildMs": 191.0000000000009,
+      "replayFrameMedianMs": 0,
+      "replayFrameMaxMs": 1.0000000000009095,
+      "replayFrames": 25,
+      "replayIntervalMedianMs": 16,
+      "replayIntervalMaxMs": 22.99999999999909,
+      "jsHeapBytes": null,
+      "treeRssBytes": 766439424,
+      "mainRssBytes": 222928896
+    }
+  ],
+  "metrics": {
+    "clock": "performance.now",
+    "counters": {
+      "api_unavailable": 1,
+      "resize": 3,
+      "full_rebuilds": 28,
+      "stroke_finalized": 12,
+      "frames_over_budget": 5,
+      "clear_canvas": 1
+    },
+    "timings": {
+      "full_rebuild_ms": {
+        "count": 28,
+        "retained": 28,
+        "median": 27,
+        "p95": 223.0000000000009,
+        "max": 241,
+        "min": 0.9999999999990905,
+        "mean": 79.7857142857143
+      },
+      "startup_to_first_frame_ms": {
+        "count": 1,
+        "retained": 1,
+        "median": 2829.9999999580905,
+        "p95": 2829.9999999580905,
+        "max": 2829.9999999580905,
+        "min": 2829.9999999580905,
+        "mean": 2829.9999999580905
+      },
+      "preview_render_submitted_ms": {
+        "count": 300,
+        "retained": 300,
+        "median": 0,
+        "p95": 1,
+        "max": 1.0000000000009095,
+        "min": 0,
+        "mean": 0.15000000000000113
+      },
+      "frame_interval_ms": {
+        "count": 293,
+        "retained": 293,
+        "median": 16.000000000000114,
+        "p95": 20,
+        "max": 139,
+        "min": 0,
+        "mean": 17.43686006825939
+      },
+      "persistent_render_completed_ms": {
+        "count": 12,
+        "retained": 12,
+        "median": 0,
+        "p95": 1,
+        "max": 1,
+        "min": 0,
+        "mean": 0.2499999999999242
+      }
+    },
+    "events": [
+      {
+        "name": "api_unavailable",
+        "t": 82,
+        "api": "pointerRawUpdate"
+      },
+      {
+        "name": "resize",
+        "t": 85,
+        "w": 1280,
+        "h": 789,
+        "dpr": 2
+      },
+      {
+        "name": "resize",
+        "t": 99,
+        "w": 1280,
+        "h": 789,
+        "dpr": 2
+      },
+      {
+        "name": "resize",
+        "t": 373,
+        "w": 1280,
+        "h": 733,
+        "dpr": 2
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 569.0000000000001,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 1038,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 1502,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 2019.0000000000002,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 2521,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 3038.0000000000005,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 3769,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 4485,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 5204,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 6152,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 7052.000000000001,
+        "points": 25
+      },
+      {
+        "name": "stroke_finalized",
+        "t": 7935.000000000001,
+        "points": 25
+      },
+      {
+        "name": "clear_canvas",
+        "t": 7944
+      }
+    ],
+    "strokes": [
+      {
+        "id": "eaf7b677-9ab1-4e49-800d-69de707889c3",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 380,
+        "commitMs": 1,
+        "medianDtMs": 17,
+        "maxDtMs": 19,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "6e22e072-b28d-4058-ac42-2d5832286b5f",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 382.0000000000001,
+        "commitMs": 1,
+        "medianDtMs": 16.000000000000114,
+        "maxDtMs": 20,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "0cc8e9a9-96a0-4cfd-8436-f3c086b10b95",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 378,
+        "commitMs": 0,
+        "medianDtMs": 16,
+        "maxDtMs": 20.000000000000227,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "29bc8a7f-a045-4c09-9707-a38854e2fbf8",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 385,
+        "commitMs": 0,
+        "medianDtMs": 17,
+        "maxDtMs": 22.999999999999773,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "f14cde45-d53b-4c0e-ba47-6bb6125f7e8e",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 368,
+        "commitMs": 0,
+        "medianDtMs": 17,
+        "maxDtMs": 20,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "9e763220-d174-409f-8bec-c76eb416713d",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 381,
+        "commitMs": 0,
+        "medianDtMs": 17,
+        "maxDtMs": 20,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "edee20d3-f9b4-4186-8fe7-f86ec4412e94",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 373,
+        "commitMs": 0,
+        "medianDtMs": 17,
+        "maxDtMs": 20,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "a1feb1a3-1042-4408-9f51-b58e1712eab2",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 373,
+        "commitMs": 0,
+        "medianDtMs": 16,
+        "maxDtMs": 20,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "71954a0c-0191-4452-87f7-373cf4003e2a",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 373.0000000000009,
+        "commitMs": 0,
+        "medianDtMs": 17,
+        "maxDtMs": 24.99999999999909,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "2c19bf73-e09a-4804-bc93-2792f59f5e8a",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 377,
+        "commitMs": 0,
+        "medianDtMs": 17,
+        "maxDtMs": 20,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "eab12162-0027-44f7-82bb-72e78d290b3f",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 381.9999999999991,
+        "commitMs": 0,
+        "medianDtMs": 16.99999999999909,
+        "maxDtMs": 20.00000000000091,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      },
+      {
+        "id": "17d5dfde-beeb-4df4-b79c-a531b9fe5845",
+        "device": "script",
+        "samples": 25,
+        "coalescedSamples": 0,
+        "predictedSamplesShown": 0,
+        "durationMs": 383,
+        "commitMs": 0.9999999999990905,
+        "medianDtMs": 16,
+        "maxDtMs": 22.99999999999909,
+        "timeGaps": 0,
+        "spatialJumps": 0
+      }
+    ],
+    "errors": [],
+    "info": {
+      "apis": {
+        "pointerEvents": true,
+        "pointerRawUpdate": false,
+        "getCoalescedEvents": true,
+        "getPredictedEvents": true,
+        "setPointerCapture": true,
+        "offscreenCanvas": true,
+        "timestampClockOk": null,
+        "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+        "devicePixelRatio": 2
+      },
+      "sampleEvent": "pointermove",
+      "lastRebuild": {
+        "strokes": 0,
+        "drawn": 0,
+        "ms": 0.9999999999990905
+      },
+      "startupMs": 2829.9999999580905,
+      "system": {
+        "os": "linux",
+        "arch": "x86_64",
+        "family": "unix",
+        "kernel": "7.2.6-76070206-generic",
+        "webviewVersion": "2.52.6",
+        "tauriVersion": "2.12.5",
+        "appVersion": "0.1.0",
+        "sessionType": "wayland",
+        "desktop": "GNOME"
+      }
+    }
+  }
+}

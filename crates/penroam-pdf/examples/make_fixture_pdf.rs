@@ -11,7 +11,8 @@ fn name(s: &str) -> Object {
 }
 
 fn main() {
-    let pages: &[(&str, f32, f32, i64, Option<[f32; 4]>)] = &[
+    type PageSpec<'a> = (&'a str, f32, f32, i64, Option<[f32; 4]>);
+    let pages: &[PageSpec] = &[
         ("1 Letter portrait", 612.0, 792.0, 0, None),
         (
             "2 A4 cropped",

@@ -1,0 +1,16 @@
+move 120 210
+down 1
+up 1
+sleep 2500
+key p
+drag 700 700 900 650 25
+drag 900 650 1000 760 25
+sleep 300
+kill
+start
+sleep 1500
+move 120 210
+down 1
+up 1
+sleep 2500
+shot after-crash

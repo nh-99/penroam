@@ -1,0 +1,48 @@
+move 120 210
+down 1
+up 1
+sleep 2500
+key Next
+sleep 1500
+key r
+drag 300 500 700 420 25
+drag 700 420 900 560 25
+key t
+move 300 620
+down 1
+up 1
+sleep 300
+type Annotated on page 1
+key Escape
+sleep 400
+key p
+key Next
+sleep 1500
+drag 300 300 900 300 25
+key Next
+sleep 1500
+drag 300 200 800 500 25
+key t
+move 320 260
+down 1
+up 1
+sleep 300
+type Rotated 90 note
+key Escape
+sleep 300
+key p
+key Next
+sleep 1500
+drag 300 300 700 300 25
+key Next
+sleep 1500
+drag 300 250 800 250 25
+key Next
+sleep 1500
+shot p6-annotated
+move 1212 24
+down 1
+up 1
+sleep 600
+shot export-menu
+key Escape

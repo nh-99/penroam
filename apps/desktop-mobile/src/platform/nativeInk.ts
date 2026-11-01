@@ -61,6 +61,8 @@ export interface NativeInkSurface {
   removeStrokes(ids: string[]): Promise<void>;
   commitAck(strokeId: string): Promise<void>;
   metrics(): Promise<Record<string, unknown>>;
+  /** On-device plumbing test only: commit a stroke through the native post-pen-up path. */
+  injectTestStroke?(points: number[]): Promise<void>;
 }
 
 // --------------------------------------------------------- M00 interop --
@@ -199,6 +201,9 @@ class PluginSurface implements NativeInkSurface {
   }
   metrics() {
     return this.call("getMetrics");
+  }
+  injectTestStroke(points: number[]) {
+    return this.call("injectTestStroke", { points });
   }
 }
 

@@ -29,22 +29,37 @@ watch(
 onMounted(async () => {
   await lib.refresh();
   if (!hasHost()) return;
-  unlisten = await listen("penroam://close-requested", async () => {
-    try {
-      await flushEverything();
-    } catch (e) {
-      // Rust still flushes its own state; unsaved in-memory ops are reported
-      console.error("flush before exit failed", e);
-    }
-    await api.exitApp();
+  try {
+    unlisten = await listen("penroam://close-requested", async () => {
+      try {
+        await flushEverything();
+      } catch (e) {
+        // Rust still flushes its own state; unsaved in-memory ops are reported
+        console.error("flush before exit failed", e);
+      }
+      await api.exitApp();
+    });
+  } catch (e) {
+    console.error("close handler not installed", e);
+  }
+  try {
+    const n = await detectNativeInk();
+    nativeKind.value = n?.kind ?? null;
+    if (n?.kind === "boox") settings.preferEpaper();
+  } catch (e) {
+    console.error("native ink detection failed", e);
+  }
+  const bench = await api.autobenchRequested().catch((e) => {
+    console.error("autobench query failed", e);
+    return null;
   });
-  const n = await detectNativeInk();
-  nativeKind.value = n?.kind ?? null;
-  if (n?.kind === "boox") settings.preferEpaper();
-  const bench = await api.autobenchRequested().catch(() => null);
   if (bench) {
+    console.info("autobench", bench);
     const { runAutobench } = await import("./bench/autobench");
-    await runAutobench(bench);
+    await runAutobench(bench).catch((e) => {
+      console.error("benchmark failed", e);
+      ui.error(`Benchmark failed: ${e?.message ?? e}`);
+    });
   }
 });
 onBeforeUnmount(() => unlisten?.());
