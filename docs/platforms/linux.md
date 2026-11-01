@@ -26,7 +26,8 @@ Xephyr X server (`Xephyr :7 -screen 1300x940`; software GL). Session scripts are
 | `pdf-import` | PDF imported through the GTK file chooser; PDF.js background; 5 pages appended after the current page |
 | `pdf-annotate` | ink/text on Letter, cropped A4, Rotate 90/180/270 pages; thumbnails show annotations; page navigation by keyboard |
 | `export-pdf-and-penroam` | annotated PDF and `.penroam` written through the GTK save dialog; PDF rendered with poppler (`07-exported-annotated-pdf-poppler.png`): annotations upright and in place on every rotation, crop box kept |
-| `.penroam` re-import | archive imported into a fresh library through the dialog, re-exported, `tools/compare-penroam.py` → **IDENTICAL** |
+| `page-move-delete`, `page-restore` | page menu → Move up, Delete page → trash section → Restore; `notebook.json` order and `trashedPages` checked after each step (restored page returns to its former index). This session found and fixed a real bug: the page menu was clipped by the sidebar's scroll container (now a fixed-position popover) |
+| `.penroam` re-import | archive imported into a fresh library through the dialog, re-exported, `tools/compare-penroam.py` → **IDENTICAL**; thumbnails for never-opened pages rendered in the background (`11-linux-imported-thumbnails.png`) |
 
 Not covered by real input: pen/tablet pressure (no stylus on this machine; pressure paths are
 unit-tested and exercised on BOOX/iPad), touch pinch (unit-tested).

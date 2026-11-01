@@ -1,0 +1,9 @@
+move 140 878
+down 1
+up 1
+sleep 800
+move 120 872
+down 1
+up 1
+sleep 1500
+shot restored

@@ -1,0 +1,21 @@
+move 120 210
+down 1
+up 1
+sleep 3000
+move 141 420
+down 1
+up 1
+sleep 600
+move 80 513
+down 1
+up 1
+sleep 1500
+move 141 302
+down 1
+up 1
+sleep 600
+move 90 475
+down 1
+up 1
+sleep 1500
+shot after-move-delete
