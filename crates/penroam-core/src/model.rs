@@ -311,6 +311,9 @@ pub struct InkStroke {
     #[serde(default)]
     #[ts(type = "Record<string, unknown>")]
     pub input: Extra,
+    /// Omitted only inside the binary page encoding's metadata section,
+    /// where points live in the column block (see `crate::binary`).
+    #[serde(default)]
     pub points: Vec<InkPoint>,
     #[serde(flatten)]
     #[ts(skip)]
@@ -422,6 +425,24 @@ impl Page {
             elements: Vec::new(),
             metadata: Extra::new(),
             extra: Extra::new(),
+        }
+    }
+
+    /// Everything except the elements (used by the binary encoder).
+    pub fn clone_without_elements(&self) -> Page {
+        Page {
+            schema_version: self.schema_version,
+            id: self.id,
+            paper: self.paper,
+            size: self.size,
+            template: self.template.clone(),
+            background: self.background.clone(),
+            revision: self.revision,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            elements: Vec::new(),
+            metadata: self.metadata.clone(),
+            extra: self.extra.clone(),
         }
     }
 

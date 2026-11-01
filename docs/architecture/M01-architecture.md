@@ -71,7 +71,9 @@ Full spec: `docs/format/penroam-format.md`.
 * Stroke points keep every M00 field (`x, y, pressure, tiltX, tiltY, timeUs`) plus optional
   `twist`/`flags`; the stroke `input` map keeps platform metadata verbatim (Onyx stream counts,
   raw pressure range, coalesced counts…). Smoothing is derived at render time.
-* Live library: `notebooks/<id>/notebook.json`, `pages/<id>.json` + `pages/<id>.journal`,
+* Live library: `notebooks/<id>/notebook.json`, `pages/<id>.prp` (compact lossless binary page
+  encoding, format spec §6; legacy `pages/<id>.json` snapshots are read and converted) +
+  `pages/<id>.journal`,
   `assets/<sha256>`. **No database**: the canonical files are the index, so a crash cannot leave
   an index out of sync (the plan allowed SQLite only as a rebuildable cache; not needed at M01
   scale — `list_notebooks` reads small `notebook.json` files).

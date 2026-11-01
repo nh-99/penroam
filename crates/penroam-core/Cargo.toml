@@ -12,5 +12,8 @@ serde_json.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 ts-rs.workspace = true
+crc32fast = "1"
+flate2 = "1"
 
 [dev-dependencies]
+

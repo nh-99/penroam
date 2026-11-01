@@ -455,10 +455,8 @@ fn hostile_archives_are_rejected() {
     // tampered page bytes -> checksum mismatch
     let mut e = entries.clone();
     let i = e.iter().position(|(n, _)| n.starts_with("pages/")).unwrap();
-    e[i].1 = String::from_utf8(e[i].1.clone())
-        .unwrap()
-        .replace("\"x\"", "\"y\"")
-        .into_bytes();
+    let mid = e[i].1.len() / 2;
+    e[i].1[mid] ^= 0x01;
     check(&mut lib, rebuild(&e), "checksum");
 
     // missing page
@@ -481,9 +479,15 @@ fn hostile_archives_are_rejected() {
     // page references an asset that is not in the archive
     let mut e = entries.clone();
     let pi = e.iter().position(|(n, _)| n.starts_with("pages/")).unwrap();
-    let mut p: serde_json::Value = serde_json::from_slice(&e[pi].1).unwrap();
-    p["background"] = serde_json::json!({"assetHash": "b".repeat(64), "pageIndex": 0, "mediaBox": [0,0,1,1], "cropBox": [0,0,1,1], "rotation": 0});
-    e[pi].1 = serde_json::to_vec(&p).unwrap();
+    let mut p = penroam_core::binary::decode_page(&e[pi].1).unwrap();
+    p.background = Some(PdfBackgroundRef {
+        asset_hash: "b".repeat(64),
+        page_index: 0,
+        media_box: [0.0, 0.0, 1.0, 1.0],
+        crop_box: [0.0, 0.0, 1.0, 1.0],
+        rotation: 0,
+    });
+    e[pi].1 = penroam_core::binary::encode_page(&p);
     let mi = e.iter().position(|(n, _)| n == "manifest.json").unwrap();
     let mut m: serde_json::Value = serde_json::from_slice(&e[mi].1).unwrap();
     m["pages"][0]["sha256"] = sha256_hex(&e[pi].1).into();
@@ -536,4 +540,84 @@ fn stale_revision_is_a_conflict_not_an_overwrite() {
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::Conflict);
     assert_eq!(lib.load_page(nb.id, page.id).unwrap().elements.len(), 1);
+}
+
+/// Archives written before the binary page encoding (format 1, JSON pages)
+/// and live libraries with JSON snapshots keep working.
+#[test]
+fn legacy_json_archives_and_snapshots_still_load() {
+    let (_d, mut lib) = new_lib();
+    let (nb, page) = lib
+        .create_notebook("Legacy", PageDefaults::default(), None)
+        .unwrap();
+    lib.apply_page_operations(nb.id, page.id, &add(0, fixture_elements()))
+        .unwrap();
+    let mut buf = Cursor::new(Vec::new());
+    lib.export_archive(nb.id, &mut buf, "test").unwrap();
+    buf.set_position(0);
+    let expected = lib.load_page(nb.id, page.id).unwrap();
+
+    // rewrite the archive as format 1: pages/<id>.json
+    let mut z = zip::ZipArchive::new(buf).unwrap();
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut b = Vec::new();
+        std::io::Read::read_to_end(&mut f, &mut b).unwrap();
+        entries.push((f.name().to_string(), b));
+    }
+    let mut manifest: serde_json::Value = serde_json::from_slice(
+        &entries
+            .iter()
+            .find(|(n, _)| n == "manifest.json")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    manifest["formatVersion"] = 1.into();
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    for (n, b) in &entries {
+        if let Some(id) = n
+            .strip_prefix("pages/")
+            .and_then(|r| r.strip_suffix(".prp"))
+        {
+            let json = serde_json::to_vec(&penroam_core::binary::decode_page(b).unwrap()).unwrap();
+            for mp in manifest["pages"].as_array_mut().unwrap() {
+                if mp["id"] == id {
+                    mp["path"] = format!("pages/{id}.json").into();
+                    mp["sha256"] = sha256_hex(&json).into();
+                    mp["bytes"] = json.len().into();
+                }
+            }
+            out.push((format!("pages/{id}.json"), json));
+        } else if n != "manifest.json" {
+            out.push((n.clone(), b.clone()));
+        }
+    }
+    out.push((
+        "manifest.json".into(),
+        serde_json::to_vec(&manifest).unwrap(),
+    ));
+    let (d2, mut other) = new_lib();
+    let rep = other.import_archive(rebuild(&out)).unwrap();
+    assert_eq!(other.load_page(rep.notebook.id, page.id).unwrap(), expected);
+
+    // a live JSON snapshot (pre-binary library) loads and is converted on the next write
+    drop(other);
+    let pages = d2
+        .path()
+        .join(format!("library/notebooks/{}/pages", rep.notebook.id));
+    assert!(pages.join(format!("{}.json", page.id)).exists());
+    let mut other = Library::open(d2.path().join("library")).unwrap();
+    assert_eq!(other.load_page(rep.notebook.id, page.id).unwrap(), expected);
+    other
+        .apply_page_operations(
+            rep.notebook.id,
+            page.id,
+            &add(expected.revision, vec![text(500, "new")]),
+        )
+        .unwrap();
+    other.flush_all().unwrap();
+    assert!(pages.join(format!("{}.prp", page.id)).exists());
+    assert!(!pages.join(format!("{}.json", page.id)).exists());
 }

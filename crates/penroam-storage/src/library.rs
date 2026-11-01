@@ -3,7 +3,7 @@
 //! ```text
 //! <root>/library.json                       format marker {"format":"penroam-library","version":1}
 //! <root>/notebooks/<nb>/notebook.json       canonical notebook (atomic writes)
-//! <root>/notebooks/<nb>/pages/<page>.json   canonical page snapshot (atomic writes)
+//! <root>/notebooks/<nb>/pages/<page>.prp    canonical page snapshot, binary (atomic writes)
 //! <root>/notebooks/<nb>/pages/<page>.journal  fsynced operation batches since the snapshot (JSON lines)
 //! <root>/notebooks/<nb>/assets/<sha256>     immutable attachments
 //! <root>/notebooks/<nb>/thumbs/<page>.png   derived thumbnail cache (never exported)
@@ -143,7 +143,12 @@ impl Library {
     fn nb_dir(&self, nb: Uuid) -> PathBuf {
         self.root.join("notebooks").join(nb.to_string())
     }
+    /// Canonical page snapshot: binary `.prp` (see `penroam_core::binary`).
     fn page_path(&self, nb: Uuid, page: Uuid) -> PathBuf {
+        self.nb_dir(nb).join("pages").join(format!("{page}.prp"))
+    }
+    /// Pre-binary snapshots (JSON); read if no `.prp` exists, removed once a `.prp` is written.
+    fn legacy_page_path(&self, nb: Uuid, page: Uuid) -> PathBuf {
         self.nb_dir(nb).join("pages").join(format!("{page}.json"))
     }
     fn journal_path(&self, nb: Uuid, page: Uuid) -> PathBuf {
@@ -546,8 +551,14 @@ impl Library {
     }
 
     fn read_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<CachedPage> {
-        let snap = fs::read(self.page_path(nb_id, page_id))?;
-        let mut page = page_from_slice(&snap)
+        let snap = match fs::read(self.page_path(nb_id, page_id)) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                fs::read(self.legacy_page_path(nb_id, page_id))?
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let mut page = decode_page_bytes(&snap)
             .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {e}")))?;
         validate_page(&page)
             .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {}", e.0)))?;
@@ -619,8 +630,12 @@ impl Library {
     }
 
     fn write_page_snapshot(&self, nb_id: Uuid, page: &Page) -> Result<u64> {
-        let bytes = serde_json::to_vec(page).map_err(|e| StorageError::Io(e.to_string()))?;
+        let bytes = penroam_core::binary::encode_page(page);
         write_atomic(&self.page_path(nb_id, page.id), &bytes)?;
+        let legacy = self.legacy_page_path(nb_id, page.id);
+        if legacy.exists() {
+            fs::remove_file(legacy)?;
+        }
         Ok(bytes.len() as u64)
     }
 
@@ -829,6 +844,15 @@ impl Library {
     #[doc(hidden)]
     pub fn crash_for_tests(self) {
         std::mem::forget(self);
+    }
+}
+
+/// Decodes a page snapshot in either encoding: binary `.prp` or legacy JSON.
+pub fn decode_page_bytes(bytes: &[u8]) -> std::result::Result<Page, String> {
+    if penroam_core::binary::is_binary_page(bytes) {
+        penroam_core::binary::decode_page(bytes).map_err(|e| e.to_string())
+    } else {
+        page_from_slice(bytes).map_err(|e| e.to_string())
     }
 }
 

@@ -2,6 +2,7 @@
 //! logic around it (validation, semantic operations, brush geometry, text
 //! layout, migrations). No I/O lives here; see `penroam-storage`.
 
+pub mod binary;
 pub mod geometry;
 pub mod migrate;
 pub mod model;

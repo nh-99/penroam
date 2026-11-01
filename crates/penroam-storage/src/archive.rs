@@ -4,7 +4,8 @@
 //! ```text
 //! mimetype                 "application/vnd.penroam.notebook+zip" (first entry, stored)
 //! manifest.json            format marker, versions, notebook, page + asset index
-//! pages/<uuid>.json        one canonical page per file (journal folded in)
+//! pages/<uuid>.prp         one canonical page per file, binary (journal folded in;
+//!                          format 1 archives used pages/<uuid>.json and still import)
 //! assets/<sha256>          original attachment bytes (PDFs, images)
 //! ```
 //!
@@ -16,7 +17,7 @@
 
 use crate::error::{Result, StorageError};
 use crate::library::{sha256_hex, Library};
-use penroam_core::migrate::{notebook_from_value, page_from_slice};
+use penroam_core::migrate::notebook_from_value;
 use penroam_core::validate::{is_sha256_hex, validate_notebook, validate_page};
 use penroam_core::*;
 use serde::{Deserialize, Serialize};
@@ -28,7 +29,9 @@ use uuid::Uuid;
 
 pub const MIMETYPE: &str = "application/vnd.penroam.notebook+zip";
 pub const FORMAT: &str = "penroam-notebook";
-pub const FORMAT_VERSION: u32 = 1;
+/// 1: pages as `pages/<uuid>.json`. 2: pages as binary `pages/<uuid>.prp`
+/// (`penroam_core::binary`). Import reads both.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Import limits.
 pub mod limits {
@@ -114,17 +117,15 @@ impl Library {
         let mut pages = Vec::new();
         let mut used_assets: Vec<String> = Vec::new();
         for pid in nb.page_order.clone() {
-            let bytes = self
-                .with_page(nb_id, pid, |p| {
-                    for a in p.asset_refs() {
-                        if !used_assets.iter().any(|u| u == a) {
-                            used_assets.push(a.to_string());
-                        }
+            let bytes = self.with_page(nb_id, pid, |p| {
+                for a in p.asset_refs() {
+                    if !used_assets.iter().any(|u| u == a) {
+                        used_assets.push(a.to_string());
                     }
-                    serde_json::to_vec(p)
-                })?
-                .map_err(|e| StorageError::Io(e.to_string()))?;
-            let path = format!("pages/{pid}.json");
+                }
+                penroam_core::binary::encode_page(p)
+            })?;
+            let path = format!("pages/{pid}.prp");
             zip.start_file(&path, deflated).map_err(zerr)?;
             zip.write_all(&bytes)?;
             pages.push(ManifestPage {
@@ -316,7 +317,12 @@ impl Library {
             }
             // pages
             for mp in &manifest.pages {
-                if mp.path != format!("pages/{}.json", mp.id) {
+                let ext = if manifest.format_version >= 2 {
+                    "prp"
+                } else {
+                    "json"
+                };
+                if mp.path != format!("pages/{}.{ext}", mp.id) {
                     return Err(StorageError::Archive(format!("bad page entry {}", mp.path)));
                 }
                 let bytes = read_entry(&mut zip, &mp.path, limits::MAX_PAGE)?;
@@ -326,7 +332,7 @@ impl Library {
                         mp.id
                     )));
                 }
-                let page = page_from_slice(&bytes)
+                let page = crate::library::decode_page_bytes(&bytes)
                     .map_err(|e| StorageError::Archive(format!("page {}: {e}", mp.id)))?;
                 validate_page(&page)
                     .map_err(|e| StorageError::Archive(format!("page {}: {}", mp.id, e.0)))?;
@@ -346,7 +352,7 @@ impl Library {
                 }
                 // canonical bytes are written verbatim: lossless
                 crate::fsutil::write_atomic(
-                    &stage.join("pages").join(format!("{}.json", mp.id)),
+                    &stage.join("pages").join(format!("{}.{ext}", mp.id)),
                     &bytes,
                 )?;
             }
@@ -395,7 +401,8 @@ fn entry_name_ok(name: &str) -> bool {
     }
     if let Some(rest) = name.strip_prefix("pages/") {
         return rest
-            .strip_suffix(".json")
+            .strip_suffix(".prp")
+            .or_else(|| rest.strip_suffix(".json"))
             .is_some_and(|id| Uuid::parse_str(id).is_ok_and(|u| u.to_string() == id));
     }
     if let Some(h) = name.strip_prefix("assets/") {

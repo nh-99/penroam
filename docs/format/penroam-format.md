@@ -36,7 +36,10 @@ TypeScript types are generated from them (`apps/desktop-mobile/src/generated`).
 
 `paper`: `letter` (612×792), `a4` (595.276×841.89), `custom`, `pdf`.
 
-## 3. Page (`pages/<uuid>.json`)
+## 3. Page (logical model; stored as binary `pages/<uuid>.prp`, §6)
+
+The page is shown here as JSON — the form used over IPC, in operations, and inside the
+`.prp` metadata section. On disk the ink points live in the compact binary column block.
 
 ```jsonc
 {
@@ -117,18 +120,19 @@ snapshot; journals are an implementation detail and are never exported.
 
 ```text
 mimetype            "application/vnd.penroam.notebook+zip" (first entry, stored)
-manifest.json       { format: "penroam-notebook", formatVersion: 1, schemaVersion: 1,
+manifest.json       { format: "penroam-notebook", formatVersion: 2, schemaVersion: 1,
                       generator, exportedAt, notebook,
-                      pages:  [{ id, path: "pages/<id>.json", sha256, bytes }],
+                      pages:  [{ id, path: "pages/<id>.prp", sha256, bytes }],
                       assets: [{ sha256, path: "assets/<sha256>", mediaType, byteSize }] }
-pages/<uuid>.json   canonical page (journal folded in), byte-identical on import
+pages/<uuid>.prp    canonical page, binary encoding (§6), journal folded in; byte-identical on import
 assets/<sha256>     original attachment bytes (PDFs are never rasterised)
 ```
 
+* Format 1 archives (pages as `pages/<uuid>.json`) are still imported.
 * The archive is a snapshot of live pages; trashed pages, thumbnails and journals are not
   included. Only assets referenced by exported pages are included.
 * Import checks: entry names are whitelisted (`mimetype`, `manifest.json`,
-  `pages/<uuid>.json`, `assets/<sha256>`; anything with `..`, `\`, `:`, NUL or a leading `/` is
+  `pages/<uuid>.prp`, `pages/<uuid>.json` (format 1), `assets/<sha256>`; anything with `..`, `\`, `:`, NUL or a leading `/` is
   rejected; other safe names are ignored with a warning); ≤ 25 000 entries; per-entry limits
   enforced on the *decompressed* byte count (manifest 32 MiB, page 512 MiB, asset 1 GiB, total
   4 GiB); compression ratio ≤ 200:1 for entries over 1 MiB; every page/asset SHA-256 verified;
@@ -136,3 +140,54 @@ assets/<sha256>     original attachment bytes (PDFs are never rasterised)
   validated (finite numbers, ranges, unique ids). Work happens in a staging directory and is
   moved into the library with one rename. If the notebook id already exists, the import
   becomes a copy with a new id.
+
+## 6. Binary page encoding (`.prp`, version 1)
+
+Used for live-library page snapshots (`notebooks/<nb>/pages/<page>.prp`) and archive pages.
+Reference implementations: `crates/penroam-core/src/binary.rs` (Rust, encoder + decoder) and
+`decode_prp` in `tools/compare-penroam.py` (independent Python decoder). Golden file:
+`tests/fixtures/format/sample-page-v1.prp`. All integers little-endian.
+
+```text
+offset  size  field
+0       4     magic "PRPG"
+4       2     version u16 (= 1). Newer versions are refused, never guessed at.
+6       2     flags u16: bit 0 = metadata is zlib-compressed (RFC 1950). Other bits must be 0.
+8       4     M = stored metadata length, u32
+12      M     metadata: the Page JSON (§3) with every ink stroke's "points" key omitted
+12+M    4     S = number of ink strokes, u32 (must equal the ink elements in metadata order)
+...           S point blocks, in the order the ink elements appear in metadata
+end-4   4     CRC-32 (IEEE, as zlib's crc32) of all preceding bytes
+```
+
+**Point block:** `varint n`; float columns `x`, `y`, `pressure`, `tiltX`, `tiltY`; int column
+`timeUs`; then `twist` and `flags`, each as *presence* + column. Presence byte: 0 = no point
+has it (no column follows), 1 = every point has it, 2 = a bitmap of ⌈n/8⌉ bytes follows (bit
+`i%8` of byte `i/8`), and the column covers only the points that have it (`twist` is a float
+column, `flags` an int column).
+
+**Varints** are unsigned LEB128 (≤ 10 bytes). **Zig-zag**: `(v << 1) ^ (v >> 63)`.
+
+**Float column**, one tag byte:
+
+| tag | encoding | decode |
+|---|---|---|
+| 0 CONST | one f64 | every value = that f64 (bit-identical) |
+| 1 DECIMAL | `u8 k` (0–6), then n zig-zag varint deltas | running sum `q`, value = `(f64)q / 10^k` |
+| 2 RAW | n × f64 | as stored |
+
+An encoder may use DECIMAL only if `(f64)q / 10^k` reproduces every value **bit-for-bit**
+(this excludes −0.0) and |q| < 2^53; otherwise RAW. Encoders pick the smallest such `k`
+(deterministic output).
+
+**Int column**: tag 0 CONST (one zig-zag varint), tag 1 DELTA (n zig-zag varint deltas,
+first from 0).
+
+Decoders must reject: bad magic or checksum, unknown version/flags/tags, `n` above the
+per-stroke point limit or larger than the remaining bytes, metadata that inflates beyond
+256 MiB, stroke-count mismatch, trailing bytes.
+
+Measured on the M00 10k-stroke scene (275 503 points): JSON 24.5 MB (89 B/point), `.prp`
+2.5 MB (9 B/point, including all per-stroke metadata); decode 27 ms vs 183 ms for JSON
+(`cargo run --release -p penroam-core --example page_codec_bench`). Lossless: every f64 and
+i64 round-trips bit-for-bit (`crates/penroam-core/tests/binary.rs`).

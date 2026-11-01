@@ -27,4 +27,9 @@ source: string,
  * Input diagnostics and platform metadata (M00 `input`), kept verbatim:
  * `api`, `device`, raw pressure range, coalesced counts, Onyx stream, ...
  */
-input: Record<string, unknown>, points: Array<InkPoint>, };
+input: Record<string, unknown>, 
+/**
+ * Omitted only inside the binary page encoding's metadata section,
+ * where points live in the column block (see `crate::binary`).
+ */
+points: Array<InkPoint>, };
