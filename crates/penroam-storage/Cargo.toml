@@ -15,6 +15,14 @@ thiserror.workspace = true
 sha2.workspace = true
 zip.workspace = true
 ts-rs.workspace = true
+crc32fast = "1"
+
+[features]
+# crash-injection points in fsutil (tests only)
+fault-injection = []
 
 [dev-dependencies]
+penroam-storage = { path = ".", features = ["fault-injection"] }
 tempfile.workspace = true
+penroam-pdf.workspace = true
+penroam-sync-protocol = { path = "../penroam-sync-protocol" }

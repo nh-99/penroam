@@ -1,5 +1,5 @@
-//! Penroam binary page encoding (`.prp`), version 1. Normative spec:
-//! `docs/format/penroam-format.md` §6.
+//! Penroam binary page encoding (`.prp`), file format version 1. Normative
+//! spec: `docs/formats/penroam-binary-v1.md`.
 //!
 //! The same idea as a custom container (magic + version + payload), but
 //! lossless for everything a page holds:
@@ -7,11 +7,15 @@
 //! ```text
 //! 0      4  magic "PRPG"
 //! 4      2  version u16 LE (= 1)
-//! 6      2  flags u16 LE: bit 0 = meta is zlib-compressed (RFC 1950); other bits 0
+//! 6      2  flags u16 LE. Bits 0-7 = required features (unknown -> refuse):
+//!           bit 0 = meta is zlib-compressed (RFC 1950). Bits 8-15 = optional
+//!           (unknown -> ignore): bit 8 = an extension area follows the
+//!           point blocks.
 //! 8      4  meta length M (stored bytes), u32 LE
 //! 12     M  meta: the Page as JSON (UTF-8) with every ink stroke's "points" omitted
 //! 12+M   4  ink stroke count S, u32 LE (= ink elements in meta order)
 //! ..        S point blocks (below)
+//! ..        [flag bit 8] u32 count, then count x (u32 tag, u32 len, len bytes)
 //! end-4  4  CRC-32 (IEEE) of every preceding byte, u32 LE
 //! ```
 //!
@@ -33,15 +37,27 @@
 //! JSON, with no loss: anything that is not an exact short decimal is stored
 //! as raw f64.
 
-use crate::model::{Element, InkPoint, InkStroke, Page};
+use crate::model::{BinaryExtension, Element, InkPoint, InkStroke, Page};
 use crate::validate::limits;
 
 pub const MAGIC: &[u8; 4] = b"PRPG";
-pub const VERSION: u16 = 1;
+/// `.prp` file format version. Independent of the page model schema
+/// version carried inside the metadata ([`crate::PAGE_SCHEMA_VERSION`]).
+pub const FILE_FORMAT_VERSION: u16 = 1;
 const MAX_DECIMALS: u32 = 6;
-const FLAG_META_ZLIB: u16 = 1;
+/// Required feature: metadata is zlib-compressed.
+pub const FLAG_META_ZLIB: u16 = 1;
+/// Bits 0-7: a reader that does not know a set bit must refuse the file.
+pub const REQUIRED_FLAGS: u16 = 0x00ff;
+/// Required features this build implements.
+const KNOWN_REQUIRED: u16 = FLAG_META_ZLIB;
+/// Optional: an extension area follows the point blocks.
+pub const FLAG_EXTENSIONS: u16 = 1 << 8;
 /// Decompressed metadata limit (hostile-input guard).
-const MAX_META: u64 = 256 << 20;
+pub const MAX_META: u64 = 256 << 20;
+/// Extension area limits (hostile-input guard).
+pub const MAX_EXTENSIONS: usize = 1024;
+pub const MAX_EXTENSION_BYTES: usize = 64 << 20;
 /// |q| must stay below 2^53 so the f64 <-> i64 conversion is exact.
 const MAX_EXACT: f64 = 9_007_199_254_740_992.0;
 
@@ -51,6 +67,8 @@ pub enum BinaryError {
     BadMagic,
     #[error("page file version {0} is newer than this build supports")]
     TooNew(u16),
+    #[error("page file needs feature {0} that this build does not support; please update Penroam")]
+    UnsupportedFeature(String),
     #[error("page file is truncated or malformed: {0}")]
     Malformed(&'static str),
     #[error("page file checksum mismatch")]
@@ -246,18 +264,44 @@ pub fn encode_page(page: &Page) -> Vec<u8> {
         .collect();
     let n_points: usize = strokes.iter().map(|s| s.points.len()).sum();
     let mut out = Vec::with_capacity(16 + meta.len() + n_points * 8);
+    let mut flags = FLAG_META_ZLIB;
+    if !page.binary_extensions.is_empty() {
+        flags |= FLAG_EXTENSIONS;
+    }
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&VERSION.to_le_bytes());
-    out.extend_from_slice(&FLAG_META_ZLIB.to_le_bytes());
+    out.extend_from_slice(&FILE_FORMAT_VERSION.to_le_bytes());
+    out.extend_from_slice(&flags.to_le_bytes());
     out.extend_from_slice(&(meta.len() as u32).to_le_bytes());
     out.extend_from_slice(&meta);
     out.extend_from_slice(&(strokes.len() as u32).to_le_bytes());
     for s in strokes {
         put_points(&mut out, &s.points);
     }
+    if !page.binary_extensions.is_empty() {
+        out.extend_from_slice(&(page.binary_extensions.len() as u32).to_le_bytes());
+        for e in &page.binary_extensions {
+            out.extend_from_slice(&e.tag.to_le_bytes());
+            out.extend_from_slice(&(e.data.len() as u32).to_le_bytes());
+            out.extend_from_slice(&e.data);
+        }
+    }
     let crc = crc32fast::hash(&out);
     out.extend_from_slice(&crc.to_le_bytes());
     out
+}
+
+/// Appends one point block (the `.prp` column encoding) — also used by the
+/// operation journal for ink carried in operations.
+pub fn encode_point_block(out: &mut Vec<u8>, points: &[InkPoint]) {
+    put_points(out, points);
+}
+
+/// Decodes one point block starting at `*pos` and advances `*pos`.
+pub fn decode_point_block(bytes: &[u8], pos: &mut usize) -> Result<Vec<InkPoint>, BinaryError> {
+    let mut r = Reader { b: bytes, i: *pos };
+    let pts = r.points()?;
+    *pos = r.i;
+    Ok(pts)
 }
 
 // ------------------------------------------------------------- decode --
@@ -366,6 +410,33 @@ impl<'a> Reader<'a> {
         }
     }
 
+    fn extensions(&mut self) -> Result<Vec<BinaryExtension>, BinaryError> {
+        let count = self.u32()? as usize;
+        if count > MAX_EXTENSIONS {
+            return Err(BinaryError::Malformed("too many extension records"));
+        }
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        for _ in 0..count {
+            let tag = self.u32()?;
+            let len = self.u32()? as usize;
+            total = total.saturating_add(len);
+            if total > MAX_EXTENSION_BYTES {
+                return Err(BinaryError::Malformed("extension area too large"));
+            }
+            let data = self.take(len)?.to_vec();
+            let ext = BinaryExtension { tag, data };
+            // no extension tags are defined in this build
+            if ext.required() {
+                return Err(BinaryError::UnsupportedFeature(format!(
+                    "extension {tag:#010x}"
+                )));
+            }
+            out.push(ext);
+        }
+        Ok(out)
+    }
+
     fn points(&mut self) -> Result<Vec<InkPoint>, BinaryError> {
         let n = self.varint()? as usize;
         if n > limits::MAX_POINTS_PER_STROKE {
@@ -443,12 +514,18 @@ pub fn decode_page(bytes: &[u8]) -> Result<Page, BinaryError> {
     }
     let mut r = Reader { b: body, i: 4 };
     let version = u16::from_le_bytes(r.take(2)?.try_into().unwrap());
-    if version > VERSION {
+    if version > FILE_FORMAT_VERSION {
         return Err(BinaryError::TooNew(version));
     }
+    if version == 0 {
+        return Err(BinaryError::Malformed("version 0"));
+    }
     let flags = u16::from_le_bytes(r.take(2)?.try_into().unwrap());
-    if flags & !FLAG_META_ZLIB != 0 {
-        return Err(BinaryError::Malformed("unknown header flags"));
+    let unknown_required = flags & REQUIRED_FLAGS & !KNOWN_REQUIRED;
+    if unknown_required != 0 {
+        return Err(BinaryError::UnsupportedFeature(format!(
+            "flags {unknown_required:#06x}"
+        )));
     }
     let meta_len = r.u32()? as usize;
     let stored = r.take(meta_len)?;
@@ -489,6 +566,9 @@ pub fn decode_page(bytes: &[u8]) -> Result<Page, BinaryError> {
     }
     for s in inks {
         s.points = r.points()?;
+    }
+    if flags & FLAG_EXTENSIONS != 0 {
+        page.binary_extensions = r.extensions()?;
     }
     if r.i != body.len() {
         return Err(BinaryError::Malformed("trailing bytes"));

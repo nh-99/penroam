@@ -32,3 +32,7 @@ plugins/*/permissions/schemas/
 reference/m00-tauri-app/plugins/*/android/.tauri/
 reference/m00-tauri-app/plugins/*/ios/.tauri/
 plugins/*/.tauri/
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/target/agent-sync

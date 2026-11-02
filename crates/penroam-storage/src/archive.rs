@@ -157,12 +157,14 @@ impl Library {
         }
         let mut snapshot = nb.clone();
         snapshot.trashed_pages.clear();
+        let live: HashSet<Uuid> = snapshot.page_order.iter().copied().collect();
+        snapshot.order_keys.retain(|p, _| live.contains(p));
         snapshot.deleted_at = None;
         snapshot.assets.retain(|a| used_assets.contains(&a.sha256));
         let manifest = Manifest {
             format: FORMAT.into(),
             format_version: FORMAT_VERSION,
-            schema_version: SCHEMA_VERSION,
+            schema_version: NOTEBOOK_SCHEMA_VERSION,
             generator: generator.into(),
             exported_at: now_ms(),
             notebook: serde_json::to_value(&snapshot)

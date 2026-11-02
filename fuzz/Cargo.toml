@@ -1,0 +1,44 @@
+# Coverage-guided fuzzing (cargo-fuzz, nightly). Not a workspace member:
+#   cargo +nightly fuzz run decode_page -- -max_total_time=600
+#   cargo +nightly fuzz run journal_open -- -max_total_time=600
+# Scheduled in .github/workflows/fuzz.yml; quick deterministic fuzz smoke
+# tests run with `cargo test` (crates/penroam-core/tests/format_v1.rs).
+[package]
+name = "penroam-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MPL-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+penroam-core = { path = "../crates/penroam-core" }
+penroam-storage = { path = "../crates/penroam-storage" }
+penroam-sync-protocol = { path = "../crates/penroam-sync-protocol" }
+tempfile = "3"
+
+[workspace]
+
+[[bin]]
+name = "decode_page"
+path = "fuzz_targets/decode_page.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "journal_open"
+path = "fuzz_targets/journal_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sync_batch_frame"
+path = "fuzz_targets/sync_batch_frame.rs"
+test = false
+doc = false
+bench = false

@@ -143,9 +143,9 @@ pub fn validate_element(e: &Element) -> Result<(), ValidationError> {
 }
 
 pub fn validate_page(p: &Page) -> Result<(), ValidationError> {
-    if p.schema_version != SCHEMA_VERSION {
+    if p.schema_version != PAGE_SCHEMA_VERSION {
         return err(format!(
-            "page schema version {} (expected {SCHEMA_VERSION})",
+            "page schema version {} (expected {PAGE_SCHEMA_VERSION})",
             p.schema_version
         ));
     }
@@ -179,9 +179,9 @@ pub fn validate_page(p: &Page) -> Result<(), ValidationError> {
 }
 
 pub fn validate_notebook(n: &Notebook) -> Result<(), ValidationError> {
-    if n.schema_version != SCHEMA_VERSION {
+    if n.schema_version != NOTEBOOK_SCHEMA_VERSION {
         return err(format!(
-            "notebook schema version {} (expected {SCHEMA_VERSION})",
+            "notebook schema version {} (expected {NOTEBOOK_SCHEMA_VERSION})",
             n.schema_version
         ));
     }
@@ -199,6 +199,16 @@ pub fn validate_notebook(n: &Notebook) -> Result<(), ValidationError> {
     if ids.len() > limits::MAX_PAGES {
         return err("too many pages");
     }
+    for (page, key) in &n.order_keys {
+        if !ids.contains(page) {
+            return err(format!("order key for unknown page {page}"));
+        }
+        if !crate::order_key::is_valid(key) {
+            return err(format!("invalid order key for page {page}"));
+        }
+    }
+    // a missing key or keys that disagree with pageOrder are repaired by
+    // storage on load (pageOrder is authoritative locally), not rejected
     let mut hashes = HashSet::new();
     for a in &n.assets {
         if !is_sha256_hex(&a.sha256) || !hashes.insert(a.sha256.as_str()) {

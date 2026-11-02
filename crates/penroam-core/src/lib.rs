@@ -6,7 +6,10 @@ pub mod binary;
 pub mod geometry;
 pub mod migrate;
 pub mod model;
+pub mod operation;
 pub mod ops;
+pub mod order_key;
+pub mod replica;
 pub mod text;
 pub mod validate;
 

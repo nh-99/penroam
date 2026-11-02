@@ -1,0 +1,6 @@
+{
+  "code": "rate_limited",
+  "message": "injected failure",
+  "request_id": "req-8",
+  "retry_after_ms": 1000
+}

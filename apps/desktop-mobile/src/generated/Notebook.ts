@@ -5,9 +5,16 @@ import type { TrashedPage } from "./TrashedPage";
 
 export type Notebook = { schemaVersion: number, id: string, title: string, createdAt: number, updatedAt: number, 
 /**
- * Live pages in reading order.
+ * Live pages in reading order. Always sorted by (`order_keys`, id).
  */
 pageOrder: Array<string>, 
+/**
+ * Fractional order key of every page, live and trashed (schema 2).
+ * Keys make concurrent inserts/moves converge (see [`crate::order_key`]);
+ * a trashed page keeps its key so restore puts it back between the
+ * same neighbours.
+ */
+orderKeys: Record<string, string>, 
 /**
  * Soft-deleted pages (restorable). Their files stay on disk.
  */

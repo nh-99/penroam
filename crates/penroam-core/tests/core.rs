@@ -198,7 +198,7 @@ fn schema_version_guard() {
     v["schemaVersion"] = json!(2);
     assert!(matches!(
         page_from_value(v.clone()),
-        Err(migrate::MigrateError::TooNew { found: 2 })
+        Err(migrate::MigrateError::TooNew { found: 2, .. })
     ));
     v.as_object_mut().unwrap().remove("schemaVersion");
     assert!(page_from_value(v).is_err());

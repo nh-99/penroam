@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "299a9d6d-2864-46e0-9041-ac83580cd561",
+  "title": "crashed",
+  "createdAt": 1793657984075,
+  "updatedAt": 1793657984123,
+  "pageOrder": [
+    "fe4ecdff-c2a1-4ebc-a231-b0cad37cbd78"
+  ],
+  "trashedPages": [],
+  "defaults": {
+    "paper": "letter",
+    "template": {
+      "kind": "ruled",
+      "spacing": 24.0
+    }
+  },
+  "cover": "#3b5b7a",
+  "assets": []
+}

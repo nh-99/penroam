@@ -36,6 +36,23 @@ jobs:
       - run: cargo test --workspace
       - name: Generated TypeScript bindings match the Rust schema
         run: git diff --exit-code apps/desktop-mobile/src/generated
+      - name: Sync protocol fixtures are deterministic and frozen
+        run: cargo run -q -p penroam-sync-testkit --bin penroam-sync-fixtures -- --check crates/penroam-sync-protocol/fixtures/v1
+      - name: Fuzz targets compile
+        run: cargo check --manifest-path fuzz/Cargo.toml
+
+  # The public sync contract builds and tests on its own: no notebook
+  # engine, UI, device SDK, private repository or credentials.
+  sync-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p penroam-sync-protocol -p penroam-sync-testkit
+      - name: No engine/UI/private dependencies
+        run: |
+          ! cargo tree -p penroam-sync-protocol -e all | grep -E 'penroam-(core|storage|pdf|cloud)|tauri'
+          ! grep -rn 'penroam-cloud' --include=Cargo.toml .
 
   linux-build:
     runs-on: ubuntu-24.04

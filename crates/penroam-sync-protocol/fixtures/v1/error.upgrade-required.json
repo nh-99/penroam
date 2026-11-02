@@ -1,0 +1,5 @@
+{
+  "code": "upgrade_required",
+  "message": "client protocol 1.0 is older than the server minimum 2.0; upgrade the app",
+  "request_id": "req-upgrade"
+}

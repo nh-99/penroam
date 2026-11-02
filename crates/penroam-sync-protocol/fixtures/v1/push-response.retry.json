@@ -1,0 +1,40 @@
+{
+  "acks": [
+    {
+      "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000001",
+      "result": {
+        "status": "duplicate",
+        "server_seq": 1
+      }
+    },
+    {
+      "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000002",
+      "result": {
+        "status": "rejected",
+        "error": {
+          "code": "op_id_conflict",
+          "message": "op_id already used with different content",
+          "request_id": "req-2"
+        }
+      }
+    },
+    {
+      "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000004",
+      "result": {
+        "status": "rejected",
+        "error": {
+          "code": "integrity_mismatch",
+          "message": "ciphertext SHA-256 does not match header",
+          "request_id": "req-2"
+        }
+      }
+    },
+    {
+      "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000003",
+      "result": {
+        "status": "accepted",
+        "server_seq": 3
+      }
+    }
+  ]
+}

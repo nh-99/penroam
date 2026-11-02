@@ -157,6 +157,17 @@ fn acknowledged_batches_survive_a_crash_without_flush() {
     assert_eq!(lib.recovery.replayed_batches, 3);
 }
 
+fn journal_files(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = fs::read_dir(root.join("library/journal"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "pjl"))
+        .collect();
+    v.sort();
+    v
+}
+
 #[test]
 fn torn_journal_tail_recovers_previous_valid_state() {
     let (d, mut lib) = new_lib();
@@ -167,19 +178,18 @@ fn torn_journal_tail_recovers_previous_valid_state() {
         .unwrap();
     let good = lib.load_page(nb.id, page.id).unwrap();
     lib.crash_for_tests();
-    let journal = d.path().join(format!(
-        "library/notebooks/{}/pages/{}.journal",
-        nb.id, page.id
-    ));
+    let journal = journal_files(d.path()).pop().unwrap();
     let mut f = fs::OpenOptions::new().append(true).open(&journal).unwrap();
-    f.write_all(br#"{"revision":2,"at":1,"batch":{"batchId":"#)
-        .unwrap(); // crash mid-append
+    // crash mid-append: record header promising 4000 bytes, 9 arrived
+    f.write_all(b"PRJR\xa0\x0f\x00\x00\x01\x02\x03\x04partial..")
+        .unwrap();
     drop(f);
     let len_before = fs::metadata(&journal).unwrap().len();
 
     let mut lib = Library::open(d.path().join("library")).unwrap();
     assert_eq!(lib.load_page(nb.id, page.id).unwrap(), good);
     assert_eq!(lib.recovery.truncated_journals, 1);
+    assert_eq!(lib.recovery.corrupt_journal_records, 0);
     assert!(fs::metadata(&journal).unwrap().len() < len_before);
     // and the page keeps working afterwards
     lib.apply_page_operations(nb.id, page.id, &add(1, vec![text(2, "after")]))
@@ -187,7 +197,7 @@ fn torn_journal_tail_recovers_previous_valid_state() {
 }
 
 #[test]
-fn crash_between_snapshot_and_journal_truncate_is_harmless() {
+fn crash_between_snapshot_and_manifest_is_harmless() {
     let (d, mut lib) = new_lib();
     let (nb, page) = lib
         .create_notebook("Compact", PageDefaults::default(), None)
@@ -196,18 +206,24 @@ fn crash_between_snapshot_and_journal_truncate_is_harmless() {
         .unwrap();
     lib.apply_page_operations(nb.id, page.id, &add(1, vec![text(2, "b")]))
         .unwrap();
-    let journal = d.path().join(format!(
-        "library/notebooks/{}/pages/{}.journal",
-        nb.id, page.id
-    ));
-    let saved_journal = fs::read(&journal).unwrap();
-    lib.flush_all().unwrap(); // snapshot at rev 2, journal truncated
+    let manifest = d.path().join("library/checkpoint.json");
+    let saved = fs::read(&manifest).ok();
+    lib.flush_all().unwrap(); // snapshot at rev 2, manifest advanced
     let expected = lib.load_page(nb.id, page.id).unwrap();
     drop(lib);
-    fs::write(&journal, saved_journal).unwrap(); // pretend truncate never happened
+    // pretend the manifest write never happened: the journal is replayed
+    // over a snapshot that already contains it
+    match saved {
+        Some(b) => fs::write(&manifest, b).unwrap(),
+        None => fs::remove_file(&manifest).unwrap(),
+    }
     let mut lib = Library::open(d.path().join("library")).unwrap();
     assert_eq!(lib.load_page(nb.id, page.id).unwrap(), expected);
-    assert_eq!(lib.recovery.replayed_batches, 0);
+    assert!(
+        lib.recovery.warnings.is_empty(),
+        "{:?}",
+        lib.recovery.warnings
+    );
 }
 
 #[test]
@@ -264,14 +280,13 @@ fn many_batches_trigger_compaction_and_stay_consistent() {
             .unwrap()
             .revision;
     }
-    let journal = d.path().join(format!(
-        "library/notebooks/{}/pages/{}.journal",
-        nb.id, page.id
-    ));
-    assert!(
-        fs::metadata(&journal).unwrap().len() < 300_000,
-        "journal was compacted"
-    );
+    // 512 entries triggered a checkpoint; a final one releases the journal
+    let m: serde_json::Value =
+        serde_json::from_slice(&fs::read(d.path().join("library/checkpoint.json")).unwrap())
+            .unwrap();
+    assert!(m["floor"].as_u64().unwrap() >= 512, "{m}");
+    lib.flush_all().unwrap();
+    assert!(lib.journal_segments() <= 1, "old segments deleted");
     let expected = lib.load_page(nb.id, page.id).unwrap();
     lib.crash_for_tests();
     let mut lib = Library::open(d.path().join("library")).unwrap();

@@ -16,4 +16,5 @@ crc32fast = "1"
 flate2 = "1"
 
 [dev-dependencies]
+sha2.workspace = true
 

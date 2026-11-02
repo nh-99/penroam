@@ -1,34 +1,48 @@
 //! The live notebook library in the app's private data directory.
 //!
 //! ```text
-//! <root>/library.json                       format marker {"format":"penroam-library","version":1}
-//! <root>/notebooks/<nb>/notebook.json       canonical notebook (atomic writes)
-//! <root>/notebooks/<nb>/pages/<page>.prp    canonical page snapshot, binary (atomic writes)
-//! <root>/notebooks/<nb>/pages/<page>.journal  fsynced operation batches since the snapshot (JSON lines)
+//! <root>/library.json                       format marker {"format":"penroam-library","version":2}
+//! <root>/.lock                              exclusive lock held while the library is open
+//! <root>/device.json                        this installation's device id
+//! <root>/journal/<seq>.pjl                  device operation journal (durability source)
+//! <root>/checkpoint.json (+ .prev.json)     checkpoint manifest (what the snapshots cover)
+//! <root>/outbox.json                        sync outbox counters (derivable)
+//! <root>/notebooks/<nb>/notebook.json       notebook snapshot (schema 2, atomic writes)
+//! <root>/notebooks/<nb>/pages/<page>.prp    page snapshot, binary (atomic writes)
+//! <root>/notebooks/<nb>/pages/<page>.prp.prev  previous page snapshot (fallback)
 //! <root>/notebooks/<nb>/assets/<sha256>     immutable attachments
 //! <root>/notebooks/<nb>/thumbs/<page>.png   derived thumbnail cache (never exported)
-//! <root>/notebooks/<nb>/orphans/            files found unreferenced at start-up (kept, not deleted)
+//! <root>/notebooks/<nb>/orphans/            files found unreferenced at start-up (kept)
+//! <root>/migration-backups/                 original bytes of migrated M01 files
 //! <root>/staging/                           temporary import/export work area
 //! ```
 //!
-//! There is no database: the canonical files *are* the index, so nothing can
-//! get out of sync. Listing reads each small `notebook.json`.
+//! **Durability contract.** Every change is a transaction of
+//! [`LocalOperation`]s appended to the journal and fsynced *before* the call
+//! returns; that is what "Saved locally" means. Snapshots (`.prp`,
+//! `notebook.json`) are checkpoints that may lag the journal. A checkpoint
+//! writes the snapshot atomically (keeping the previous one as `.prev`),
+//! then the manifest; journal segments are deleted only when both the
+//! current and the previous checkpoint cover them. On open: the journal is
+//! validated (torn tail truncated, damage quarantined), then every
+//! transaction after the checkpoint floor is replayed — idempotently, so
+//! replaying more than necessary is harmless.
 //!
-//! Durability: an operation batch is acknowledged only after its journal line
-//! is fsynced. Journals are folded into the page snapshot (atomic rename) when
-//! they grow, on page eviction and on [`Library::flush_all`]. A torn final
-//! journal line (crash mid-append) is truncated on load; entries at or below
-//! the snapshot revision (crash between snapshot and truncate) are skipped.
+//! Operation order comes from the per-device `local_sequence` only — never
+//! from wall-clock time.
 
 use crate::error::{Result, StorageError};
-use crate::fsutil::{append_durable, write_atomic, TMP_MARKER};
+use crate::fsutil::{self, write_atomic, TMP_MARKER};
+use crate::journal::{Journal, JournalError, Txn, TxnTarget};
+use crate::state::*;
 use penroam_core::migrate::{notebook_from_slice, page_from_slice};
+use penroam_core::operation::*;
 use penroam_core::validate::{validate_notebook, validate_page, validate_title};
 use penroam_core::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::fs;
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 use uuid::Uuid;
@@ -38,6 +52,8 @@ const JOURNAL_MIN_COMPACT_BYTES: u64 = 1 << 20;
 // Pages kept parsed in memory (LRU). Small on purpose: a 10k-stroke page is
 // ~20 MB of Rust structs and the editor shows one page at a time.
 const PAGE_CACHE: usize = 3;
+/// Batch ids remembered for retry deduplication.
+const RECENT_BATCHES: usize = 4096;
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -63,8 +79,16 @@ pub struct NotebookSummary {
 pub struct RecoveryReport {
     pub removed_temp_files: u32,
     pub orphaned_files: u32,
+    /// Incomplete trailing records discarded (crash during a write).
     pub truncated_journals: u32,
+    /// Damaged journal records found (segment quarantined, nothing deleted).
+    pub corrupt_journal_records: u32,
+    /// Journal transactions applied on top of snapshots.
     pub replayed_batches: u32,
+    /// Pages recovered from their previous snapshot.
+    pub fallback_snapshots: u32,
+    /// Notebooks migrated from M01 storage.
+    pub migrated_notebooks: u32,
     pub warnings: Vec<String>,
 }
 
@@ -76,15 +100,19 @@ pub struct ApplyOutcome {
     pub revision: u64,
     #[ts(type = "number")]
     pub updated_at: Timestamp,
-    /// The batch is on disk (journal fsynced).
+    /// The batch is on disk (journal fsynced): "Saved locally".
     pub durable: bool,
 }
 
-#[derive(Serialize, Deserialize)]
-struct JournalEntry {
-    revision: u64,
-    at: Timestamp,
-    batch: OperationBatch,
+/// Outbox status (see [`OutboxState`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxStatus {
+    pub device_id: Uuid,
+    pub enqueued_through: u64,
+    pub uploaded_through: u64,
+    pub pending: u64,
+    pub sync_enabled: bool,
 }
 
 struct CachedPage {
@@ -93,6 +121,16 @@ struct CachedPage {
     journal_bytes: u64,
     snapshot_bytes: u64,
     last_used: u64,
+    /// Lowest journal sequence applied to this page that no snapshot holds yet.
+    first_dirty_seq: Option<u64>,
+}
+
+/// Test/benchmark knobs.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub struct Tuning {
+    pub max_entries: usize,
+    pub min_compact_bytes: u64,
 }
 
 pub struct Library {
@@ -101,34 +139,167 @@ pub struct Library {
     pages: HashMap<(Uuid, Uuid), CachedPage>,
     tick: u64,
     pub recovery: RecoveryReport,
+    journal: Journal,
+    device_id: Uuid,
+    last_seq: u64,
+    manifest: CheckpointManifest,
+    outbox: OutboxState,
+    /// Page content transactions not in any snapshot, for pages not loaded yet.
+    pending: HashMap<(Uuid, Uuid), Vec<Txn>>,
+    /// Notebooks whose `notebook.json` lags the journal (first unsaved seq).
+    dirty_notebooks: HashMap<Uuid, u64>,
+    /// Lowest sequence of journal data for notebooks that could not be
+    /// opened; the checkpoint floor never passes it (nothing is discarded).
+    held_seq: Option<u64>,
+    recent_batches: HashMap<Uuid, (Uuid, Uuid, ApplyOutcome)>,
+    recent_order: std::collections::VecDeque<Uuid>,
+    purged: HashSet<Uuid>,
+    tuning: Tuning,
+    id_counter: Option<u128>,
+    _lock: File,
 }
 
 pub const COVERS: &[&str] = &[
     "#3b5b7a", "#7a3b3b", "#3b7a52", "#6b4f8a", "#8a6f3b", "#3b6f7a", "#545454",
 ];
 
+fn ioerr(e: impl std::fmt::Display) -> StorageError {
+    StorageError::Io(e.to_string())
+}
+
+impl From<JournalError> for StorageError {
+    fn from(e: JournalError) -> Self {
+        match e {
+            JournalError::Io(e) => e.into(),
+            other => StorageError::Corrupt(other.to_string()),
+        }
+    }
+}
+
+impl From<OpError> for StorageError {
+    fn from(e: OpError) -> Self {
+        match e {
+            OpError::NoNotebook(id) => StorageError::NotFound(format!("notebook {id}")),
+            OpError::NoPage(id) => StorageError::NotFound(format!("page {id}")),
+            OpError::Apply(a) => a.into(),
+            other => StorageError::Invalid(other.to_string()),
+        }
+    }
+}
+
 impl Library {
     /// Opens (or creates) the library and runs start-up recovery.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(root.join("notebooks"))?;
-        let marker = root.join("library.json");
-        if !marker.exists() {
-            write_atomic(&marker, br#"{"format":"penroam-library","version":1}"#)?;
+        // one writer per library (double-launch, second window, sync helper)
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(root.join(".lock"))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(StorageError::Conflict(
+                    "the library is already open in another Penroam process".into(),
+                ))
+            }
+            Err(fs::TryLockError::Error(e)) => return Err(e.into()),
+        }
+        let marker_path = root.join("library.json");
+        let marker_version = read_json::<LibraryMarker>(&marker_path).map(|m| m.version);
+        if let Some(v) = marker_version {
+            if v > LIBRARY_FORMAT_VERSION {
+                return Err(StorageError::Corrupt(format!(
+                    "this library was written by a newer Penroam (library format {v}); please update"
+                )));
+            }
         }
         let staging = root.join("staging");
         if staging.exists() {
             let _ = fs::remove_dir_all(&staging);
         }
         fs::create_dir_all(&staging)?;
+
+        let mut recovery = RecoveryReport::default();
+        let (journal, txns, scan) = Journal::open(&root.join("journal"))?;
+        recovery.truncated_journals += scan.truncated_tails;
+        recovery.corrupt_journal_records += scan.corrupt_records;
+        recovery.warnings.extend(scan.warnings);
+
+        let (manifest, warn) = read_manifest(&root);
+        recovery.warnings.extend(warn);
+        let journal_device = txns.iter().flat_map(|t| &t.ops).map(|o| o.device_id).next();
+        let device_id = match read_json::<DeviceFile>(&root.join("device.json")) {
+            Some(d) => d.device_id,
+            None => {
+                let id = manifest
+                    .as_ref()
+                    .map(|m| m.device_id)
+                    .or(journal_device)
+                    .unwrap_or_else(Uuid::new_v4);
+                write_json(
+                    &root.join("device.json"),
+                    &DeviceFile {
+                        format: "penroam-device".into(),
+                        device_id: id,
+                    },
+                )?;
+                id
+            }
+        };
+        let manifest = manifest.unwrap_or_else(|| CheckpointManifest::new(device_id));
+        let last_seq = manifest
+            .last_seq
+            .max(journal.max_seq().unwrap_or(0))
+            .max(txns.last().map_or(0, Txn::last_seq));
+        let outbox = read_json::<OutboxState>(&root.join("outbox.json"))
+            .filter(|o| o.device_id == device_id && o.format == "penroam-outbox")
+            .unwrap_or_else(|| {
+                // derivable: unknown upload state only causes re-uploads
+                let mut o = OutboxState::new(device_id);
+                o.enqueued_through = last_seq;
+                o
+            });
+
         let mut lib = Library {
             root,
             notebooks: HashMap::new(),
             pages: HashMap::new(),
             tick: 0,
-            recovery: RecoveryReport::default(),
+            recovery,
+            journal,
+            device_id,
+            last_seq,
+            manifest,
+            outbox,
+            pending: HashMap::new(),
+            dirty_notebooks: HashMap::new(),
+            held_seq: None,
+            recent_batches: HashMap::new(),
+            recent_order: Default::default(),
+            purged: HashSet::new(),
+            tuning: Tuning {
+                max_entries: JOURNAL_MAX_ENTRIES,
+                min_compact_bytes: JOURNAL_MIN_COMPACT_BYTES,
+            },
+            id_counter: None,
+            _lock: lock,
         };
-        lib.recover()?;
+        lib.load_notebooks()?;
+        lib.replay(txns)?;
+        lib.outbox.enqueued_through = lib.last_seq;
+        if marker_version != Some(LIBRARY_FORMAT_VERSION) {
+            write_json(
+                &marker_path,
+                &LibraryMarker {
+                    format: "penroam-library".into(),
+                    version: LIBRARY_FORMAT_VERSION,
+                },
+            )?;
+        }
         Ok(lib)
     }
 
@@ -140,21 +311,29 @@ impl Library {
         self.root.join("staging")
     }
 
+    pub fn device_id(&self) -> Uuid {
+        self.device_id
+    }
+
+    /// Highest journaled local sequence.
+    pub fn last_seq(&self) -> u64 {
+        self.last_seq
+    }
+
     fn nb_dir(&self, nb: Uuid) -> PathBuf {
         self.root.join("notebooks").join(nb.to_string())
     }
-    /// Canonical page snapshot: binary `.prp` (see `penroam_core::binary`).
     fn page_path(&self, nb: Uuid, page: Uuid) -> PathBuf {
         self.nb_dir(nb).join("pages").join(format!("{page}.prp"))
     }
-    /// Pre-binary snapshots (JSON); read if no `.prp` exists, removed once a `.prp` is written.
-    fn legacy_page_path(&self, nb: Uuid, page: Uuid) -> PathBuf {
-        self.nb_dir(nb).join("pages").join(format!("{page}.json"))
-    }
-    fn journal_path(&self, nb: Uuid, page: Uuid) -> PathBuf {
+    fn prev_page_path(&self, nb: Uuid, page: Uuid) -> PathBuf {
         self.nb_dir(nb)
             .join("pages")
-            .join(format!("{page}.journal"))
+            .join(format!("{page}.prp.prev"))
+    }
+    /// Pre-binary snapshots (JSON); migrated on open, still readable.
+    fn legacy_page_path(&self, nb: Uuid, page: Uuid) -> PathBuf {
+        self.nb_dir(nb).join("pages").join(format!("{page}.json"))
     }
     pub(crate) fn asset_path(&self, nb: Uuid, hash: &str) -> PathBuf {
         self.nb_dir(nb).join("assets").join(hash)
@@ -163,12 +342,23 @@ impl Library {
         self.nb_dir(nb).join("thumbs").join(format!("{page}.png"))
     }
 
+    fn new_id(&mut self) -> Uuid {
+        match &mut self.id_counter {
+            Some(c) => {
+                *c += 1;
+                Uuid::from_u128(*c)
+            }
+            None => Uuid::new_v4(),
+        }
+    }
+
     // ------------------------------------------------------------ recovery --
 
-    fn recover(&mut self) -> Result<()> {
+    fn load_notebooks(&mut self) -> Result<()> {
         let dir = self.root.join("notebooks");
-        for entry in fs::read_dir(&dir)?.flatten() {
-            let path = entry.path();
+        let mut entries: Vec<PathBuf> = fs::read_dir(&dir)?.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for path in entries {
             let Some(id) = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -177,14 +367,36 @@ impl Library {
                 continue;
             };
             self.remove_temp_files(&path);
-            match fs::read(path.join("notebook.json"))
+            let loaded = fs::read(path.join("notebook.json"))
                 .map_err(StorageError::from)
-                .and_then(|b| {
-                    let nb = notebook_from_slice(&b)
-                        .map_err(|e| StorageError::Corrupt(e.to_string()))?;
+                .and_then(|raw| {
+                    if crate::legacy::needed(&path, &raw) {
+                        let (nb, out) = crate::legacy::migrate(&self.root, &path, &raw)?;
+                        self.recovery.migrated_notebooks += 1;
+                        self.recovery.replayed_batches += out.replayed;
+                        self.recovery.truncated_journals += out.truncated;
+                        self.recovery.warnings.extend(out.warnings);
+                        Ok(nb)
+                    } else {
+                        notebook_from_slice(&raw).map_err(|e| StorageError::Corrupt(e.to_string()))
+                    }
+                })
+                .and_then(|mut nb| {
                     validate_notebook(&nb)?;
+                    if !nb.order_is_consistent() {
+                        nb.rebuild_order_keys();
+                        self.recovery.warnings.push(format!(
+                            "notebook {}: page order keys were inconsistent and were rebuilt",
+                            nb.id
+                        ));
+                        write_atomic(
+                            &path.join("notebook.json"),
+                            &serde_json::to_vec_pretty(&nb).map_err(ioerr)?,
+                        )?;
+                    }
                     Ok(nb)
-                }) {
+                });
+            match loaded {
                 Ok(nb) if nb.id == id => {
                     self.collect_orphans(&nb);
                     self.notebooks.insert(id, nb);
@@ -198,6 +410,99 @@ impl Library {
             }
         }
         Ok(())
+    }
+
+    /// Re-applies journal transactions after the checkpoint floor.
+    fn replay(&mut self, txns: Vec<Txn>) -> Result<()> {
+        // a purge erases everything before it for that notebook
+        let mut purge_seq: HashMap<Uuid, u64> = HashMap::new();
+        for t in &txns {
+            for op in &t.ops {
+                if let DocumentOperation::NotebookPurged { notebook_id } = op.body {
+                    purge_seq.insert(notebook_id, op.local_sequence);
+                }
+            }
+        }
+        self.purged.extend(purge_seq.keys());
+        let floor = self.manifest.floor;
+        for t in txns {
+            let nb_id = t.target.notebook_id();
+            if let TxnTarget::Page {
+                notebook_id,
+                page_id,
+                revision,
+                batch_id,
+            } = &t.target
+            {
+                self.remember_batch(
+                    *batch_id,
+                    *notebook_id,
+                    *page_id,
+                    ApplyOutcome {
+                        revision: *revision,
+                        updated_at: t.ops.last().map_or(0, |o| o.at),
+                        durable: true,
+                    },
+                );
+            }
+            if purge_seq.get(&nb_id).is_some_and(|p| t.first_seq() < *p) {
+                continue;
+            }
+            if t.last_seq() <= floor {
+                continue; // covered by the snapshots
+            }
+            match &t.target {
+                TxnTarget::Page {
+                    notebook_id,
+                    page_id,
+                    ..
+                } => {
+                    if !self.notebooks.contains_key(notebook_id) {
+                        self.hold(t.first_seq(), format!("page {page_id}"));
+                        continue;
+                    }
+                    self.pending
+                        .entry((*notebook_id, *page_id))
+                        .or_default()
+                        .push(t);
+                }
+                TxnTarget::Notebook { notebook_id } => {
+                    let first = t.first_seq();
+                    for op in &t.ops {
+                        if let Err(e) = self.apply_notebook_op(op, true) {
+                            self.recovery.warnings.push(format!(
+                                "journal {} ({}) for notebook {notebook_id} could not be replayed: {e}",
+                                op.local_sequence,
+                                op.body.name()
+                            ));
+                            if !self.notebooks.contains_key(notebook_id)
+                                && !matches!(op.body, DocumentOperation::NotebookPurged { .. })
+                            {
+                                self.hold(first, format!("notebook {notebook_id}"));
+                            }
+                        }
+                    }
+                    if self.notebooks.contains_key(notebook_id) {
+                        if let Err(e) = self.save_notebook_snapshot(*notebook_id) {
+                            self.dirty_notebooks.entry(*notebook_id).or_insert(first);
+                            self.recovery
+                                .warnings
+                                .push(format!("notebook {notebook_id}: {e}"));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn hold(&mut self, seq: u64, what: String) {
+        if self.held_seq.is_none_or(|h| seq < h) {
+            self.held_seq = Some(seq);
+        }
+        self.recovery.warnings.push(format!(
+            "journal entries for {what} were kept but not applied: its notebook could not be opened"
+        ));
     }
 
     fn remove_temp_files(&mut self, dir: &Path) {
@@ -221,31 +526,23 @@ impl Library {
     /// `orphans/` (e.g. a crash between writing a new page and listing it).
     fn collect_orphans(&mut self, nb: &Notebook) {
         let dir = self.nb_dir(nb.id);
-        let known: std::collections::HashSet<String> =
-            nb.all_page_ids().map(|p| p.to_string()).collect();
-        let assets: std::collections::HashSet<&str> =
-            nb.assets.iter().map(|a| a.sha256.as_str()).collect();
+        let known: HashSet<String> = nb.all_page_ids().map(|p| p.to_string()).collect();
+        let assets: HashSet<&str> = nb.assets.iter().map(|a| a.sha256.as_str()).collect();
         let orphans = dir.join("orphans");
         let mut moved = 0;
-        if let Ok(rd) = fs::read_dir(dir.join("pages")) {
-            for e in rd.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                let stem = name.split('.').next().unwrap_or("");
-                if !known.contains(stem) {
-                    let _ = fs::create_dir_all(&orphans);
-                    if fs::rename(e.path(), orphans.join(&name)).is_ok() {
-                        moved += 1;
-                    }
-                }
-            }
-        }
-        if let Ok(rd) = fs::read_dir(dir.join("assets")) {
-            for e in rd.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if !assets.contains(name.as_str()) {
-                    let _ = fs::create_dir_all(&orphans);
-                    if fs::rename(e.path(), orphans.join(&name)).is_ok() {
-                        moved += 1;
+        let keep_page = |n: &str| known.contains(n.split('.').next().unwrap_or(""));
+        let keep_asset = |n: &str| assets.contains(n);
+        type Keep<'a> = &'a dyn Fn(&str) -> bool;
+        let subs: [(&str, Keep); 2] = [("pages", &keep_page), ("assets", &keep_asset)];
+        for (sub, keep) in subs {
+            if let Ok(rd) = fs::read_dir(dir.join(sub)) {
+                for e in rd.flatten() {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if !keep(&name) {
+                        let _ = fs::create_dir_all(&orphans);
+                        if fs::rename(e.path(), orphans.join(&name)).is_ok() {
+                            moved += 1;
+                        }
                     }
                 }
             }
@@ -257,6 +554,211 @@ impl Library {
                 nb.id
             ));
         }
+    }
+
+    // ---------------------------------------------------------- operations --
+
+    fn make_ops(
+        &self,
+        bodies: Vec<(OperationId, DocumentOperation)>,
+        at: Timestamp,
+    ) -> Vec<LocalOperation> {
+        bodies
+            .into_iter()
+            .enumerate()
+            .map(|(i, (id, body))| {
+                let seq = self.last_seq + 1 + i as u64;
+                LocalOperation {
+                    id,
+                    device_id: self.device_id,
+                    local_sequence: seq,
+                    schema_version: OP_SCHEMA_VERSION,
+                    causal_dependencies: if seq > 1 {
+                        vec![OperationRef {
+                            device_id: self.device_id,
+                            device_seq: seq - 1,
+                        }]
+                    } else {
+                        vec![]
+                    },
+                    at,
+                    body,
+                }
+            })
+            .collect()
+    }
+
+    /// Journals a transaction (durable on return) and advances the sequence.
+    fn journal_txn(&mut self, txn: &Txn) -> Result<u64> {
+        let bytes = self.journal.append(txn)?;
+        self.last_seq = txn.last_seq();
+        self.outbox.enqueued_through = self.last_seq;
+        Ok(bytes)
+    }
+
+    /// Validates, journals and applies notebook-level operations. Returns
+    /// once they are durable; snapshot writes after that are checkpoints.
+    fn commit_notebook_ops(&mut self, nb_id: Uuid, bodies: Vec<DocumentOperation>) -> Result<()> {
+        let at = now_ms();
+        let bodies: Vec<(OperationId, DocumentOperation)> =
+            bodies.into_iter().map(|b| (self.new_id(), b)).collect();
+        // dry run on a copy: nothing is journaled unless everything applies
+        let mut probe = match &bodies[0].1 {
+            DocumentOperation::NotebookCreated { .. } => None,
+            _ => Some(self.notebook(nb_id)?.clone()),
+        };
+        let ops = self.make_ops(bodies, at);
+        for op in &ops {
+            validate_body(&op.body)?;
+            match (&op.body, probe.as_mut()) {
+                (DocumentOperation::NotebookCreated { .. }, None) => {
+                    probe = Some(notebook_from_create(op)?);
+                }
+                (DocumentOperation::NotebookPurged { .. }, _) => {}
+                (_, Some(nb)) => {
+                    apply_to_notebook(nb, op)?;
+                }
+                (_, None) => return Err(StorageError::NotFound(format!("notebook {nb_id}"))),
+            }
+        }
+        if let Some(nb) = &probe {
+            validate_notebook(nb)?;
+        }
+        let txn = Txn {
+            target: TxnTarget::Notebook { notebook_id: nb_id },
+            ops,
+        };
+        self.journal_txn(&txn)?;
+        // durable from here on: failures below are recovered by replay
+        for op in &txn.ops {
+            if let Err(e) = self.apply_notebook_op(op, false) {
+                self.recovery.warnings.push(format!(
+                    "applying {} failed after journaling: {e}",
+                    op.body.name()
+                ));
+            }
+        }
+        if self.notebooks.contains_key(&nb_id) {
+            if let Err(e) = self.save_notebook_snapshot(nb_id) {
+                self.dirty_notebooks.entry(nb_id).or_insert(txn.first_seq());
+                self.recovery
+                    .warnings
+                    .push(format!("notebook {nb_id} snapshot deferred: {e}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies one journaled notebook-level operation to memory and files
+    /// (page creation, purge). Idempotent (also used by replay).
+    fn apply_notebook_op(&mut self, op: &LocalOperation, replay: bool) -> Result<()> {
+        let nb_id = op.body.notebook_id();
+        match &op.body {
+            DocumentOperation::NotebookCreated { .. } => {
+                if self.notebooks.contains_key(&nb_id) {
+                    return Ok(());
+                }
+                let nb = notebook_from_create(op)?;
+                fs::create_dir_all(self.nb_dir(nb_id).join("pages"))?;
+                fs::create_dir_all(self.nb_dir(nb_id).join("assets"))?;
+                self.notebooks.insert(nb_id, nb);
+                self.dirty_notebooks
+                    .entry(nb_id)
+                    .or_insert(op.local_sequence);
+            }
+            DocumentOperation::NotebookPurged { .. } => {
+                self.pages.retain(|(n, _), _| *n != nb_id);
+                self.pending.retain(|(n, _), _| *n != nb_id);
+                self.dirty_notebooks.remove(&nb_id);
+                self.notebooks.remove(&nb_id);
+                self.purged.insert(nb_id);
+                fsutil::remove_dir_all_durable(&self.nb_dir(nb_id))?;
+            }
+            _ => {
+                let nb = self
+                    .notebooks
+                    .get_mut(&nb_id)
+                    .ok_or_else(|| StorageError::NotFound(format!("notebook {nb_id}")))?;
+                let effect = apply_to_notebook(nb, op)?;
+                let changed = !matches!(effect, NotebookEffect::Unchanged);
+                let page_id = match &op.body {
+                    DocumentOperation::PageCreated { page_id, .. } => Some(*page_id),
+                    _ => None,
+                };
+                let new_page = match effect {
+                    NotebookEffect::PageCreated(p) => Some(*p),
+                    // replay of a creation whose snapshot never got written
+                    NotebookEffect::Unchanged
+                        if replay
+                            && page_id.is_some_and(|p| {
+                                !self.page_path(nb_id, p).exists()
+                                    && !self.prev_page_path(nb_id, p).exists()
+                                    && !self.legacy_page_path(nb_id, p).exists()
+                            }) =>
+                    {
+                        let DocumentOperation::PageCreated {
+                            page_id,
+                            paper,
+                            size,
+                            template,
+                            background,
+                            ..
+                        } = &op.body
+                        else {
+                            unreachable!()
+                        };
+                        let mut p = Page::new(*page_id, *paper, *size, template.clone(), op.at);
+                        p.background = background.clone();
+                        Some(p)
+                    }
+                    _ => None,
+                };
+                if changed {
+                    self.dirty_notebooks
+                        .entry(nb_id)
+                        .or_insert(op.local_sequence);
+                }
+                if let Some(page) = new_page {
+                    self.install_new_page(nb_id, page, op.local_sequence)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Caches a freshly created page as dirty and tries to snapshot it.
+    fn install_new_page(&mut self, nb_id: Uuid, page: Page, seq: u64) -> Result<()> {
+        let key = (nb_id, page.id);
+        if self.pages.contains_key(&key) {
+            return Ok(());
+        }
+        self.evict_if_needed()?;
+        self.tick += 1;
+        self.pages.insert(
+            key,
+            CachedPage {
+                page,
+                journal_entries: 1,
+                journal_bytes: 0,
+                snapshot_bytes: 0,
+                last_used: self.tick,
+                first_dirty_seq: Some(seq),
+            },
+        );
+        if let Err(e) = self.snapshot_page(nb_id, key.1) {
+            self.recovery
+                .warnings
+                .push(format!("page {} snapshot deferred: {e}", key.1));
+        }
+        Ok(())
+    }
+
+    fn save_notebook_snapshot(&mut self, nb_id: Uuid) -> Result<()> {
+        let nb = self.notebook(nb_id)?;
+        let bytes = serde_json::to_vec_pretty(nb).map_err(ioerr)?;
+        write_atomic(&self.nb_dir(nb_id).join("notebook.json"), &bytes)?;
+        self.dirty_notebooks.remove(&nb_id);
+        Ok(())
     }
 
     // ----------------------------------------------------------- notebooks --
@@ -296,17 +798,6 @@ impl Library {
         Ok(nb)
     }
 
-    fn save_notebook(&mut self, nb: Notebook) -> Result<Notebook> {
-        validate_notebook(&nb)?;
-        let path = self.nb_dir(nb.id).join("notebook.json");
-        write_atomic(
-            &path,
-            &serde_json::to_vec_pretty(&nb).map_err(|e| StorageError::Io(e.to_string()))?,
-        )?;
-        self.notebooks.insert(nb.id, nb.clone());
-        Ok(nb)
-    }
-
     pub fn create_notebook(
         &mut self,
         title: &str,
@@ -314,46 +805,81 @@ impl Library {
         cover: Option<String>,
     ) -> Result<(Notebook, Page)> {
         validate_title(title)?;
-        let now = now_ms();
-        let id = Uuid::new_v4();
+        let id = self.new_id();
+        let page_id = self.new_id();
         let cover =
             cover.unwrap_or_else(|| COVERS[self.notebooks.len() % COVERS.len()].to_string());
-        let mut nb = Notebook::new(id, title.trim().to_string(), defaults, cover, now);
-        validate_notebook(&nb)?;
-        fs::create_dir_all(self.nb_dir(id).join("pages"))?;
-        fs::create_dir_all(self.nb_dir(id).join("assets"))?;
-        let page = self.new_page_for(&nb, None, None, now)?;
-        nb.page_order.push(page.id);
-        let nb = self.save_notebook(nb)?;
+        let paper = defaults.paper;
+        let size = paper.size().unwrap_or(Size {
+            width: 612.0,
+            height: 792.0,
+        });
+        let template = defaults.template.clone();
+        self.commit_notebook_ops(
+            id,
+            vec![
+                DocumentOperation::NotebookCreated {
+                    notebook_id: id,
+                    title: title.trim().to_string(),
+                    cover,
+                    defaults,
+                },
+                DocumentOperation::PageCreated {
+                    notebook_id: id,
+                    page_id,
+                    order_key: order_key::between(None, None),
+                    paper,
+                    size,
+                    template,
+                    background: None,
+                },
+            ],
+        )?;
+        let nb = self.notebook(id)?.clone();
+        let page = self.load_page(id, page_id)?;
         Ok((nb, page))
     }
 
     pub fn rename_notebook(&mut self, id: Uuid, title: &str) -> Result<Notebook> {
         validate_title(title)?;
-        let mut nb = self.notebook(id)?.clone();
-        nb.title = title.trim().to_string();
-        nb.updated_at = now_ms();
-        self.save_notebook(nb)
+        self.notebook(id)?;
+        self.commit_notebook_ops(
+            id,
+            vec![DocumentOperation::NotebookRenamed {
+                notebook_id: id,
+                title: title.trim().to_string(),
+            }],
+        )?;
+        Ok(self.notebook(id)?.clone())
     }
 
     pub fn set_notebook_cover(&mut self, id: Uuid, cover: &str) -> Result<Notebook> {
-        let mut nb = self.notebook(id)?.clone();
-        nb.cover = cover.to_lowercase();
-        self.save_notebook(nb)
+        self.notebook(id)?;
+        self.commit_notebook_ops(
+            id,
+            vec![DocumentOperation::NotebookCoverChanged {
+                notebook_id: id,
+                cover: cover.to_lowercase(),
+            }],
+        )?;
+        Ok(self.notebook(id)?.clone())
     }
 
     pub fn delete_notebook(&mut self, id: Uuid) -> Result<Notebook> {
         self.flush_notebook(id)?;
-        let mut nb = self.notebook(id)?.clone();
-        nb.deleted_at = Some(now_ms());
-        self.save_notebook(nb)
+        self.commit_notebook_ops(
+            id,
+            vec![DocumentOperation::NotebookDeleted { notebook_id: id }],
+        )?;
+        Ok(self.notebook(id)?.clone())
     }
 
     pub fn restore_notebook(&mut self, id: Uuid) -> Result<Notebook> {
-        let mut nb = self.notebook(id)?.clone();
-        nb.deleted_at = None;
-        nb.updated_at = now_ms();
-        self.save_notebook(nb)
+        self.commit_notebook_ops(
+            id,
+            vec![DocumentOperation::NotebookRestored { notebook_id: id }],
+        )?;
+        Ok(self.notebook(id)?.clone())
     }
 
     /// Permanently removes a notebook that is already in the trash.
@@ -363,36 +889,13 @@ impl Library {
                 "only notebooks in the trash can be deleted permanently".into(),
             ));
         }
-        self.pages.retain(|(n, _), _| *n != id);
-        self.notebooks.remove(&id);
-        fs::remove_dir_all(self.nb_dir(id))?;
-        Ok(())
+        self.commit_notebook_ops(
+            id,
+            vec![DocumentOperation::NotebookPurged { notebook_id: id }],
+        )
     }
 
     // --------------------------------------------------------------- pages --
-
-    fn new_page_for(
-        &mut self,
-        nb: &Notebook,
-        template: Option<Template>,
-        paper: Option<Paper>,
-        now: Timestamp,
-    ) -> Result<Page> {
-        let paper = paper.unwrap_or(nb.defaults.paper);
-        let size = paper.size().unwrap_or(Size {
-            width: 612.0,
-            height: 792.0,
-        });
-        let page = Page::new(
-            Uuid::new_v4(),
-            paper,
-            size,
-            template.unwrap_or_else(|| nb.defaults.template.clone()),
-            now,
-        );
-        self.write_page_snapshot(nb.id, &page)?;
-        Ok(page)
-    }
 
     /// Creates a page and inserts it at `index` (default: end).
     pub fn create_page(
@@ -402,20 +905,16 @@ impl Library {
         template: Option<Template>,
         paper: Option<Paper>,
     ) -> Result<(Notebook, Page)> {
-        let nb = self.live_notebook(nb_id)?.clone();
-        if let Some(t) = &template {
-            penroam_core::validate::validate_template(t)?;
-        }
-        let now = now_ms();
-        let page = self.new_page_for(&nb, template, paper, now)?;
-        let mut nb = nb;
-        let at = index
-            .unwrap_or(nb.page_order.len())
-            .min(nb.page_order.len());
-        nb.page_order.insert(at, page.id);
-        nb.updated_at = now;
-        let nb = self.save_notebook(nb)?;
-        Ok((nb, page))
+        let nb = self.live_notebook(nb_id)?;
+        let paper = paper.unwrap_or(nb.defaults.paper);
+        let template = template.unwrap_or_else(|| nb.defaults.template.clone());
+        let size = paper.size().unwrap_or(Size {
+            width: 612.0,
+            height: 792.0,
+        });
+        let (nb, mut pages) =
+            self.create_pages(nb_id, index, vec![(paper, size, template, None)])?;
+        Ok((nb, pages.remove(0)))
     }
 
     /// Creates pages (e.g. one per PDF page) with explicit sizes/backgrounds.
@@ -425,12 +924,13 @@ impl Library {
         index: Option<usize>,
         pages: Vec<(Paper, Size, Template, Option<PdfBackgroundRef>)>,
     ) -> Result<(Notebook, Vec<Page>)> {
-        let mut nb = self.live_notebook(nb_id)?.clone();
-        let now = now_ms();
-        let mut created = Vec::new();
-        for (paper, size, template, bg) in pages {
-            let mut p = Page::new(Uuid::new_v4(), paper, size, template, now);
-            if let Some(bg) = &bg {
+        let nb = self.live_notebook(nb_id)?.clone();
+        if pages.is_empty() {
+            return Ok((nb, Vec::new()));
+        }
+        for (_, _, t, bg) in &pages {
+            penroam_core::validate::validate_template(t)?;
+            if let Some(bg) = bg {
                 if !nb.assets.iter().any(|a| a.sha256 == bg.asset_hash) {
                     return Err(StorageError::Invalid(format!(
                         "asset {} is not part of this notebook",
@@ -438,24 +938,39 @@ impl Library {
                     )));
                 }
             }
-            p.background = bg;
-            validate_page(&p)?;
-            self.write_page_snapshot(nb_id, &p)?;
-            created.push(p);
         }
         let at = index
             .unwrap_or(nb.page_order.len())
             .min(nb.page_order.len());
-        for (i, p) in created.iter().enumerate() {
-            nb.page_order.insert(at + i, p.id);
+        let keys = keys_for_insert(&nb, at, pages.len());
+        let mut ids = Vec::new();
+        let bodies = pages
+            .into_iter()
+            .zip(keys)
+            .map(|((paper, size, template, background), order_key)| {
+                let page_id = self.new_id();
+                ids.push(page_id);
+                DocumentOperation::PageCreated {
+                    notebook_id: nb_id,
+                    page_id,
+                    order_key,
+                    paper,
+                    size,
+                    template,
+                    background,
+                }
+            })
+            .collect();
+        self.commit_notebook_ops(nb_id, bodies)?;
+        let mut created = Vec::new();
+        for id in ids {
+            created.push(self.load_page(nb_id, id)?);
         }
-        nb.updated_at = now;
-        let nb = self.save_notebook(nb)?;
-        Ok((nb, created))
+        Ok((self.notebook(nb_id)?.clone(), created))
     }
 
     pub fn update_page_order(&mut self, nb_id: Uuid, order: Vec<Uuid>) -> Result<Notebook> {
-        let mut nb = self.live_notebook(nb_id)?.clone();
+        let nb = self.live_notebook(nb_id)?.clone();
         let mut a = nb.page_order.clone();
         let mut b = order.clone();
         a.sort();
@@ -465,41 +980,58 @@ impl Library {
                 "page order must contain exactly the notebook's pages".into(),
             ));
         }
-        nb.page_order = order;
-        nb.updated_at = now_ms();
-        self.save_notebook(nb)
+        let moves = reorder_keys(&nb, &order);
+        if moves.is_empty() {
+            return Ok(nb);
+        }
+        self.commit_notebook_ops(
+            nb_id,
+            moves
+                .into_iter()
+                .map(|(page_id, order_key)| DocumentOperation::PageReordered {
+                    notebook_id: nb_id,
+                    page_id,
+                    order_key,
+                })
+                .collect(),
+        )?;
+        let nb = self.notebook(nb_id)?.clone();
+        debug_assert_eq!(nb.page_order, order);
+        Ok(nb)
     }
 
     pub fn delete_page(&mut self, nb_id: Uuid, page: Uuid) -> Result<Notebook> {
-        let mut nb = self.live_notebook(nb_id)?.clone();
-        let idx = nb
-            .page_order
-            .iter()
-            .position(|p| *p == page)
-            .ok_or_else(|| StorageError::NotFound(format!("page {page}")))?;
+        if !self.live_notebook(nb_id)?.page_order.contains(&page) {
+            return Err(StorageError::NotFound(format!("page {page}")));
+        }
         self.flush_page(nb_id, page)?;
-        nb.page_order.remove(idx);
-        nb.trashed_pages.push(TrashedPage {
-            id: page,
-            deleted_at: now_ms(),
-            former_index: idx as u32,
-        });
-        nb.updated_at = now_ms();
-        self.save_notebook(nb)
+        self.commit_notebook_ops(
+            nb_id,
+            vec![DocumentOperation::PageDeleted {
+                notebook_id: nb_id,
+                page_id: page,
+            }],
+        )?;
+        Ok(self.notebook(nb_id)?.clone())
     }
 
     pub fn restore_page(&mut self, nb_id: Uuid, page: Uuid) -> Result<Notebook> {
-        let mut nb = self.live_notebook(nb_id)?.clone();
-        let idx = nb
+        if !self
+            .live_notebook(nb_id)?
             .trashed_pages
             .iter()
-            .position(|p| p.id == page)
-            .ok_or_else(|| StorageError::NotFound(format!("trashed page {page}")))?;
-        let t = nb.trashed_pages.remove(idx);
-        let at = (t.former_index as usize).min(nb.page_order.len());
-        nb.page_order.insert(at, page);
-        nb.updated_at = now_ms();
-        self.save_notebook(nb)
+            .any(|t| t.id == page)
+        {
+            return Err(StorageError::NotFound(format!("trashed page {page}")));
+        }
+        self.commit_notebook_ops(
+            nb_id,
+            vec![DocumentOperation::PageRestored {
+                notebook_id: nb_id,
+                page_id: page,
+            }],
+        )?;
+        Ok(self.notebook(nb_id)?.clone())
     }
 
     pub fn load_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<Page> {
@@ -544,111 +1076,136 @@ impl Library {
                 .min_by_key(|(_, c)| c.last_used)
                 .map(|(k, _)| k)
                 .expect("non-empty");
-            self.compact(key.0, key.1)?;
+            self.checkpoint_page(key.0, key.1)?;
             self.pages.remove(&key);
         }
         Ok(())
     }
 
-    fn read_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<CachedPage> {
-        let snap = match fs::read(self.page_path(nb_id, page_id)) {
+    fn read_snapshot(
+        &self,
+        nb_id: Uuid,
+        page_id: Uuid,
+        path: &Path,
+    ) -> std::result::Result<(Page, u64), String> {
+        let bytes = match fs::read(path) {
             Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                fs::read(self.legacy_page_path(nb_id, page_id))?
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && path == self.page_path(nb_id, page_id) =>
+            {
+                fs::read(self.legacy_page_path(nb_id, page_id)).map_err(|e| e.to_string())?
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e.to_string()),
         };
-        let mut page = decode_page_bytes(&snap)
-            .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {e}")))?;
-        validate_page(&page)
-            .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {}", e.0)))?;
+        let page = decode_page_bytes(&bytes)?;
+        validate_page(&page).map_err(|e| e.0)?;
         if page.id != page_id {
-            return Err(StorageError::Corrupt(format!(
-                "page file {page_id} contains page {}",
-                page.id
-            )));
+            return Err(format!("file contains page {}", page.id));
         }
-        let jpath = self.journal_path(nb_id, page_id);
-        let mut entries = 0;
-        let mut good_len: u64 = 0;
-        if let Ok(bytes) = fs::read(&jpath) {
-            let mut offset = 0usize;
-            for line in bytes.split_inclusive(|b| *b == b'\n') {
-                let complete = line.ends_with(b"\n");
-                let parsed: Option<JournalEntry> = if complete {
-                    serde_json::from_slice(line).ok()
-                } else {
-                    None
-                };
-                let Some(entry) = parsed else {
-                    // torn or damaged tail: everything after the last good line is dropped
-                    self.recovery.truncated_journals += 1;
-                    self.recovery.warnings.push(format!("page {page_id}: discarded an incomplete journal record (crash during write)"));
-                    break;
-                };
-                offset += line.len();
-                if entry.revision <= page.revision {
-                    good_len = offset as u64;
-                    continue; // already folded into the snapshot
+        Ok((page, bytes.len() as u64))
+    }
+
+    fn read_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<CachedPage> {
+        let mut from_prev = false;
+        let (mut page, snapshot_bytes) = match self.read_snapshot(
+            nb_id,
+            page_id,
+            &self.page_path(nb_id, page_id),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                // fall back to the previous snapshot + journal
+                match self.read_snapshot(nb_id, page_id, &self.prev_page_path(nb_id, page_id)) {
+                    Ok(v) => {
+                        from_prev = true;
+                        self.recovery.fallback_snapshots += 1;
+                        self.recovery.warnings.push(format!(
+                                "page {page_id}: snapshot unreadable ({e}); recovered from the previous snapshot and the journal"
+                            ));
+                        v
+                    }
+                    Err(_) => return Err(StorageError::Corrupt(format!("page {page_id}: {e}"))),
                 }
-                if entry.revision != page.revision + 1 {
-                    self.recovery.warnings.push(format!(
-                        "page {page_id}: journal gap at revision {}",
-                        entry.revision
-                    ));
-                    break;
-                }
-                if let Err(e) = penroam_core::ops::replay_batch(
-                    &mut page,
-                    &entry.batch,
-                    entry.revision,
-                    entry.at,
-                ) {
-                    self.recovery.warnings.push(format!(
-                        "page {page_id}: journal record {} could not be replayed: {e}",
-                        entry.revision
-                    ));
-                    break;
-                }
-                entries += 1;
-                self.recovery.replayed_batches += 1;
-                good_len = offset as u64;
             }
-            if good_len < bytes.len() as u64 {
-                let f = fs::OpenOptions::new().write(true).open(&jpath)?;
-                f.set_len(good_len)?;
-                f.sync_all()?;
+        };
+        let mut txns = self.pending.remove(&(nb_id, page_id)).unwrap_or_default();
+        if from_prev {
+            // the journal still holds everything after the previous checkpoint
+            txns = self
+                .journal
+                .read_all()?
+                .into_iter()
+                .filter(|t| {
+                    matches!(&t.target, TxnTarget::Page { notebook_id, page_id: p, .. }
+                        if *notebook_id == nb_id && *p == page_id)
+                })
+                .collect();
+        }
+        let mut first_dirty_seq = from_prev.then_some(self.last_seq.max(1));
+        let mut entries = 0;
+        for t in txns {
+            let TxnTarget::Page { revision, .. } = t.target else {
+                continue;
+            };
+            if revision <= page.revision {
+                continue; // already in the snapshot
+            }
+            if revision != page.revision + 1 {
+                self.recovery.warnings.push(format!(
+                    "page {page_id}: journal gap at revision {revision}; later entries were kept in the journal but not applied"
+                ));
+                self.hold(t.first_seq(), format!("page {page_id}"));
+                break;
+            }
+            let bodies: Vec<&DocumentOperation> = t.ops.iter().map(|o| &o.body).collect();
+            match apply_to_page(&mut page, &bodies) {
+                Ok(()) => {
+                    page.revision = revision;
+                    page.updated_at = t.ops.last().map_or(page.updated_at, |o| o.at);
+                    entries += 1;
+                    self.recovery.replayed_batches += 1;
+                    first_dirty_seq.get_or_insert(t.first_seq());
+                    let f = first_dirty_seq.as_mut().unwrap();
+                    *f = (*f).min(t.first_seq());
+                }
+                Err(e) => {
+                    self.recovery.warnings.push(format!(
+                        "page {page_id}: journal entry {} could not be replayed: {e}",
+                        t.first_seq()
+                    ));
+                    self.hold(t.first_seq(), format!("page {page_id}"));
+                    break;
+                }
             }
         }
         Ok(CachedPage {
             page,
             journal_entries: entries,
-            journal_bytes: good_len,
-            snapshot_bytes: snap.len() as u64,
+            journal_bytes: 0,
+            snapshot_bytes,
             last_used: 0,
+            first_dirty_seq,
         })
     }
 
-    fn write_page_snapshot(&self, nb_id: Uuid, page: &Page) -> Result<u64> {
-        let bytes = penroam_core::binary::encode_page(page);
-        write_atomic(&self.page_path(nb_id, page.id), &bytes)?;
-        let legacy = self.legacy_page_path(nb_id, page.id);
-        if legacy.exists() {
-            fs::remove_file(legacy)?;
-        }
-        Ok(bytes.len() as u64)
-    }
-
     /// Applies an operation batch and returns once it is durable on disk.
+    /// Retrying a batch that was already applied (same `batch_id`) returns
+    /// the original outcome without applying it again.
     pub fn apply_page_operations(
         &mut self,
         nb_id: Uuid,
         page_id: Uuid,
         batch: &OperationBatch,
     ) -> Result<ApplyOutcome> {
+        if let Some((n, p, out)) = self.recent_batches.get(&batch.batch_id) {
+            if *n == nb_id && *p == page_id {
+                return Ok(out.clone());
+            }
+        }
         self.live_notebook(nb_id)?;
         // asset references must resolve inside this notebook
-        let assets: Vec<String> = self
+        let assets: HashSet<String> = self
             .notebook(nb_id)?
             .assets
             .iter()
@@ -670,72 +1227,166 @@ impl Library {
                 }
             }
         }
-        let jpath = self.journal_path(nb_id, page_id);
         let now = now_ms();
         let c = self.cached_page(nb_id, page_id)?;
+        if let Some(reason) = c.page.read_only_reason() {
+            return Err(StorageError::Conflict(reason));
+        }
         // validate first, then journal (fsync), then apply in place: no page copy
         penroam_core::ops::check_batch(&c.page, batch)?;
         let revision = c.page.revision + 1;
-        let mut line = serde_json::to_vec(&JournalEntry {
-            revision,
-            at: now,
-            batch: batch.clone(),
-        })
-        .map_err(|e| StorageError::Io(e.to_string()))?;
-        line.push(b'\n');
-        append_durable(&jpath, &line)?;
+        let bodies = bodies_from_batch(nb_id, &c.page, batch);
+        let ops = self.make_ops(bodies, now);
+        let txn = Txn {
+            target: TxnTarget::Page {
+                notebook_id: nb_id,
+                page_id,
+                revision,
+                batch_id: batch.batch_id,
+            },
+            ops,
+        };
+        let bytes = self.journal_txn(&txn)?;
+        let c = self.pages.get_mut(&(nb_id, page_id)).expect("cached");
         penroam_core::ops::apply_checked(&mut c.page, batch, Some(revision), now);
         c.journal_entries += 1;
-        c.journal_bytes += line.len() as u64;
-        let needs_compact = c.journal_entries >= JOURNAL_MAX_ENTRIES
-            || c.journal_bytes > JOURNAL_MIN_COMPACT_BYTES.max(c.snapshot_bytes / 4);
+        c.journal_bytes += bytes;
+        c.first_dirty_seq.get_or_insert(txn.first_seq());
+        let needs_checkpoint = c.journal_entries >= self.tuning.max_entries
+            || c.journal_bytes > self.tuning.min_compact_bytes.max(c.snapshot_bytes / 4);
         if let Some(nb) = self.notebooks.get_mut(&nb_id) {
             nb.updated_at = now;
         }
-        if needs_compact {
-            // best effort: the batch is already durable in the journal
-            if let Err(e) = self.compact(nb_id, page_id) {
-                self.recovery
-                    .warnings
-                    .push(format!("compaction of page {page_id} failed: {e}"));
-            }
-        }
-        Ok(ApplyOutcome {
+        let outcome = ApplyOutcome {
             revision,
             updated_at: now,
             durable: true,
-        })
+        };
+        self.remember_batch(batch.batch_id, nb_id, page_id, outcome.clone());
+        if needs_checkpoint {
+            // best effort: the batch is already durable in the journal
+            if let Err(e) = self.checkpoint_page(nb_id, page_id) {
+                self.recovery
+                    .warnings
+                    .push(format!("checkpoint of page {page_id} failed: {e}"));
+            }
+        }
+        Ok(outcome)
     }
 
-    /// Folds the journal into the snapshot.
-    fn compact(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<()> {
+    fn remember_batch(&mut self, batch: Uuid, nb: Uuid, page: Uuid, out: ApplyOutcome) {
+        if self.recent_batches.insert(batch, (nb, page, out)).is_none() {
+            self.recent_order.push_back(batch);
+            if self.recent_order.len() > RECENT_BATCHES {
+                if let Some(old) = self.recent_order.pop_front() {
+                    self.recent_batches.remove(&old);
+                }
+            }
+        }
+    }
+
+    // --------------------------------------------------------- checkpoints --
+
+    /// Writes the page snapshot (keeping the previous one as fallback).
+    fn snapshot_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<()> {
         let Some(c) = self.pages.get(&(nb_id, page_id)) else {
             return Ok(());
         };
-        if c.journal_entries == 0 && c.journal_bytes == 0 {
+        if c.first_dirty_seq.is_none() {
             return Ok(());
         }
-        let size = self.write_page_snapshot(nb_id, &c.page)?;
-        let jpath = self.journal_path(nb_id, page_id);
-        let f = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&jpath)?;
-        f.sync_all()?;
+        let bytes = penroam_core::binary::encode_page(&c.page);
+        let path = self.page_path(nb_id, page_id);
+        if path.exists() {
+            fsutil::rename_durable(&path, &self.prev_page_path(nb_id, page_id))?;
+        }
+        write_atomic(&path, &bytes)?;
+        // read back: the bytes on disk must be the bytes we meant
+        if fs::read(&path).ok().map(|b| crc32fast::hash(&b)) != Some(crc32fast::hash(&bytes)) {
+            return Err(StorageError::Io(format!(
+                "page {page_id} snapshot did not read back correctly"
+            )));
+        }
+        let legacy = self.legacy_page_path(nb_id, page_id);
+        if legacy.exists() {
+            fsutil::remove_durable(&legacy)?;
+        }
         let c = self.pages.get_mut(&(nb_id, page_id)).expect("present");
         c.journal_entries = 0;
         c.journal_bytes = 0;
-        c.snapshot_bytes = size;
-        // persist the notebook's updatedAt lazily, together with compaction
-        if let Some(nb) = self.notebooks.get(&nb_id).cloned() {
-            self.save_notebook(nb)?;
+        c.snapshot_bytes = bytes.len() as u64;
+        c.first_dirty_seq = None;
+        Ok(())
+    }
+
+    /// Snapshot + notebook + manifest for one page.
+    fn checkpoint_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<()> {
+        let dirty = self
+            .pages
+            .get(&(nb_id, page_id))
+            .is_some_and(|c| c.first_dirty_seq.is_some());
+        if !dirty {
+            return Ok(());
+        }
+        self.snapshot_page(nb_id, page_id)?;
+        if self.notebooks.contains_key(&nb_id) {
+            // persists the notebook's updatedAt lazily, together with the page
+            self.save_notebook_snapshot(nb_id)?;
+        }
+        self.write_checkpoint()
+    }
+
+    /// Everything `<= floor` is in a snapshot.
+    fn floor(&self) -> u64 {
+        let mut f = self.last_seq;
+        let mut lower = |s: u64| f = f.min(s.saturating_sub(1));
+        for c in self.pages.values() {
+            if let Some(s) = c.first_dirty_seq {
+                lower(s);
+            }
+        }
+        for txns in self.pending.values() {
+            if let Some(t) = txns.first() {
+                lower(t.first_seq());
+            }
+        }
+        for s in self.dirty_notebooks.values() {
+            lower(*s);
+        }
+        if let Some(s) = self.held_seq {
+            lower(s);
+        }
+        f
+    }
+
+    /// Persists the checkpoint manifest and releases journal segments that
+    /// both this and the previous checkpoint cover.
+    fn write_checkpoint(&mut self) -> Result<()> {
+        let floor = self.floor();
+        let new = CheckpointManifest {
+            last_seq: self.last_seq,
+            floor,
+            prev_floor: self.manifest.floor,
+            ..self.manifest.clone()
+        };
+        if new == self.manifest {
+            return Ok(());
+        }
+        write_manifest(&self.root, &self.manifest, &new)?;
+        self.manifest = new;
+        let mut release = self.manifest.prev_floor.min(self.manifest.floor);
+        if self.outbox.sync_enabled {
+            release = release.min(self.outbox.uploaded_through);
+        }
+        self.journal.delete_through(release)?;
+        if self.journal.active_is_covered_by(floor) {
+            self.journal.seal();
         }
         Ok(())
     }
 
     pub fn flush_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<()> {
-        self.compact(nb_id, page_id)
+        self.checkpoint_page(nb_id, page_id)
     }
 
     fn flush_notebook(&mut self, nb_id: Uuid) -> Result<()> {
@@ -746,21 +1397,118 @@ impl Library {
             .copied()
             .collect();
         for (n, p) in keys {
-            self.compact(n, p)?;
+            self.checkpoint_page(n, p)?;
+        }
+        let pending: Vec<_> = self
+            .pending
+            .keys()
+            .filter(|(n, _)| *n == nb_id)
+            .copied()
+            .collect();
+        for (n, p) in pending {
+            self.cached_page(n, p)?;
+            self.checkpoint_page(n, p)?;
         }
         Ok(())
     }
 
-    /// Compacts every journal (app close / background).
+    /// Checkpoints everything (app close / background): afterwards every
+    /// journaled operation is in a snapshot.
     pub fn flush_all(&mut self) -> Result<()> {
-        let keys: Vec<_> = self.pages.keys().copied().collect();
         let mut first_err = None;
-        for (n, p) in keys {
-            if let Err(e) = self.compact(n, p) {
+        let pending: Vec<_> = self.pending.keys().copied().collect();
+        for (n, p) in pending {
+            if let Err(e) = self.cached_page(n, p).map(|_| ()) {
                 first_err.get_or_insert(e);
             }
         }
+        let keys: Vec<_> = self.pages.keys().copied().collect();
+        for (n, p) in keys {
+            if let Err(e) = self.snapshot_page(n, p) {
+                first_err.get_or_insert(e);
+            }
+        }
+        let dirty: Vec<Uuid> = self
+            .dirty_notebooks
+            .keys()
+            .chain(self.pages.keys().map(|(n, _)| n))
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        for nb in dirty {
+            if self.notebooks.contains_key(&nb) {
+                if let Err(e) = self.save_notebook_snapshot(nb) {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        if let Err(e) = self.write_checkpoint() {
+            first_err.get_or_insert(e);
+        }
+        if let Err(e) = write_json(&self.root.join("outbox.json"), &self.outbox) {
+            first_err.get_or_insert(e.into());
+        }
         first_err.map_or(Ok(()), Err)
+    }
+
+    // -------------------------------------------------------------- outbox --
+
+    pub fn outbox_status(&self) -> OutboxStatus {
+        OutboxStatus {
+            device_id: self.device_id,
+            enqueued_through: self.outbox.enqueued_through,
+            uploaded_through: self.outbox.uploaded_through,
+            pending: self
+                .outbox
+                .enqueued_through
+                .saturating_sub(self.outbox.uploaded_through),
+            sync_enabled: self.outbox.sync_enabled,
+        }
+    }
+
+    /// Journaled operations after `seq`, in order. Fails with `Conflict`
+    /// when some of them were already released by a checkpoint (the caller
+    /// must then start from a snapshot).
+    pub fn operations_after(&self, seq: u64) -> Result<Vec<LocalOperation>> {
+        if self
+            .journal
+            .min_retained_seq()
+            .is_none_or(|first| first > seq + 1)
+            && self.last_seq > seq
+        {
+            return Err(StorageError::Conflict(format!(
+                "operations after {seq} were already checkpointed; a snapshot is required"
+            )));
+        }
+        Ok(self
+            .journal
+            .read_all()?
+            .into_iter()
+            .flat_map(|t| t.ops)
+            .filter(|o| o.local_sequence > seq)
+            .collect())
+    }
+
+    /// Records a server acknowledgement (M03). Persisted atomically before
+    /// returning; monotone.
+    pub fn mark_uploaded(&mut self, through: u64) -> Result<()> {
+        if through > self.last_seq {
+            return Err(StorageError::Invalid(
+                "cannot acknowledge operations that do not exist".into(),
+            ));
+        }
+        self.outbox.uploaded_through = self.outbox.uploaded_through.max(through);
+        write_json(&self.root.join("outbox.json"), &self.outbox)?;
+        Ok(())
+    }
+
+    /// Enables outbox retention: journal segments are then kept until
+    /// uploaded as well as checkpointed.
+    pub fn set_sync_enabled(&mut self, on: bool) -> Result<()> {
+        self.outbox.sync_enabled = on;
+        write_json(&self.root.join("outbox.json"), &self.outbox)?;
+        Ok(())
     }
 
     // -------------------------------------------------------------- assets --
@@ -772,7 +1520,7 @@ impl Library {
         media_type: &str,
         name: Option<String>,
     ) -> Result<Asset> {
-        let mut nb = self.live_notebook(nb_id)?.clone();
+        let nb = self.live_notebook(nb_id)?;
         let hash = sha256_hex(bytes);
         if let Some(a) = nb.assets.iter().find(|a| a.sha256 == hash) {
             return Ok(a.clone());
@@ -787,8 +1535,13 @@ impl Library {
             byte_size: bytes.len() as u64,
             original_name: name,
         };
-        nb.assets.push(asset.clone());
-        self.save_notebook(nb)?;
+        self.commit_notebook_ops(
+            nb_id,
+            vec![DocumentOperation::AssetReferenced {
+                notebook_id: nb_id,
+                asset: asset.clone(),
+            }],
+        )?;
         Ok(asset)
     }
 
@@ -831,20 +1584,117 @@ impl Library {
             return Err(StorageError::Conflict("notebook already exists".into()));
         }
         fs::rename(staged_dir, &dest)?;
-        crate::fsutil::sync_dir(&self.root.join("notebooks"))?;
+        fsutil::sync_dir(&self.root.join("notebooks"))?;
         self.notebooks.insert(nb.id, nb.clone());
         Ok(nb)
     }
 
+    /// Whether an id is taken (including notebooks purged while their
+    /// journal entries are still retained).
     pub(crate) fn contains_notebook(&self, id: Uuid) -> bool {
-        self.notebooks.contains_key(&id)
+        self.notebooks.contains_key(&id) || self.purged.contains(&id)
     }
+
+    // --------------------------------------------------------------- tests --
 
     /// Test/benchmark hook: drop in-memory state without flushing (simulates a crash).
     #[doc(hidden)]
     pub fn crash_for_tests(self) {
+        // the OS releases the lock of a dead process
+        let _ = self._lock.unlock();
         std::mem::forget(self);
     }
+
+    /// Test hook: checkpoint thresholds.
+    #[doc(hidden)]
+    pub fn set_tuning(&mut self, t: Tuning) {
+        self.tuning = t;
+    }
+
+    /// Test hook: deterministic ids for new notebooks/pages/operations.
+    #[doc(hidden)]
+    pub fn set_deterministic_ids(&mut self, start: u128) {
+        self.id_counter = Some(start);
+    }
+
+    /// Test hook: journal segment files currently retained.
+    #[doc(hidden)]
+    pub fn journal_segments(&self) -> usize {
+        self.journal.segment_count()
+    }
+}
+
+impl Drop for Library {
+    fn drop(&mut self) {
+        // the lock file handle closes with the struct; nothing to flush here
+        // (callers flush explicitly; acknowledged edits are already durable)
+    }
+}
+
+/// Keys for `n` new pages inserted at live index `at`.
+fn keys_for_insert(nb: &Notebook, at: usize, n: usize) -> Vec<String> {
+    let before = at.checked_sub(1).and_then(|i| nb.key_of(nb.page_order[i]));
+    let after = nb.page_order.get(at).and_then(|p| nb.key_of(*p));
+    match (before, after) {
+        (Some(a), Some(b)) if a >= b => order_key::n_between(Some(a), None, n),
+        (a, b) => order_key::n_between(a, b, n),
+    }
+}
+
+/// New keys for the pages that must move so that sorting by key yields
+/// `order`. Keeps the longest run of pages whose keys are already
+/// increasing in the new order (fewest operations).
+fn reorder_keys(nb: &Notebook, order: &[Uuid]) -> Vec<(Uuid, String)> {
+    let keys: Vec<&str> = order.iter().map(|p| nb.key_of(*p).unwrap_or("")).collect();
+    // longest strictly increasing subsequence (by key, then id), O(n log n)
+    let cmp_key = |i: usize| (keys[i], order[i]);
+    let mut tails: Vec<usize> = Vec::new();
+    let mut prev: Vec<Option<usize>> = vec![None; order.len()];
+    for i in 0..order.len() {
+        if keys[i].is_empty() {
+            continue;
+        }
+        let pos = tails.partition_point(|&t| cmp_key(t) < cmp_key(i));
+        prev[i] = pos.checked_sub(1).map(|p| tails[p]);
+        if pos == tails.len() {
+            tails.push(i);
+        } else {
+            tails[pos] = i;
+        }
+    }
+    let mut keep = vec![false; order.len()];
+    let mut cur = tails.last().copied();
+    while let Some(i) = cur {
+        keep[i] = true;
+        cur = prev[i];
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < order.len() {
+        if keep[i] {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < order.len() && !keep[i] {
+            i += 1;
+        }
+        let before = start.checked_sub(1).map(|j| keys[j]);
+        let before = before.map(|b| {
+            // the previous page may itself have been re-keyed in this pass
+            out.iter()
+                .rev()
+                .find(|(p, _): &&(Uuid, String)| *p == order[start - 1])
+                .map_or(b.to_string(), |(_, k)| k.clone())
+        });
+        let after = order.get(i).map(|_| keys[i].to_string());
+        let new = match (&before, &after) {
+            (Some(a), Some(b)) if a >= b => order_key::n_between(Some(a), None, i - start),
+            (a, b) => order_key::n_between(a.as_deref(), b.as_deref(), i - start),
+        };
+        out.extend(order[start..i].iter().copied().zip(new));
+    }
+    out
 }
 
 /// Decodes a page snapshot in either encoding: binary `.prp` or legacy JSON.

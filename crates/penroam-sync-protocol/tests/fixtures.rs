@@ -1,0 +1,198 @@
+//! Public schema compatibility check.
+//!
+//! Every committed fixture in `fixtures/v1/` must deserialize into the
+//! current types and re-serialize **byte-identically**; binary and hex
+//! fixtures must be reproduced exactly by the current encoders. A failure
+//! here means a wire-visible change: either it is a bug, or it needs a
+//! protocol/envelope version decision and regenerated fixtures
+//! (`cargo run -p penroam-sync-testkit --bin penroam-sync-fixtures -- crates/penroam-sync-protocol/fixtures/v1`).
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+use penroam_sync_protocol::contract::{
+    error_code_table, to_fixture_json, ErrorCodeEntry, InvalidEnvelopeCase,
+};
+use penroam_sync_protocol::framing::{
+    decode_batch, decode_json_batch, encode_batch, encode_json_batch,
+};
+use penroam_sync_protocol::{
+    canonical_aad_bytes, canonical_signing_bytes, hex, negotiate, verify_ciphertext, AckRequest,
+    ContractManifest, DeviceRegistrationRequest, DeviceRegistrationResponse, EnvelopeHeader,
+    ErrorBody, Limits, ProtocolRange, PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse,
+    ServerMeta, UsageResponse,
+};
+use serde::{de::DeserializeOwned, Serialize};
+
+fn dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/v1")
+}
+
+fn read(name: &str) -> Vec<u8> {
+    std::fs::read(dir().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
+}
+
+fn roundtrip<T: Serialize + DeserializeOwned>(name: &str) -> T {
+    let bytes = read(name);
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let value: T = serde_json::from_str(text).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(
+        to_fixture_json(&value),
+        text,
+        "{name} does not re-serialize byte-identically"
+    );
+    value
+}
+
+#[test]
+fn every_fixture_is_checked() {
+    let mut checked: BTreeSet<String> = [
+        "meta.json",
+        "contract-manifest.json",
+        "error-codes.json",
+        "envelope-header.valid.json",
+        "envelope-header.valid.signing-bytes.hex",
+        "envelope-header.valid.aad-bytes.hex",
+        "push-batch.bin",
+        "push-batch.retry.bin",
+        "push-response.accepted.json",
+        "push-response.retry.json",
+        "pull-request.page1.json",
+        "pull-request.page2.json",
+        "pull-response.page1.json",
+        "pull-response.page2.json",
+        "pull-batch.page1.bin",
+        "pull-batch.page2.bin",
+        "ack-request.json",
+        "usage-response.json",
+        "device-registration-request.json",
+        "device-registration-response.json",
+        "error.cursor-expired.json",
+        "error.rate-limited.json",
+        "error.upgrade-required.json",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let mut on_disk = BTreeSet::new();
+    for e in std::fs::read_dir(dir()).unwrap() {
+        let name = e.unwrap().file_name().into_string().unwrap();
+        if name.starts_with("envelope-header.invalid.") {
+            checked.insert(name.clone());
+        }
+        on_disk.insert(name);
+    }
+    assert_eq!(on_disk, checked, "fixture set changed; update this test");
+}
+
+#[test]
+fn meta_and_manifest() {
+    let meta: ServerMeta = roundtrip("meta.json");
+    meta.limits.validate().unwrap();
+    assert!(negotiate(ProtocolRange::CLIENT, &meta).is_ok());
+    let manifest: ContractManifest = roundtrip("contract-manifest.json");
+    assert_eq!(
+        manifest,
+        ContractManifest::current(),
+        "contract numbers changed"
+    );
+    let codes: Vec<ErrorCodeEntry> = roundtrip("error-codes.json");
+    assert_eq!(codes, error_code_table(), "error code table changed");
+}
+
+#[test]
+fn valid_envelope_and_canonical_bytes() {
+    let h: EnvelopeHeader = roundtrip("envelope-header.valid.json");
+    h.validate(&Limits::DEFAULT).unwrap();
+    let sig = String::from_utf8(read("envelope-header.valid.signing-bytes.hex")).unwrap();
+    assert_eq!(sig.trim_end(), hex::encode(&canonical_signing_bytes(&h)));
+    let aad = String::from_utf8(read("envelope-header.valid.aad-bytes.hex")).unwrap();
+    assert_eq!(aad.trim_end(), hex::encode(&canonical_aad_bytes(&h)));
+    // depends_on order on the wire must not matter.
+    let mut rev = h.clone();
+    rev.depends_on.reverse();
+    assert_eq!(sig.trim_end(), hex::encode(&canonical_signing_bytes(&rev)));
+}
+
+#[test]
+fn invalid_envelopes_fail_with_expected_error() {
+    let mut n = 0;
+    for e in std::fs::read_dir(dir()).unwrap() {
+        let name = e.unwrap().file_name().into_string().unwrap();
+        if !name.starts_with("envelope-header.invalid.") {
+            continue;
+        }
+        let case: InvalidEnvelopeCase = roundtrip(&name);
+        let err = case.header.validate(&Limits::DEFAULT).unwrap_err();
+        assert_eq!(err.kind(), case.expected_error, "{name}");
+        assert_eq!(err.error_code(), case.expected_error_code, "{name}");
+        n += 1;
+    }
+    assert!(
+        n >= 5,
+        "expected several invalid envelope fixtures, found {n}"
+    );
+}
+
+#[test]
+fn push_batches_and_responses() {
+    let l = Limits::DEFAULT;
+    for name in ["push-batch.bin", "push-batch.retry.bin"] {
+        let bytes = read(name);
+        let raw = decode_batch(&bytes, &l).unwrap();
+        assert_eq!(encode_batch(&raw, &l).unwrap(), bytes, "{name}");
+        let typed: Vec<(EnvelopeHeader, Vec<u8>)> = decode_json_batch(&bytes, &l).unwrap();
+        assert_eq!(
+            encode_json_batch(&typed, &l).unwrap(),
+            bytes,
+            "{name} typed"
+        );
+        if name == "push-batch.bin" {
+            for (h, ct) in &typed {
+                h.validate(&l).unwrap();
+                verify_ciphertext(h, ct).unwrap();
+            }
+        }
+    }
+    let _: PushOpsResponse = roundtrip("push-response.accepted.json");
+    let _: PushOpsResponse = roundtrip("push-response.retry.json");
+}
+
+#[test]
+fn pull_pages() {
+    let l = Limits::DEFAULT;
+    for page in ["page1", "page2"] {
+        let _: PullOpsRequest = roundtrip(&format!("pull-request.{page}.json"));
+        let resp: PullOpsResponse = roundtrip(&format!("pull-response.{page}.json"));
+        let bytes = read(&format!("pull-batch.{page}.bin"));
+        let items: Vec<(PulledOp, Vec<u8>)> = decode_json_batch(&bytes, &l).unwrap();
+        assert_eq!(encode_json_batch(&items, &l).unwrap(), bytes);
+        assert_eq!(
+            items.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(),
+            resp.items
+        );
+        for (p, ct) in &items {
+            verify_ciphertext(&p.header, ct).unwrap();
+        }
+        assert!(resp
+            .items
+            .windows(2)
+            .all(|w| w[0].server_seq < w[1].server_seq));
+    }
+}
+
+#[test]
+fn misc_dtos_and_errors() {
+    let _: AckRequest = roundtrip("ack-request.json");
+    let _: UsageResponse = roundtrip("usage-response.json");
+    let reg: DeviceRegistrationRequest = roundtrip("device-registration-request.json");
+    reg.validate().unwrap();
+    let _: DeviceRegistrationResponse = roundtrip("device-registration-response.json");
+    for name in [
+        "error.cursor-expired.json",
+        "error.rate-limited.json",
+        "error.upgrade-required.json",
+    ] {
+        let _: ErrorBody = roundtrip(name);
+    }
+}

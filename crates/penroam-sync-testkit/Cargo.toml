@@ -1,0 +1,20 @@
+[package]
+name = "penroam-sync-testkit"
+description = "Public in-memory fake Penroam sync server and deterministic protocol fixture generator (test scaffolding, not production)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+penroam-sync-protocol = { path = "../penroam-sync-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+
+[[bin]]
+name = "penroam-sync-fixtures"
+path = "src/bin/penroam-sync-fixtures.rs"

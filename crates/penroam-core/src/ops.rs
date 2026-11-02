@@ -90,7 +90,7 @@ pub fn check_batch(page: &Page, batch: &OperationBatch) -> Result<(), ApplyError
     check_ops(page, &batch.ops)
 }
 
-fn check_ops(page: &Page, ops: &[PageOperation]) -> Result<(), ApplyError> {
+pub(crate) fn check_ops(page: &Page, ops: &[PageOperation]) -> Result<(), ApplyError> {
     let mut ids: HashSet<Uuid> = page.elements.iter().map(Element::id).collect();
     for op in ops {
         match &op.kind {
@@ -153,7 +153,11 @@ pub fn replay_batch(
     Ok(())
 }
 
-fn apply_op_unchecked(elements: &mut Vec<Element>, template: &mut Template, op: &OpKind) {
+pub(crate) fn apply_op_unchecked(
+    elements: &mut Vec<Element>,
+    template: &mut Template,
+    op: &OpKind,
+) {
     match op {
         OpKind::AddElements { elements: add } => {
             let max_z = elements.last().map(Element::z).unwrap_or(i64::MIN);

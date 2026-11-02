@@ -1,0 +1,279 @@
+{
+  "description": "65 references with default max 64",
+  "header": {
+    "envelope_version": 1,
+    "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000002",
+    "device_id": "dev-a-3b1f",
+    "device_seq": 2,
+    "notebook_id": "nb-7f3c2a9e",
+    "depends_on": [
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 1
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 2
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 3
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 4
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 5
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 6
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 7
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 8
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 9
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 10
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 11
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 12
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 13
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 14
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 15
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 16
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 17
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 18
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 19
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 20
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 21
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 22
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 23
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 24
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 25
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 26
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 27
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 28
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 29
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 30
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 31
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 32
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 33
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 34
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 35
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 36
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 37
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 38
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 39
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 40
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 41
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 42
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 43
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 44
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 45
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 46
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 47
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 48
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 49
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 50
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 51
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 52
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 53
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 54
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 55
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 56
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 57
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 58
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 59
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 60
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 61
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 62
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 63
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 64
+      },
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 65
+      }
+    ],
+    "key_epoch": 1,
+    "op_schema_version": 1,
+    "ciphertext_sha256": "ff41b32a12e9bbb53bc37dbae023546ea08683ffe4956d3038ee96b3386c2cdc",
+    "ciphertext_length": 1962,
+    "signature": "paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpQ"
+  },
+  "expected_error": "too_many_dependencies",
+  "expected_error_code": "invalid_envelope"
+}

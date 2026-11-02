@@ -1,0 +1,27 @@
+{
+  "description": "ciphertext_sha256 must be lowercase hex",
+  "header": {
+    "envelope_version": 1,
+    "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000002",
+    "device_id": "dev-a-3b1f",
+    "device_seq": 2,
+    "notebook_id": "nb-7f3c2a9e",
+    "depends_on": [
+      {
+        "device_id": "dev-b-c94e",
+        "device_seq": 9
+      },
+      {
+        "device_id": "dev-a-3b1f",
+        "device_seq": 1
+      }
+    ],
+    "key_epoch": 1,
+    "op_schema_version": 1,
+    "ciphertext_sha256": "FF41B32A12E9BBB53BC37DBAE023546EA08683FFE4956D3038EE96B3386C2CDC",
+    "ciphertext_length": 1962,
+    "signature": "paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpQ"
+  },
+  "expected_error": "invalid_ciphertext_hash",
+  "expected_error_code": "invalid_envelope"
+}

@@ -2,6 +2,6 @@
 
 export type ApplyOutcome = { revision: number, updatedAt: number, 
 /**
- * The batch is on disk (journal fsynced).
+ * The batch is on disk (journal fsynced): "Saved locally".
  */
 durable: boolean, };

@@ -1,0 +1,17 @@
+[package]
+name = "penroam-sync-protocol"
+description = "Public Penroam sync protocol v1: envelope headers, canonical bytes, batch framing, DTOs and error codes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Keep this dependency list minimal: this crate is consumed by the private
+# server and by third-party clients. It must never depend on penroam-core,
+# penroam-storage, Tauri, UI or device SDK crates.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true

@@ -1,10 +1,13 @@
 //! Versioned schema migrations and the M00 → M01 stroke import.
 //!
-//! Every canonical file carries `schemaVersion`. Loading goes through
+//! Every canonical JSON document carries `schemaVersion`. Notebooks and pages
+//! have **independent** schema versions ([`NOTEBOOK_SCHEMA_VERSION`],
+//! [`PAGE_SCHEMA_VERSION`]); neither is derived from the binary file format
+//! version or the operation schema version. Loading goes through
 //! [`page_from_value`] / [`notebook_from_value`], which run the migration
-//! chain `v(n) -> v(n+1)` on the raw JSON before deserialising. Version 1 is
-//! the first Penroam schema; files newer than this build are refused (never
-//! silently truncated).
+//! chain `v(n) -> v(n+1)` on the raw JSON before deserialising (read old,
+//! write current). Files newer than this build are refused, never truncated.
+//! Storage backs up the original bytes before it writes a migrated file.
 
 use crate::model::*;
 use serde_json::{Map, Value};
@@ -12,8 +15,12 @@ use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MigrateError {
-    #[error("unsupported schema version {found} (this build reads up to {SCHEMA_VERSION})")]
-    TooNew { found: u64 },
+    #[error("{kind} schema version {found} is newer than this build supports ({supported}); please update Penroam")]
+    TooNew {
+        kind: &'static str,
+        found: u64,
+        supported: u32,
+    },
     #[error("missing or invalid schemaVersion")]
     NoVersion,
     #[error("malformed document: {0}")]
@@ -24,21 +31,42 @@ pub enum MigrateError {
 
 type Step = fn(Value) -> Result<Value, MigrateError>;
 
-/// `MIGRATIONS[i]` upgrades schema version `i + 1` to `i + 2`. Empty while
-/// only version 1 exists; add steps here, never edit old ones.
+/// `MIGRATIONS[i]` upgrades schema version `i + 1` to `i + 2`. Append steps,
+/// never edit old ones.
 const PAGE_MIGRATIONS: &[Step] = &[];
-const NOTEBOOK_MIGRATIONS: &[Step] = &[];
+const NOTEBOOK_MIGRATIONS: &[Step] = &[notebook_v1_to_v2];
 
-fn run_chain(mut v: Value, chain: &[Step]) -> Result<Value, MigrateError> {
-    let found = v
-        .get("schemaVersion")
-        .and_then(Value::as_u64)
-        .ok_or(MigrateError::NoVersion)?;
+/// Notebook 1 → 2: adds `orderKeys` reproducing `pageOrder` exactly (trashed
+/// pages get keys at their former index). Purely additive and deterministic.
+fn notebook_v1_to_v2(mut v: Value) -> Result<Value, MigrateError> {
+    v["schemaVersion"] = Value::from(2);
+    let mut nb: Notebook = serde_json::from_value(v)?;
+    nb.rebuild_order_keys();
+    Ok(serde_json::to_value(nb)?)
+}
+
+/// Schema version of a raw document (no migration).
+pub fn schema_version_of(v: &Value) -> Option<u64> {
+    v.get("schemaVersion").and_then(Value::as_u64)
+}
+
+fn run_chain(
+    mut v: Value,
+    chain: &[Step],
+    current: u32,
+    kind: &'static str,
+) -> Result<Value, MigrateError> {
+    debug_assert_eq!(chain.len() + 1, current as usize);
+    let found = schema_version_of(&v).ok_or(MigrateError::NoVersion)?;
     if found == 0 {
         return Err(MigrateError::NoVersion);
     }
-    if found > SCHEMA_VERSION as u64 {
-        return Err(MigrateError::TooNew { found });
+    if found > current as u64 {
+        return Err(MigrateError::TooNew {
+            kind,
+            found,
+            supported: current,
+        });
     }
     for step in &chain[(found as usize - 1)..] {
         v = step(v)?;
@@ -47,11 +75,21 @@ fn run_chain(mut v: Value, chain: &[Step]) -> Result<Value, MigrateError> {
 }
 
 pub fn page_from_value(v: Value) -> Result<Page, MigrateError> {
-    Ok(serde_json::from_value(run_chain(v, PAGE_MIGRATIONS)?)?)
+    Ok(serde_json::from_value(run_chain(
+        v,
+        PAGE_MIGRATIONS,
+        PAGE_SCHEMA_VERSION,
+        "page",
+    )?)?)
 }
 
 pub fn notebook_from_value(v: Value) -> Result<Notebook, MigrateError> {
-    Ok(serde_json::from_value(run_chain(v, NOTEBOOK_MIGRATIONS)?)?)
+    Ok(serde_json::from_value(run_chain(
+        v,
+        NOTEBOOK_MIGRATIONS,
+        NOTEBOOK_SCHEMA_VERSION,
+        "notebook",
+    )?)?)
 }
 
 pub fn page_from_slice(b: &[u8]) -> Result<Page, MigrateError> {

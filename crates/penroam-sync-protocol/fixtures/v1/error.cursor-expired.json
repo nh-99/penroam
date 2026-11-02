@@ -1,0 +1,5 @@
+{
+  "code": "cursor_expired",
+  "message": "cursor expired; fetch a checkpoint",
+  "request_id": "req-7"
+}

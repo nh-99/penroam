@@ -2421,6 +2421,7 @@ dependencies = [
  "flate2",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "ts-rs",
  "uuid",
@@ -2443,7 +2444,11 @@ dependencies = [
 name = "penroam-storage"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "penroam-core",
+ "penroam-pdf",
+ "penroam-storage",
+ "penroam-sync-protocol",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2452,6 +2457,28 @@ dependencies = [
  "ts-rs",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "penroam-sync-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "penroam-sync-testkit"
+version = "0.1.0"
+dependencies = [
+ "penroam-sync-protocol",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]

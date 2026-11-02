@@ -1,0 +1,19 @@
+{
+  "protocol": {
+    "major": 1,
+    "minor": 0
+  },
+  "envelope_version": 1,
+  "op_schema": {
+    "min": 1,
+    "max": 1
+  },
+  "formats": {
+    "file_format": 1,
+    "journal_format": 1,
+    "archive_format": 2,
+    "notebook_schema": 2,
+    "page_schema": 1
+  },
+  "git_sha": null
+}

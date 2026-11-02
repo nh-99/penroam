@@ -6,6 +6,8 @@ members = [
   "crates/penroam-core",
   "crates/penroam-storage",
   "crates/penroam-pdf",
+  "crates/penroam-sync-protocol",
+  "crates/penroam-sync-testkit",
   "apps/desktop-mobile/src-tauri",
   "plugins/tauri-plugin-native-ink",
 ]

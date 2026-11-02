@@ -1,0 +1,27 @@
+{
+  "items": [
+    {
+      "server_seq": 3,
+      "header": {
+        "envelope_version": 1,
+        "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000003",
+        "device_id": "dev-a-3b1f",
+        "device_seq": 3,
+        "notebook_id": "nb-7f3c2a9e",
+        "depends_on": [
+          {
+            "device_id": "dev-a-3b1f",
+            "device_seq": 2
+          }
+        ],
+        "key_epoch": 1,
+        "op_schema_version": 1,
+        "ciphertext_sha256": "329270a469afd24658c749c9e1ff088de2a51d08e04a46848ce37afe39242751",
+        "ciphertext_length": 40,
+        "signature": "paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpQ"
+      }
+    }
+  ],
+  "next_cursor": "AQEAARFhY2N0LWZpeHR1cmUtMDAwMQMAAAAAAAAAP5LkiWx7p9CpMJcxD4vj9w",
+  "has_more": false
+}

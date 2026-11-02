@@ -1,4 +1,4 @@
-//! Canonical Penroam document model (schema version 1).
+//! Canonical Penroam document model (notebook schema 2, page schema 1).
 //!
 //! All geometry is in **document points** (1 pt = 1/72 in), origin at the
 //! top-left corner of the page as displayed, y pointing down. At zoom 1.0 one
@@ -14,9 +14,19 @@ use serde_json::{Map, Value};
 use ts_rs::TS;
 use uuid::Uuid;
 
-/// Current document schema version. Bump only together with a migration in
-/// [`crate::migrate`].
-pub const SCHEMA_VERSION: u32 = 1;
+/// Current notebook (`notebook.json`) schema version. Bump only together
+/// with a migration in [`crate::migrate`]. Independent of the page schema,
+/// the binary file format version and the operation schema version.
+///
+/// * 1 — M01.
+/// * 2 — M02: adds `orderKeys` (fractional page order keys). Also marks a
+///   notebook as managed by the M02 operation journal, so M01 builds refuse
+///   it instead of reading pages while ignoring the journal.
+pub const NOTEBOOK_SCHEMA_VERSION: u32 = 2;
+
+/// Current page schema version (the JSON page model, also the `.prp`
+/// metadata section). Independent of [`crate::binary::FILE_FORMAT_VERSION`].
+pub const PAGE_SCHEMA_VERSION: u32 = 1;
 
 pub type Extra = Map<String, Value>;
 
@@ -44,8 +54,15 @@ pub struct Notebook {
     pub created_at: Timestamp,
     #[ts(type = "number")]
     pub updated_at: Timestamp,
-    /// Live pages in reading order.
+    /// Live pages in reading order. Always sorted by (`order_keys`, id).
     pub page_order: Vec<Uuid>,
+    /// Fractional order key of every page, live and trashed (schema 2).
+    /// Keys make concurrent inserts/moves converge (see [`crate::order_key`]);
+    /// a trashed page keeps its key so restore puts it back between the
+    /// same neighbours.
+    #[serde(default)]
+    #[ts(type = "Record<string, string>")]
+    pub order_keys: std::collections::BTreeMap<Uuid, String>,
     /// Soft-deleted pages (restorable). Their files stay on disk.
     #[serde(default)]
     pub trashed_pages: Vec<TrashedPage>,
@@ -187,6 +204,34 @@ pub struct Page {
     #[serde(flatten)]
     #[ts(skip)]
     pub extra: Extra,
+    /// Extension records of the binary page file that this build does not
+    /// understand, kept verbatim so a re-save never strips them (see
+    /// `docs/formats/penroam-binary-v1.md` §5). Not part of the JSON model.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub binary_extensions: Vec<BinaryExtension>,
+}
+
+/// An opaque extension record from a `.prp` file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinaryExtension {
+    pub tag: u32,
+    pub data: Vec<u8>,
+}
+
+impl BinaryExtension {
+    /// Readers that do not know the tag must refuse the file.
+    pub const REQUIRED: u32 = 1 << 31;
+    /// May be kept verbatim after the page is edited. Unknown records
+    /// without this bit make the page read-only for this build.
+    pub const COPY_SAFE: u32 = 1 << 30;
+
+    pub fn required(&self) -> bool {
+        self.tag & Self::REQUIRED != 0
+    }
+    pub fn copy_safe(&self) -> bool {
+        self.tag & Self::COPY_SAFE != 0
+    }
 }
 
 /// A page of an immutable PDF asset rendered under the page's elements.
@@ -413,7 +458,7 @@ pub struct ImageElement {
 impl Page {
     pub fn new(id: Uuid, paper: Paper, size: Size, template: Template, now: Timestamp) -> Self {
         Self {
-            schema_version: SCHEMA_VERSION,
+            schema_version: PAGE_SCHEMA_VERSION,
             id,
             paper,
             size,
@@ -425,7 +470,22 @@ impl Page {
             elements: Vec::new(),
             metadata: Extra::new(),
             extra: Extra::new(),
+            binary_extensions: Vec::new(),
         }
+    }
+
+    /// Why this build must not modify the page, if it must not: the file
+    /// carries extension data this build cannot keep consistent.
+    pub fn read_only_reason(&self) -> Option<String> {
+        self.binary_extensions
+            .iter()
+            .find(|e| !e.copy_safe())
+            .map(|e| {
+                format!(
+                    "this page contains data from a newer Penroam version (extension {:#010x}); it is read-only here",
+                    e.tag
+                )
+            })
     }
 
     /// Everything except the elements (used by the binary encoder).
@@ -443,6 +503,7 @@ impl Page {
             elements: Vec::new(),
             metadata: self.metadata.clone(),
             extra: self.extra.clone(),
+            binary_extensions: self.binary_extensions.clone(),
         }
     }
 
@@ -475,12 +536,13 @@ impl Notebook {
         now: Timestamp,
     ) -> Self {
         Self {
-            schema_version: SCHEMA_VERSION,
+            schema_version: NOTEBOOK_SCHEMA_VERSION,
             id,
             title,
             created_at: now,
             updated_at: now,
             page_order: Vec::new(),
+            order_keys: Default::default(),
             trashed_pages: Vec::new(),
             deleted_at: None,
             defaults,
@@ -489,6 +551,67 @@ impl Notebook {
             metadata: Extra::new(),
             extra: Extra::new(),
         }
+    }
+
+    /// Order key of a page (live or trashed).
+    pub fn key_of(&self, page: Uuid) -> Option<&str> {
+        self.order_keys.get(&page).map(String::as_str)
+    }
+
+    /// Sorts `page_order` by (order key, page id); pages without a key go last.
+    pub fn sort_page_order(&mut self) {
+        let keys = &self.order_keys;
+        self.page_order
+            .sort_by(|a, b| match (keys.get(a), keys.get(b)) {
+                (Some(x), Some(y)) => x.cmp(y).then(a.cmp(b)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            });
+    }
+
+    /// Whether `page_order` is consistent with `order_keys`.
+    pub fn order_is_consistent(&self) -> bool {
+        self.all_page_ids().all(|p| {
+            self.order_keys
+                .get(&p)
+                .is_some_and(|k| crate::order_key::is_valid(k))
+        }) && self.page_order.windows(2).all(|w| {
+            let (ka, kb) = (&self.order_keys[&w[0]], &self.order_keys[&w[1]]);
+            ka < kb || (ka == kb && w[0] < w[1])
+        })
+    }
+
+    /// A fresh key that sorts at live index `at` (0 = first, len = last),
+    /// strictly between the neighbours' keys.
+    pub fn key_for_index(&self, at: usize) -> String {
+        let at = at.min(self.page_order.len());
+        let before = at
+            .checked_sub(1)
+            .and_then(|i| self.key_of(self.page_order[i]));
+        let after = self.page_order.get(at).and_then(|p| self.key_of(*p));
+        match (before, after) {
+            // equal neighbour keys (concurrent inserts): go after both
+            (Some(a), Some(b)) if a >= b => crate::order_key::between(Some(a), None),
+            (a, b) => crate::order_key::between(a, b),
+        }
+    }
+
+    /// Replaces every order key with evenly spaced keys that reproduce the
+    /// current `page_order`; trashed pages get keys at their former index.
+    /// Used by the v1 → v2 migration and to repair inconsistent files.
+    pub fn rebuild_order_keys(&mut self) {
+        let mut seq: Vec<Uuid> = self.page_order.clone();
+        for t in &self.trashed_pages {
+            let at = (t.former_index as usize).min(seq.len());
+            seq.insert(at, t.id);
+        }
+        self.order_keys = seq
+            .into_iter()
+            .zip(crate::order_key::spread(
+                self.page_order.len() + self.trashed_pages.len(),
+            ))
+            .collect();
     }
 
     /// All pages with files on disk (live and trashed).

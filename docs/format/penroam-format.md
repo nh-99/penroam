@@ -1,4 +1,9 @@
-# Penroam file formats (schema 1, archive format 1)
+# Penroam file formats (JSON model reference)
+
+> **M02:** the normative contract for versions, the `.prp` file, the operation journal,
+> checkpoints, migrations and limits is [`docs/formats/penroam-binary-v1.md`](../formats/penroam-binary-v1.md).
+> This document remains the reference for the JSON page/notebook model. Notebook schema is now 2
+> (adds `orderKeys`); page schema is 1.
 
 Penroam stores notebooks as plain JSON plus original attachment bytes, so they stay readable and
 editable without Penroam. The Rust types in `crates/penroam-core/src/model.rs` are normative;
@@ -113,8 +118,9 @@ content height (renderers never clip).
 ```
 
 A batch applies atomically or not at all; `baseRevision` must equal the page revision.
-The live library journals batches as JSON lines `{"revision", "at", "batch"}` next to the page
-snapshot; journals are an implementation detail and are never exported.
+Since M02 the live library journals every change as typed operations in a device-wide binary
+journal (`docs/formats/penroam-binary-v1.md` §7–§9); M01's per-page JSON-lines journals are
+migrated on first open. Journals are never exported.
 
 ## 5. Portable archive (`.penroam`, ZIP)
 

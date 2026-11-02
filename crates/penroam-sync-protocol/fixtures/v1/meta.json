@@ -1,0 +1,27 @@
+{
+  "min_client_protocol": {
+    "major": 1,
+    "minor": 0
+  },
+  "max_client_protocol": {
+    "major": 1,
+    "minor": 0
+  },
+  "capabilities": [
+    "ops.batch.v1",
+    "ops.pull.v1",
+    "acks.v1",
+    "usage.v1"
+  ],
+  "limits": {
+    "max_batch_envelopes": 256,
+    "max_batch_bytes": 8388608,
+    "max_ciphertext_bytes_per_op": 1048576,
+    "max_header_json_bytes": 16384,
+    "max_blob_bytes": 67108864,
+    "max_depends_on": 64,
+    "max_pull_page_size": 500,
+    "max_id_length": 128
+  },
+  "server_instance_id": "testkit-fixture-instance"
+}

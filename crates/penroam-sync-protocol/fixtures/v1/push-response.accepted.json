@@ -1,0 +1,18 @@
+{
+  "acks": [
+    {
+      "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000001",
+      "result": {
+        "status": "accepted",
+        "server_seq": 1
+      }
+    },
+    {
+      "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000002",
+      "result": {
+        "status": "accepted",
+        "server_seq": 2
+      }
+    }
+  ]
+}
