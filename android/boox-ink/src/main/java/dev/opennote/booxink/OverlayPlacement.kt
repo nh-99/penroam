@@ -3,7 +3,7 @@ package dev.opennote.booxink
 import kotlin.math.roundToInt
 
 /**
- * M01: where the native ink View goes so that it covers exactly the web
+ * Where the native ink View goes so that it covers exactly the web
  * editor's canvas element.
  *
  * The web side reports the element's rect in CSS px relative to the WebView

@@ -3,7 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
     <application
         android:name=".DemoApp"
-        android:label="M00 BOOX Ink Reference"
+        android:label="BOOX Ink Reference"
         tools:replace="android:label"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:hardwareAccelerated="true">

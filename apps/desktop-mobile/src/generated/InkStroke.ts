@@ -12,11 +12,11 @@ export type InkStroke = { id: string, z: number, tool: InkTool,
  */
 color: string, opacity: number, 
 /**
- * Nominal width in points (M00 `brush.width`).
+ * Nominal width in points (stroke document `brush.width`).
  */
 width: number, 
 /**
- * Whether pressure modulated the width when drawn (M00 `brush.pressure`).
+ * Whether pressure modulated the width when drawn (stroke document `brush.pressure`).
  */
 pressure: boolean, 
 /**
@@ -24,7 +24,7 @@ pressure: boolean,
  */
 source: string, 
 /**
- * Input diagnostics and platform metadata (M00 `input`), kept verbatim:
+ * Input diagnostics and platform metadata (stroke document `input`), kept verbatim:
  * `api`, `device`, raw pressure range, coalesced counts, Onyx stream, ...
  */
 input: Record<string, unknown>, 

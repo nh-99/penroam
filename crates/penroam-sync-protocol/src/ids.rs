@@ -113,7 +113,7 @@ macro_rules! opaque_id {
 }
 
 opaque_id!(
-    /// Server-registered device identity (bound to a device signing key in M03).
+    /// Server-registered device identity (to be bound to a device signing key).
     DeviceId
 );
 opaque_id!(
@@ -130,7 +130,7 @@ opaque_id!(
     AccountId
 );
 opaque_id!(
-    /// Opaque id of an encrypted, immutable blob (assets; used from M03/M04).
+    /// Opaque id of an encrypted, immutable blob (assets; not used yet).
     BlobId
 );
 

@@ -5,8 +5,8 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
- * Canonical M00 stroke representation (see docs/architecture.md, "Canonical
- * stroke format"). Identical in the Dart and TypeScript prototypes.
+ * Canonical stroke representation (the "Canonical stroke format" of the
+ * framework-comparison architecture notes in docs/). Identical in the Dart and TypeScript prototypes.
  *
  * Coordinates are document units (logical px at zoom 1.0), pressure is
  * normalized to 0..1, timeUs is microseconds relative to the first sample.
@@ -25,7 +25,7 @@ data class InkBrush(
     val width: Float = 3f,
     val color: String = "#000000",
     val pressure: Boolean = true,
-    /** M01: 1.0 for pens, < 1 for highlighters (alpha). Omitted from JSON when 1. */
+    /** 1.0 for pens, < 1 for highlighters (alpha). Omitted from JSON when 1. */
     val opacity: Float = 1f,
 )
 

@@ -1,13 +1,13 @@
 import { fixture } from "./fixture";
 import { describe, expect, it } from "vitest";
 import { hitTest, hitTestSegment, stablePieceCount, strokePieces, widthFor } from "../src/editor/geometry";
-import { m00ToInk } from "../src/platform/nativeInk";
+import { strokeDocToInk } from "../src/platform/nativeInk";
 
 const tool = { tool: "pen" as const, color: "#000000", width: 3, pressure: true, opacity: 1 };
 
-describe("M00 geometry golden (tests/fixtures/geometry-golden.json)", () => {
+describe("geometry golden (tests/fixtures/geometry-golden.json)", () => {
   const golden = JSON.parse(fixture("geometry-golden.json"));
-  const strokes = JSON.parse(fixture("sample-strokes.json")).strokes.map((s: any) => ({ m00: s.id, ...m00ToInk({ ...s, id: s.id }, 1, tool) }));
+  const strokes = JSON.parse(fixture("sample-strokes.json")).strokes.map((s: any) => ({ srcId: s.id, ...strokeDocToInk({ ...s, id: s.id }, 1, tool) }));
 
   it("width mapping", () => {
     for (const c of golden.widthCases) expect(widthFor(c.base, c.pressure, c.pressureEnabled)).toBeCloseTo(c.width, 12);
@@ -15,7 +15,7 @@ describe("M00 geometry golden (tests/fixtures/geometry-golden.json)", () => {
 
   it("pieces", () => {
     for (const g of golden.strokes) {
-      const s = strokes.find((x: any) => x.m00 === g.id)!;
+      const s = strokes.find((x: any) => x.srcId === g.id)!;
       const pieces = strokePieces(s.points, s.width, s.pressure);
       expect(pieces.length).toBe(g.pieces.length);
       pieces.forEach((p, i) => {

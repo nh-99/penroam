@@ -13,7 +13,7 @@
 //! <root>/notebooks/<nb>/assets/<sha256>     immutable attachments
 //! <root>/notebooks/<nb>/thumbs/<page>.png   derived thumbnail cache (never exported)
 //! <root>/notebooks/<nb>/orphans/            files found unreferenced at start-up (kept)
-//! <root>/migration-backups/                 original bytes of migrated M01 files
+//! <root>/migration-backups/                 original bytes of migrated legacy files
 //! <root>/staging/                           temporary import/export work area
 //! ```
 //!
@@ -87,7 +87,7 @@ pub struct RecoveryReport {
     pub replayed_batches: u32,
     /// Pages recovered from their previous snapshot.
     pub fallback_snapshots: u32,
-    /// Notebooks migrated from M01 storage.
+    /// Notebooks migrated from the legacy storage layout.
     pub migrated_notebooks: u32,
     pub warnings: Vec<String>,
 }
@@ -1490,7 +1490,7 @@ impl Library {
             .collect())
     }
 
-    /// Records a server acknowledgement (M03). Persisted atomically before
+    /// Records a server acknowledgement (used by the sync engine). Persisted atomically before
     /// returning; monotone.
     pub fn mark_uploaded(&mut self, through: u64) -> Result<()> {
         if through > self.last_seq {

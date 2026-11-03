@@ -12,13 +12,13 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "0.1.0-m00"
+        versionName = "0.1.0"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // M00 test builds are signed with the debug key so they install
+            // Test builds are signed with the debug key so they install
             // directly; do not ship this configuration.
             signingConfig = signingConfigs.getByName("debug")
         }

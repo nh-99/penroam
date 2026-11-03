@@ -76,7 +76,7 @@ pub fn run() {
             commands::export_notebook,
             commands::import_notebook,
             commands::export_annotated_pdf,
-            commands::import_m00_strokes,
+            commands::import_stroke_document,
             commands::exit_app,
             bench::system_info,
             bench::proc_stats,

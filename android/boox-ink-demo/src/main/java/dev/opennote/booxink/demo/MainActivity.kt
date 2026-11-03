@@ -32,7 +32,7 @@ class DemoApp : Application() {
 }
 
 /**
- * Standalone native reference host (M00.2/M00.3). Exercises the shared
+ * Standalone native reference host. Exercises the shared
  * module with no framework in between, high-contrast and animation-free for
  * ePaper. Files are written to getExternalFilesDir(null) so they can be
  * pulled with `adb pull /sdcard/Android/data/dev.opennote.booxink.demo/files/`.

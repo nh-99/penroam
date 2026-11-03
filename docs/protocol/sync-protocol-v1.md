@@ -1,4 +1,4 @@
-# Penroam Sync Protocol v1: implemented contract (M02.3)
+# Penroam Sync Protocol v1: implemented contract
 
 **Status:** Implemented as public Rust types and fixtures. The wire *shapes* in this document (envelope header, canonical bytes, batch framing, error codes) are what `penroam-sync-protocol` encodes and what the committed fixtures pin. **HTTP route names and the HTTP transport mapping are proposed, not frozen.** The design rationale is in `agent-docs/01-SYNC-PROTOCOL-V1.md`.
 
@@ -7,7 +7,7 @@
 | `crates/penroam-sync-protocol` | Versions, ids, limits, envelope header and validation, canonical bytes, batch framing, DTOs, error codes, retry policy, contract manifest | `serde`, `serde_json`, `thiserror`, `sha2` only. No `penroam-core`, storage, Tauri, UI or device SDKs |
 | `crates/penroam-sync-testkit` | `InMemoryServer` fake server (test scaffolding, not production), deterministic fixture generator `penroam-sync-fixtures` | the protocol crate, `serde`, `serde_json`, `thiserror`, `sha2`, `uuid` |
 
-There is no network server, authentication or cryptography in M02. Signatures and AEAD come in M03. This document fixes only the bytes they will cover.
+There is no network server, authentication or cryptography yet. Signatures and AEAD are not implemented; this document fixes only the bytes they will cover.
 
 ## 1. Version numbers
 
@@ -88,7 +88,7 @@ The client generates op ids (for example a hyphenated UUIDv4/v7) and keeps each 
 | `op_schema_version` | u16 | ≥ 1 (0 is invalid). Newer values are relayed (§2). |
 | `ciphertext_sha256` | string | Exactly 64 **lowercase** hex characters |
 | `ciphertext_length` | u64 | `1..=max_ciphertext_bytes_per_op` |
-| `signature` | string | 1..=512 characters of canonical unpadded base64url. Not verified in M02. Fixtures use a placeholder (64 × `0xA5`). |
+| `signature` | string | 1..=512 characters of canonical unpadded base64url. Not verified yet. Fixtures use a placeholder (64 × `0xA5`). |
 
 `EnvelopeHeader::validate(&limits)` returns a typed `EnvelopeError`. Each error has a stable `kind()` and an `error_code()`:
 
@@ -98,11 +98,11 @@ The client generates op ids (for example a hyphenated UUIDv4/v7) and keeps each 
 | `ciphertext_too_large` | `payload_too_large` |
 | `invalid_op_schema_version`, `id_too_long`, `too_many_dependencies`, `duplicate_dependency`, `dependency_cycle`, `empty_ciphertext`, `invalid_ciphertext_hash`, `invalid_signature_encoding` | `invalid_envelope` |
 
-`verify_ciphertext(header, bytes)` checks the declared length and SHA-256. A mismatch returns `integrity_mismatch`. This is an integrity check only. Authentication comes from the device signature in M03.
+`verify_ciphertext(header, bytes)` checks the declared length and SHA-256. A mismatch returns `integrity_mismatch`. This is an integrity check only. Authentication will come from the device signature (not yet implemented).
 
 ## 5. Canonical bytes
 
-These are the bytes a device will sign, and the bytes that will be AEAD associated data, in M03. **No crypto is implemented.** The rules:
+These are the bytes a device will sign, and the bytes that will be AEAD associated data. **No crypto is implemented yet.** The rules:
 
 * A fixed ASCII domain prefix that ends in `\0`. The prefix has no length prefix.
 * Fields always appear in the same fixed order.
@@ -131,7 +131,7 @@ Always validate a header before signing or verifying it.
 
 Fixtures: `envelope-header.valid.json` produces `envelope-header.valid.signing-bytes.hex` (245 bytes). Its `depends_on` is deliberately unsorted on the wire.
 
-### 5.2 `canonical_aad_bytes`: AEAD associated-data layout (M03 will use it)
+### 5.2 `canonical_aad_bytes`: AEAD associated-data layout (for the future encryption layer)
 
 This layout binds the payload to its identity, versions, key epoch, length and causal dependencies. It excludes `ciphertext_sha256` and `signature`. `ciphertext_length` is known before encryption for a fixed-tag AEAD.
 
@@ -219,7 +219,7 @@ Acks always name exact operations, never just "the batch". A `Cursor` is opaque 
 
 ### 8.1 Pull transport mapping (proposed)
 
-The JSON control document carries the headers. The ciphertexts travel in a PRSB frame whose items match `items` one to one. Over HTTP, the proposal is: a framed response (`Accept: application/vnd.penroam.batch.v1`) carries the pagination in the `Penroam-Next-Cursor` and `Penroam-Has-More` response headers. The testkit returns both forms as `PullPage { response, frame }`. Freeze this in M03.
+The JSON control document carries the headers. The ciphertexts travel in a PRSB frame whose items match `items` one to one. Over HTTP, the proposal is: a framed response (`Accept: application/vnd.penroam.batch.v1`) carries the pagination in the `Penroam-Next-Cursor` and `Penroam-Has-More` response headers. The testkit returns both forms as `PullPage { response, frame }`. This mapping is not frozen until a real HTTP client and server exist.
 
 ## 9. Errors
 
@@ -235,7 +235,7 @@ The JSON control document carries the headers. The ciphertexts travel in a PRSB 
 | `conflict` | 409 | no | State conflict. Refresh and decide. |
 | `op_id_conflict` | 409 | no | The op_id or device_seq was reused with different content. This is a local bug or corruption. Do not overwrite. |
 | `recovery_required` | 409 | no | Run the recovery/rebase flow. Preserve unsent ops. |
-| `cursor_expired` | 410 | no | Fetch a checkpoint, then the tail (M03/M04). |
+| `cursor_expired` | 410 | no | Fetch a checkpoint, then the tail (checkpoints not yet implemented). |
 | `checkpoint_required` | 410 | no | Same as `cursor_expired` |
 | `payload_too_large` | 413 | no | Split the batch or respect the limits. |
 | `invalid_envelope` | 422 | no | The header failed validation. |
@@ -310,7 +310,7 @@ The fixture set itself is also pinned. `crates/penroam-sync-testkit/tests/fixtur
 
 Changing a committed fixture is a wire-visible change. It needs an explicit version decision.
 
-## 12. Not yet implemented (M03/M04)
+## 12. Not yet implemented
 
 * **Cryptography:**
   * Ed25519 device signatures over `canonical_signing_bytes`, and signature verification before accepting a write
@@ -321,5 +321,5 @@ Changing a committed fixture is a wire-visible change. It needs an explicit vers
 * **Blobs:** upload intents, signed URLs, blob storage and verification. Only the route constants and `max_blob_bytes` exist.
 * **Checkpoints/snapshots:** `covers_server_seq`, the checkpoint + tail recovery path, and real compaction/retention. The testkit only *simulates* expiry.
 * **Real HTTP:** server (private repo, Axum) and client transport, OpenAPI document, freezing route names and the pull transport mapping (§8.1), rate limiting, request size enforcement at the HTTP layer.
-* **Client sync engine:** outbox, state machine, merge, and the operation algebra integration (M03).
+* **Client sync engine:** outbox upload, state machine, and applying remote operations through the merge model (`penroam_core::replica`).
 * **Release tooling:** filling `git_sha` in the contract manifest, and the cross-check test of the duplicated format constants against storage/core.

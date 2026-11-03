@@ -2,7 +2,7 @@
 // plugins/tauri-plugin-native-ink. Vue never talks to a native view directly;
 // the editor engine drives this facade.
 //
-//  * Android/BOOX ("owner" surface): the M00 BooxInkView (Onyx raw drawing,
+//  * Android/BOOX ("owner" surface): the shared BooxInkView (android/boox-ink; Onyx raw drawing,
 //    Mode B) sits *above* the WebView with a transparent background. While
 //    visible it renders the committed ink layer itself (so its hardware
 //    preview hands over to identical software ink) and the web ink layer is
@@ -65,10 +65,10 @@ export interface NativeInkSurface {
   injectTestStroke?(points: number[]): Promise<void>;
 }
 
-// --------------------------------------------------------- M00 interop --
+// --------------------------------------------- canonical stroke interop --
 
-/** M01 stroke -> M00 canonical stroke JSON (the native modules' format). */
-export function inkToM00(s: InkStroke): Record<string, unknown> {
+/** Editor stroke -> canonical stroke JSON (the native modules' format). */
+export function inkToStrokeDoc(s: InkStroke): Record<string, unknown> {
   return {
     id: s.id,
     source: s.source,
@@ -78,8 +78,8 @@ export function inkToM00(s: InkStroke): Record<string, unknown> {
   };
 }
 
-/** M00 canonical stroke JSON -> M01 stroke (keeps every point field and input metadata). */
-export function m00ToInk(raw: any, z: number, fallback: NativeTool): InkStroke {
+/** Canonical stroke JSON -> editor stroke (keeps every point field and input metadata). */
+export function strokeDocToInk(raw: any, z: number, fallback: NativeTool): InkStroke {
   const brush = raw?.brush ?? {};
   const tool = brush.type === "highlighter" ? "highlighter" : fallback.tool === "highlighter" ? "highlighter" : "pen";
   const color = typeof brush.color === "string" && /^#[0-9a-fA-F]{6}$/.test(brush.color) ? brush.color.toLowerCase() : fallback.color;
@@ -110,7 +110,7 @@ export function m00ToInk(raw: any, z: number, fallback: NativeTool): InkStroke {
   };
 }
 
-const doc = (strokes: InkStroke[]) => JSON.stringify({ format: "m00-strokes", version: 1, meta: {}, strokes: strokes.map(inkToM00) });
+const doc = (strokes: InkStroke[]) => JSON.stringify({ format: "m00-strokes", version: 1, meta: {}, strokes: strokes.map(inkToStrokeDoc) });
 
 // ------------------------------------------------------------- plugin --
 
@@ -141,7 +141,7 @@ class PluginSurface implements NativeInkSurface {
     await on("stroke", (p) => {
       try {
         const raw = typeof p.stroke === "string" ? JSON.parse(p.stroke) : p.stroke;
-        this.handlers?.strokeFinalized(m00ToInk(raw, this.zNext++, this.tool!));
+        this.handlers?.strokeFinalized(strokeDocToInk(raw, this.zNext++, this.tool!));
       } catch (e) {
         this.handlers?.error(`native stroke could not be read: ${e}`);
       }

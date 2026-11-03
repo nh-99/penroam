@@ -73,7 +73,7 @@ jobs:
           sudo apt-get install -y xvfb
           PENROAM_AUTOBENCH=ci-x11,quick,exit PENROAM_RESULTS_DIR=$PWD/ci-results PENROAM_LIBRARY_DIR=$(mktemp -d) \
             GDK_BACKEND=x11 timeout 300 xvfb-run -a target/release/penroam-app
-          ls ci-results/perf-m01-workload-d-ci-x11-*.json
+          ls ci-results/perf-app-workload-d-ci-x11-*.json
       - name: Smoke test on Wayland (headless Weston)
         run: |
           sudo apt-get install -y weston
@@ -81,11 +81,11 @@ jobs:
           weston --backend=headless --socket=wl-ci --idle-time=0 & sleep 3
           PENROAM_AUTOBENCH=ci-wayland,quick,exit PENROAM_RESULTS_DIR=$PWD/ci-results PENROAM_LIBRARY_DIR=$(mktemp -d) \
             WAYLAND_DISPLAY=wl-ci GDK_BACKEND=wayland timeout 300 target/release/penroam-app
-          ls ci-results/perf-m01-workload-d-ci-wayland-*.json
+          ls ci-results/perf-app-workload-d-ci-wayland-*.json
       - uses: actions/upload-artifact@v4
         with: { name: penroam-linux, path: target/release/bundle }
 
-  # Compatible hosted runners exist; these jobs have not been run yet (see docs/M01-results.md).
+  # Compatible hosted runners exist; these jobs have not been run yet (see docs/).
   desktop-builds:
     strategy:
       fail-fast: false

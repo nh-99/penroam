@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use uuid::Uuid;
 
-/// 1: M01 (per-page JSON-lines journals). 2: M02 (device journal, notebook schema 2).
+/// 1: per-page JSON-lines journals. 2: device operation journal, notebook schema 2.
 pub const LIBRARY_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ impl CheckpointManifest {
     }
 }
 
-/// Sync outbox counters (M03 drives `uploaded_through`/`remote_seen`).
+/// Sync outbox counters (the sync engine drives `uploaded_through`/`remote_seen`).
 ///
 /// Derivable from the journal: if this file is lost or damaged it is rebuilt
 /// with `uploaded_through = 0`, which only causes re-uploads (the server
@@ -80,7 +80,7 @@ pub struct OutboxState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_seen: Option<String>,
     /// While false, the journal is truncated after checkpoints regardless of
-    /// `uploaded_through` (M02 has no sync).
+    /// `uploaded_through` (sync is off).
     #[serde(default)]
     pub sync_enabled: bool,
 }

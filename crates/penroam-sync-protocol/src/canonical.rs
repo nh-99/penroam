@@ -1,7 +1,7 @@
 //! Deterministic canonical byte encodings.
 //!
-//! These are the exact bytes a device signs (M03) and the exact bytes used as
-//! AEAD associated data (M03). **No cryptography happens here** — this module
+//! These are the exact bytes a device will sign and the exact bytes to be used
+//! as AEAD associated data. **No cryptography happens here** — this module
 //! only fixes the layouts so every implementation (Rust, TypeScript, Kotlin,
 //! Swift) produces identical bytes. The layouts are part of envelope version 1
 //! and frozen together with it.
@@ -85,7 +85,7 @@ pub fn canonical_signing_bytes(h: &EnvelopeHeader) -> Vec<u8> {
     w.0
 }
 
-/// **AEAD associated-data layout** for the operation payload (M03 will feed
+/// **AEAD associated-data layout** for the operation payload (the sync engine will feed
 /// these bytes to the AEAD; nothing is encrypted here).
 ///
 /// Binds the ciphertext to its identity, versions, key epoch, length and

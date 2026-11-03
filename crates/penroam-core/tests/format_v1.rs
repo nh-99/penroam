@@ -4,7 +4,7 @@
 //! Long-running coverage-guided fuzzing lives in `fuzz/` (scheduled CI).
 
 use penroam_core::binary::*;
-use penroam_core::migrate::{m00_strokes_to_elements, notebook_from_value, page_from_value};
+use penroam_core::migrate::{notebook_from_value, page_from_value, stroke_doc_to_elements};
 use penroam_core::*;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -28,7 +28,7 @@ fn sample_page() -> Page {
     let v: Value =
         serde_json::from_slice(&std::fs::read(fixture_path("sample-strokes.json")).unwrap())
             .unwrap();
-    let mut els = m00_strokes_to_elements(&v, 1).unwrap();
+    let mut els = stroke_doc_to_elements(&v, 1).unwrap();
     for (i, e) in els.iter_mut().enumerate() {
         if let Element::Ink(s) = e {
             s.id = Uuid::from_u128(i as u128 + 1);
@@ -54,8 +54,8 @@ fn recrc(b: &mut [u8]) {
     b[body..].copy_from_slice(&crc.to_le_bytes());
 }
 
-/// SHA-256 of `tests/fixtures/format/sample-page-v1.prp`, written by the M01
-/// encoder. The M02 encoder must reproduce it byte for byte.
+/// SHA-256 of `tests/fixtures/format/sample-page-v1.prp`, written by the
+/// original encoder. The current encoder must reproduce it byte for byte.
 const GOLDEN_SHA256: &str = "05716d7d5cd66973bc8524da9a3055501dfd198087778973afc984a2a7f8da64";
 
 #[test]

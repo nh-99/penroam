@@ -30,7 +30,7 @@ import kotlin.math.min
  * Native Android writing surface shared by the Flutter and Tauri hosts and by
  * the standalone reference app.
  *
- * Modes (benchmarks/protocol.md, "BOOX rendering modes"):
+ * Modes (docs/benchmarks/protocol.md, "BOOX rendering modes"):
  *  - [Mode.BOOX_HARDWARE]   Mode B: Onyx TouchHelper raw drawing shows the
  *    live stroke through the ePaper pen pipeline (Path A); delivered samples
  *    are reconstructed into the persistent software bitmap on pen-up (Path B).
@@ -127,13 +127,13 @@ class BooxInkView @JvmOverloads constructor(
     private var tool = Tool.PEN
     private var brushWidth = 3f
     private var pressureEnabled = true
-    // M01: colour / highlighter / opacity of new strokes (M00 was black pen only)
+    // colour / highlighter / opacity of new strokes (the standalone host draws black pen only)
     private var brushColor = "#000000"
     private var brushType = "pen"
     private var brushOpacity = 1f
 
     /**
-     * M01 overlay mode: no white background, so the host's page (template,
+     * Overlay mode: no white background, so the host's page (template,
      * PDF, text) shows through; only ink is drawn by this View.
      */
     var transparentBackground = false
@@ -595,7 +595,7 @@ class BooxInkView @JvmOverloads constructor(
         }
     }
 
-    // ============================================== M01 host additions ==
+    // ================================================== host additions ===
 
     /** Colour (#rrggbb), tool type ("pen" | "highlighter") and opacity of new strokes. */
     fun setBrushStyle(color: String, type: String, opacity: Float) {
@@ -629,7 +629,7 @@ class BooxInkView @JvmOverloads constructor(
     }
 
     /**
-     * Test hook for on-device plumbing checks (M01): commits a stroke exactly as
+     * Test hook for on-device plumbing checks (tools/boox-check.sh): commits a stroke exactly as
      * the Onyx path does after pen-up (bitmap, listener, ePaper hand-off), with
      * the samples supplied by the caller. Marked `simulated` in its metadata.
      * It does NOT exercise Onyx input; real pen tests remain manual.
@@ -660,7 +660,7 @@ class BooxInkView @JvmOverloads constructor(
     private val colorCache = HashMap<String, Int>()
     private fun parseColor(hex: String): Int = colorCache.getOrPut(hex) { runCatching { Color.parseColor(hex) }.getOrDefault(Color.BLACK) }
 
-    /** Paint colour/alpha for a stroke (M00 strokes are opaque black). */
+    /** Paint colour/alpha for a stroke (strokes without colour are opaque black). */
     private fun paintFor(s: InkStroke) {
         val c = parseColor(s.brush.color)
         val a = (s.brush.opacity.coerceIn(0f, 1f) * 255).toInt()

@@ -1,4 +1,4 @@
-//! Operation algebra: local replay equivalence with M01 batches, and the
+//! Operation algebra: local replay equivalence with editor page batches, and the
 //! merge model's convergence, idempotency and conflict retention.
 
 use penroam_core::operation::*;
@@ -486,7 +486,7 @@ impl Rng {
 /// operations, with `apply_to_page` give identical pages (incl. equal-z
 /// ordering), so journal replay reproduces exactly what the editor saw.
 #[test]
-fn local_replay_matches_m01_batches() {
+fn local_replay_matches_page_batches() {
     let mut rng = Rng(7);
     let mut via_batch = Page::new(
         PG,

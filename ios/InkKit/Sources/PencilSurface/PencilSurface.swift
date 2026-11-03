@@ -1,4 +1,4 @@
-// Penroam M01 iPad native ink surface: platform-independent core.
+// Penroam iPad native ink surface: platform-independent core.
 //
 // The UIKit layer (plugins/tauri-plugin-native-ink/ios) feeds raw Pencil
 // samples into `LiveStroke`; this file holds everything that can be tested
@@ -117,7 +117,7 @@ public final class LiveStroke {
         return true
     }
 
-    /// Canonical stroke (M00 `m00-strokes` shape) for the web/Rust side.
+    /// Canonical stroke (`m00-strokes` document shape) for the web/Rust side.
     public func finish() -> [String: Any] {
         predicted = []
         return [

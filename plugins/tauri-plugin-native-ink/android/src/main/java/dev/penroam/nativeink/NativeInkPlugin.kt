@@ -22,8 +22,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Penroam NativeInkSurface on Android (M01.5). Reuses the M00 [BooxInkView]
- * unchanged in its input/handoff logic; M01 adds a transparent background,
+ * Penroam NativeInkSurface on Android. Reuses the shared [BooxInkView]
+ * unchanged in its input/handoff logic; the plugin adds a transparent background,
  * colours/highlighter, incremental add/remove and show/hide.
  *
  *  - The View is added to the Activity content FrameLayout *above* the

@@ -1,6 +1,6 @@
 use penroam_core::geometry::{stroke_pieces, width_for, Piece};
 use penroam_core::migrate::{
-    elements_to_m00, m00_strokes_to_elements, page_from_slice, page_from_value,
+    elements_to_stroke_doc, page_from_slice, page_from_value, stroke_doc_to_elements,
 };
 use penroam_core::ops::*;
 use penroam_core::*;
@@ -17,7 +17,7 @@ fn fixture(p: &str) -> String {
 
 fn sample_elements() -> Vec<Element> {
     let doc: Value = serde_json::from_str(&fixture("sample-strokes.json")).unwrap();
-    m00_strokes_to_elements(&doc, 1).unwrap()
+    stroke_doc_to_elements(&doc, 1).unwrap()
 }
 
 fn ink(e: &Element) -> &InkStroke {
@@ -28,7 +28,7 @@ fn ink(e: &Element) -> &InkStroke {
 }
 
 #[test]
-fn geometry_matches_m00_golden() {
+fn geometry_matches_golden() {
     let golden: Value = serde_json::from_str(&fixture("geometry-golden.json")).unwrap();
     for c in golden["widthCases"].as_array().unwrap() {
         let w = width_for(
@@ -105,11 +105,11 @@ fn geometry_matches_m00_golden() {
 }
 
 #[test]
-fn m00_import_is_lossless() {
+fn stroke_doc_import_is_lossless() {
     let doc: Value = serde_json::from_str(&fixture("sample-strokes.json")).unwrap();
     let els = sample_elements();
     let strokes: Vec<&InkStroke> = els.iter().map(ink).collect();
-    let back = elements_to_m00(&strokes);
+    let back = elements_to_stroke_doc(&strokes);
     let orig = doc["strokes"].as_array().unwrap();
     let back = back["strokes"].as_array().unwrap();
     assert_eq!(orig.len(), back.len());

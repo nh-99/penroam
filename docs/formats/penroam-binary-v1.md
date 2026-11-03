@@ -1,7 +1,7 @@
 # Penroam binary formats, v1 (normative)
 
-Status: M02 contract. Supersedes the storage parts of `docs/format/penroam-format.md` (§4, §6),
-which remains the reference for the JSON page/notebook model. Reference implementations:
+Status: implemented contract. The JSON page/notebook model and the `.penroam` archive are
+described in [`model-and-archive.md`](model-and-archive.md). Reference implementations:
 `crates/penroam-core/src/binary.rs` (`.prp`), `crates/penroam-storage/src/journal.rs` (journal),
 `crates/penroam-core/src/operation.rs` (operation schema), `crates/penroam-core/src/migrate.rs`.
 All integers are **little-endian**. CRC-32 is IEEE (zlib `crc32`).
@@ -13,8 +13,8 @@ All integers are **little-endian**. CRC-32 is IEEE (zlib `crc32`).
 | `.prp` file format | 1 | `.prp` header u16 | byte layout changes incompatibly |
 | Journal format | 1 | segment header u16 | journal byte layout changes |
 | Archive format | 2 | `manifest.json#formatVersion` | ZIP layout changes (1 = JSON pages) |
-| Library format | 2 | `library.json#version` | live-library layout changes (1 = M01) |
-| Notebook schema | 2 | `notebook.json#schemaVersion` | notebook JSON model changes (1 = M01) |
+| Library format | 2 | `library.json#version` | live-library layout changes (1 = per-page JSON-lines journals) |
+| Notebook schema | 2 | `notebook.json#schemaVersion` | notebook JSON model changes (1 = no order keys) |
 | Page schema | 1 | page JSON / `.prp` metadata `schemaVersion` | page JSON model changes |
 | Operation schema | 1 | every journal op / sync envelope | operation bodies or semantics change |
 | Sync protocol | 1.0 | `penroam-sync-protocol` | see `docs/protocol/sync-protocol-v1.md` |
@@ -43,8 +43,9 @@ end-4   4     CRC-32 of every preceding byte
 The encoder is deterministic: the same page yields the same bytes. Golden file
 `tests/fixtures/format/sample-page-v1.prp`, SHA-256
 `05716d7d5cd66973bc8524da9a3055501dfd198087778973afc984a2a7f8da64` (pinned in
-`crates/penroam-core/tests/format_v1.rs`; written by the M01 encoder and reproduced byte for byte
-by M02).
+`crates/penroam-core/tests/format_v1.rs`; written before the extension area existed and still
+reproduced byte for byte by the current encoder). An independent Python decoder is `decode_prp` in
+`tools/compare-penroam.py`.
 
 ## 3. Required and optional features
 
@@ -55,8 +56,9 @@ by M02).
 * Unknown **JSON fields** in the metadata (page, element, stroke level) are preserved verbatim
   through `extra` maps and re-emitted on save.
 
-M01 readers rejected every unknown flag; an M02 file only sets bit 8 when it carries extension
-records, which M02 never writes itself — so M02's output stays readable by M01.
+Older readers (built before optional flags existed) rejected every unknown flag. The current
+encoder only sets bit 8 when a page carries extension records, and it never creates them itself,
+so its output stays readable by those older readers.
 
 ## 4. Point block
 
@@ -75,6 +77,10 @@ DECIMAL only if `(f64)q/10^k` reproduces every value bit for bit (excludes −0.
 smallest such `k`. Int column: tag 0 CONST (one zig-zag varint), tag 1 DELTA (n zig-zag deltas from
 0). Zig-zag: `(v << 1) ^ (v >> 63)`. Every f64 and i64 round-trips bit for bit (fuzzed with arbitrary
 bit patterns incl. NaN, ±inf, −0.0).
+
+Size and speed on the 10k-stroke benchmark scene (275 503 points): JSON 24.5 MB (89 B/point),
+`.prp` 2.5 MB (9 B/point, including all per-stroke metadata); decode 27 ms vs 183 ms for JSON
+(`cargo run --release -p penroam-core --example page_codec_bench`).
 
 ## 5. Extension area (flag bit 8)
 
@@ -193,29 +199,30 @@ seen is reported (`editedWhileDeleted`) with its value; page order = (order key,
 element order = (z, element id); duplicate op ids with identical bodies are no-ops, reused ids
 with different bodies are rejected.
 
-## 10. Notebook schema 2 and the M01 migration
+## 10. Notebook schema 2 and the legacy library migration
 
 Schema 2 adds `orderKeys: {pageId: key}` for every live and trashed page (§9; keys are base-62
 strings `0-9A-Za-z` not ending in `0`, compared bytewise). `pageOrder` is always sorted by
 (key, id); an inconsistent file is repaired from `pageOrder` with a warning.
 
 v1 → v2 (in memory) assigns evenly spaced keys reproducing `pageOrder`; trashed pages get keys at
-their former index. On disk, an M01 notebook is migrated by: (1) copying `notebook.json` and every
-legacy file to `<library>/migration-backups/<ts>-m01/<notebook>/`; (2) folding legacy
+their former index. On disk, a legacy notebook (schema 1 with per-page JSON-lines journals) is
+migrated by: (1) copying `notebook.json` and every legacy file to
+`<library>/migration-backups/<ts>-legacy/<notebook>/`; (2) folding legacy
 `pages/<id>.journal` JSON lines into `.prp` (records ≤ the snapshot revision skipped); (3) writing
 `notebook.json` v2 — the commit point; (4) removing the legacy files. Every step is atomic and the
 sequence is idempotent (crash-tested at every write boundary).
 
-M01 builds refuse notebook schema 2 and leave it untouched, which is what makes them fail safely
-on an M02 library (they would otherwise ignore the new journal). Downgrading to M01 is not
-supported.
+Builds that only know notebook schema 1 refuse schema 2 and leave it untouched, which is what
+makes them fail safely on a journal-based library (they would otherwise ignore the journal).
+Downgrading a library to such a build is not supported.
 
 ## 11. Fixtures
 
 | Fixture | Purpose |
 |---|---|
 | `tests/fixtures/format/sample-page-v1.prp` | byte-exact `.prp` golden |
-| `tests/fixtures/m01/*.penroam` | M01-written archives (tiny, 1k, 10k strokes, mixed text, 5-page PDF) |
-| `tests/fixtures/m01/crashed-library/` | M01 library with an unflushed JSON-lines journal |
-| `tests/fixtures/m01/SHA256SUMS` | pins all of the above |
+| `tests/fixtures/legacy/*.penroam` | archives written before the journal existed (archive format 2, notebook schema 1): tiny, 1k, 10k strokes, mixed text, 5-page PDF |
+| `tests/fixtures/legacy/crashed-library/` | legacy library (format 1) with an unflushed JSON-lines journal |
+| `tests/fixtures/legacy/SHA256SUMS` | pins all of the above |
 | `crates/penroam-sync-protocol/fixtures/v1/` | sync contract vectors (`penroam-sync-fixtures --check`) |

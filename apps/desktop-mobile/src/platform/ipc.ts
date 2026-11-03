@@ -93,9 +93,9 @@ export const api = {
   exportNotebook: (notebookId: string, path: string) => call<{ bytes: number; pages: number }>("export_notebook", { notebookId, path }),
   importNotebook: (path: string) => call<ImportReport>("import_notebook", { path }),
   exportAnnotatedPdf: (notebookId: string, path: string) => call<ExportReport>("export_annotated_pdf", { notebookId, path }),
-  importM00Strokes: (notebookId: string, pageId: string, json: string) => call<ApplyOutcome>("import_m00_strokes", { notebookId, pageId, json }),
+  importStrokeDocument: (notebookId: string, pageId: string, json: string) => call<ApplyOutcome>("import_stroke_document", { notebookId, pageId, json }),
   exitApp: () => call<void>("exit_app"),
-  // benchmark helpers (M00 methodology)
+  // benchmark helpers (docs/benchmarks/protocol.md methodology)
   systemInfo: () => call<Record<string, unknown>>("system_info"),
   procStats: () => call<{ treeRssBytes: number; rssBytes: number; processes: number; note?: string }>("proc_stats"),
   startupMs: () => call<number>("startup_ms"),

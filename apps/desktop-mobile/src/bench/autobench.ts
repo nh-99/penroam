@@ -1,6 +1,6 @@
-// Workload D (M00 benchmarks/protocol.md) inside the real M01 app:
+// Workload D (docs/benchmarks/protocol.md) inside the real app:
 // generate scene -> persist through Rust (journal) -> load + render the page
-// -> full redraw (GPU-flushed, M00 method) -> replay a stroke one sample per
+// -> full redraw (GPU-flushed, as in the framework comparison) -> replay a stroke one sample per
 // frame over the committed scene -> process-tree RSS. Started with
 // PENROAM_AUTOBENCH=linux[,quick][,exit] (results via write_perf).
 import sampleDoc from "../../../../tests/fixtures/sample-strokes.json";
@@ -52,16 +52,16 @@ async function openLargest(mode: string, startupMs: number) {
   await sleep(2000);
   const proc = await api.procStats().catch(() => null);
   const out = {
-    app: "penroam-m01", workload: "D-steady-state-open", exportedAt: new Date().toISOString(), startupMs, strokes: n, openMs,
+    app: "penroam-app", workload: "D-steady-state-open", exportedAt: new Date().toISOString(), startupMs, strokes: n, openMs,
     fullRedrawMs: full, visibleRedrawMs: visible, treeRssBytes: proc?.treeRssBytes ?? null, mainRssBytes: proc?.rssBytes ?? null,
     processes: (proc as any)?.breakdown ?? null, devicePixelRatio: window.devicePixelRatio, system: await api.systemInfo().catch(() => null),
   };
-  await api.writePerf(`m01-steady-open-${mode.split(",")[0]}`, JSON.stringify(out, null, 2));
+  await api.writePerf(`app-steady-open-${mode.split(",")[0]}`, JSON.stringify(out, null, 2));
   if (mode.includes("exit")) await api.exitApp();
 }
 
 /**
- * On-device plumbing check for the BOOX native surface (M01.5). Everything
+ * On-device plumbing check for the BOOX native surface. Everything
  * after Onyx input is real: native commit + bitmap + ePaper hand-off, plugin
  * event, web model, Rust journal, web<->native sync on undo/redo, and the
  * native/web layer switch (screenshots are taken by the operator script
@@ -106,10 +106,10 @@ async function booxPlumbing(startupMs: number) {
   await sleep(2500);
   mark("afterRedo", { model: editor.session!.page.elements.length, native: ((await editor.nativeMetrics()) as any)?.strokeCount });
   await editor.session!.flush();
-  // large document through the native surface (M00 "Bench B" equivalent: load)
+  // large document through the native surface (framework-comparison "Bench B" equivalent: load)
   for (const n of [1000, 5000, 10000]) {
     const { notebook, page } = await api.createPage(nb.id, undefined, { kind: "blank", spacing: 24 }, "custom", { width: SCENE_WIDTH, height: SCENE_HEIGHT });
-    await api.importM00Strokes(nb.id, page.id, JSON.stringify(generateScene(n)));
+    await api.importStrokeDocument(nb.id, page.id, JSON.stringify(generateScene(n)));
     lib.current = notebook;
     const tl = performance.now();
     lib.currentPageId = page.id;
@@ -123,7 +123,7 @@ async function booxPlumbing(startupMs: number) {
     mark(`scene${n}`, { webLoadMs: loadMs, nativeStrokeCount: m?.strokeCount, nativeLoadRender: series.load_render_ms ?? null, nativeLoadParse: series.load_parse_ms ?? null, webFullRedrawMs: redraw, rssBytes: proc?.rssBytes ?? null });
   }
   log.metrics = await editor.nativeMetrics().catch(() => null);
-  await api.writePerf(`m01-boox-check`, JSON.stringify(log, null, 2));
+  await api.writePerf(`app-boox-check`, JSON.stringify(log, null, 2));
   mark("done", true);
 }
 
@@ -150,14 +150,14 @@ export async function runAutobench(mode: string) {
       const generateMs = performance.now() - t0;
       const json = JSON.stringify(doc);
       const t1 = performance.now();
-      await api.importM00Strokes(nb.id, page.id, json);
+      await api.importStrokeDocument(nb.id, page.id, json);
       const persistMs = performance.now() - t1;
       const t2 = performance.now();
       lib.current = notebook;
       lib.currentPageId = page.id;
       await until(() => editor.session?.page.id === page.id && editor.session.page.elements.length === n);
       const loadAndRenderMs = performance.now() - t2;
-      // M00 comparability: zoom 1.0 at the display's devicePixelRatio
+      // comparable with the framework comparison: zoom 1.0 at the display's devicePixelRatio
       editor.benchView(1);
       const redraws = [editor.fullRedraw(), editor.fullRedraw(), editor.fullRedraw()];
       const visible = [editor.visibleRedraw(), editor.visibleRedraw(), editor.visibleRedraw()];
@@ -198,7 +198,7 @@ export async function runAutobench(mode: string) {
     }
   }
   const out = {
-    app: "penroam-m01",
+    app: "penroam-app",
     workload: "D-large-document",
     exportedAt: new Date().toISOString(),
     startupMs,
@@ -212,10 +212,10 @@ export async function runAutobench(mode: string) {
     },
     userAgent: navigator.userAgent,
     method:
-      "Same as M00 Workload D: deterministic scene (seed = N), full redraw timed with a getImageData GPU flush, one replayed sample per rAF. M01 differences: the whole 1600x1200 pt page is rendered into a page-sized cache (M00 culled to the 1280x900 viewport), and the scene is persisted through Rust first.",
+      "Workload D: deterministic scene (seed = N), full redraw timed with a getImageData GPU flush, one replayed sample per rAF. Differences from the framework-comparison prototypes: the whole 1600x1200 pt page is rendered into a page-sized cache (the prototypes culled to the 1280x900 viewport), and the scene is persisted through Rust first.",
     results,
   };
-  const where = await api.writePerf(`m01-workload-d-${mode.split(",")[0]}`, JSON.stringify(out, null, 2));
+  const where = await api.writePerf(`app-workload-d-${mode.split(",")[0]}`, JSON.stringify(out, null, 2));
   console.info("benchmark written", where);
   if (mode.includes("exit")) await api.exitApp();
   return out;

@@ -1,5 +1,5 @@
 // Standalone Android build for the shared BOOX ink module and its native
-// reference/test host app (M00.2 / M00.3).
+// reference/test host app.
 pluginManagement {
     repositories {
         google()
@@ -31,6 +31,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "m00-boox-android"
+rootProject.name = "boox-android"
 include(":boox-ink")
 include(":boox-ink-demo")

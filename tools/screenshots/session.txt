@@ -1,0 +1,110 @@
+# README screenmove 2300 1650
+sleep 700
+shot session for tools/linux-e2e/e2e.py.
+# Coordinates are X pixels of a 2560x1800 Xephyr screen with GDK_SCALE=2
+# (twice the logical 1280x900 window layout).
+
+sleep 3000
+# Settings -> Light theme
+move 2472 64
+down 1
+up 1
+sleep 1200
+move 1176 544
+down 1
+up 1
+sleep 600
+move 1660 356
+down 1
+up 1
+sleep 800
+
+# open every notebook once so the library shows page thumbnails
+move 1904 420
+down 1
+up 1
+sleep 5000
+move 52 48
+down 1
+up 1
+sleep 2000
+move 1488 420
+down 1
+up 1
+sleep 5000
+move 52 48
+down 1
+up 1
+sleep 2000
+move 1072 420
+down 1
+up 1
+sleep 5000
+move 52 48
+down 1
+up 1
+sleep 2000
+move 656 420
+down 1
+up 1
+sleep 7000
+move 2300 1650
+sleep 700
+shot pdf-annotation
+move 52 48
+down 1
+up 1
+sleep 2000
+move 240 420
+down 1
+up 1
+sleep 5000
+key C-minus
+sleep 2500
+move 2300 1650
+sleep 700
+shot editor
+move 52 48
+down 1
+up 1
+sleep 4000
+move 2300 1650
+sleep 700
+shot library
+
+# Trip notebook in the dark theme, then the ePaper theme
+move 1072 420
+down 1
+up 1
+sleep 5000
+move 2506 48
+down 1
+up 1
+sleep 1200
+move 1382 544
+down 1
+up 1
+sleep 600
+move 1660 356
+down 1
+up 1
+sleep 2500
+move 2300 1650
+sleep 700
+shot dark-theme
+move 2506 48
+down 1
+up 1
+sleep 1200
+move 1590 544
+down 1
+up 1
+sleep 600
+move 1660 356
+down 1
+up 1
+sleep 3000
+move 2300 1650
+sleep 700
+shot epaper-theme
+quit

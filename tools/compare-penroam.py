@@ -13,7 +13,7 @@ import hashlib, json, struct, sys, zipfile, zlib
 
 
 def decode_prp(b):
-    """Independent decoder for the binary page encoding (docs/format/penroam-format.md §6)."""
+    """Independent decoder for the binary page encoding (docs/formats/penroam-binary-v1.md §2–§4)."""
     if b[:4] != b"PRPG":
         raise ValueError("not a PRPG page")
     if zlib.crc32(b[:-4]) != struct.unpack("<I", b[-4:])[0]:

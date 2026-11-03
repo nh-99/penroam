@@ -1,4 +1,4 @@
-// Swift port of the shared M00 ink model, geometry, scene generator and
+// Swift port of the shared ink model, geometry, scene generator and
 // metrics. Reference: fixtures/generate-fixtures.mjs. Verified by
 // Tests/InkCoreTests against fixtures/geometry-golden.json and scene-100/1000.
 import Foundation
@@ -221,7 +221,7 @@ public enum Scene {
     }
 }
 
-// MARK: - Metrics (names match benchmarks/protocol.md)
+// MARK: - Metrics (names match docs/benchmarks/protocol.md)
 
 public final class Metrics {
     public private(set) var counters: [String: Int] = [:]

@@ -1,7 +1,7 @@
-//! Storage benchmark (M02 baseline and regression check).
+//! Storage benchmark (baseline and regression check).
 //!
-//! Uses only the public `Library` API that exists in both M01 and M02, so the
-//! same file can be run against either tree:
+//! Uses only the long-standing public `Library` API, so the same file can be
+//! run against the pre-journal storage code and the current tree:
 //!
 //! ```text
 //! cargo run --release -p penroam-storage --example library_bench -- <strokes> [scene-dir]
@@ -11,7 +11,7 @@
 //! Timings are wall-clock on the local file system with a warm page cache;
 //! durable appends include fsync.
 
-use penroam_core::migrate::m00_strokes_to_elements;
+use penroam_core::migrate::stroke_doc_to_elements;
 use penroam_core::*;
 use penroam_storage::Library;
 use std::path::{Path, PathBuf};
@@ -75,7 +75,7 @@ fn main() {
         &std::fs::read(scenes.join(format!("scene-{n}.json"))).expect("scene file"),
     )
     .unwrap();
-    let elements = m00_strokes_to_elements(&scene, 1).unwrap();
+    let elements = stroke_doc_to_elements(&scene, 1).unwrap();
     let points: usize = elements
         .iter()
         .map(|e| match e {

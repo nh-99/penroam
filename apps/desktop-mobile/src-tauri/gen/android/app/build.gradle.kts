@@ -40,7 +40,7 @@ android {
         }
         getByName("release") {
             // Penroam: sign sideloaded release test builds with the debug key.
-            // Not for distribution (no app-store release in M01).
+            // Not for distribution (no app-store release yet).
             signingConfig = signingConfigs.getByName("debug")
             optimization {
                enable = true

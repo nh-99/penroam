@@ -1,0 +1,3 @@
+version: 1
+bundleID: dev.opennote.benchhost
+infoPath: Info.plist

@@ -36,3 +36,7 @@ plugins/*/.tauri/
 /fuzz/corpus
 /fuzz/artifacts
 /target/agent-sync
+# Raw benchmark output is machine-specific and stays local; summaries go in docs/benchmarks/
+/benchmarks/
+# Tauri-generated schemas of the frozen prototype
+reference/m00-tauri-app/src-tauri/gen/schemas/

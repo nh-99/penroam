@@ -1,104 +1,124 @@
 # Penroam
 
-An offline-first, open-source, handwriting-first notebook. Write with a pen, mouse or finger,
-type on the same page, annotate PDFs, and move notebooks between devices as open `.penroam`
-files. No account, server, cloud, analytics or AI model.
+**A handwriting-first notebook that keeps your notes on your own device.**
 
-**Status: M01 ("a notebook worth using") — see [docs/M01-progress.md](docs/M01-progress.md)
-for what works, what is simulated, and what is still blocked, and
-[docs/M01-results.md](docs/M01-results.md) for test, build and benchmark results.**
+Penroam is a free, open-source notebook app for writing by hand with a stylus, mouse or finger.
+You can type text on the same page as your ink, read and annotate PDFs, and carry notebooks
+between devices as ordinary `.penroam` files. It works fully offline and doesn't need an
+account, a server or a subscription.
 
-Stack: Tauri 2 · Vue 3 (Composition API) + TypeScript · Vite · Tailwind CSS 4 · `@lucide/vue` ·
-Pinia · PDF.js · Rust (`penroam-core`, `penroam-storage`, `penroam-pdf`, `lopdf`, `zip`) ·
-native ink adapters (BOOX Onyx SDK on Android, UIKit Pencil layer on iPadOS).
+![A notebook page with handwritten notes, a highlighted formula, a sketched diagram and a typed note](docs/images/editor.png)
 
-## Features (M01)
+## Highlights
 
-* Library of notebooks with covers; create, rename, recolour, trash/restore, delete forever.
-* Pages: Letter or A4, blank/ruled/grid/dotted, add/insert/reorder (drag or menu)/delete/restore,
-  thumbnails.
-* Pen (pressure-aware), highlighter, whole-stroke eraser (incl. the pen's eraser button),
-  select/move, text, pan; zoom/pan with wheel, pinch, keyboard; undo/redo.
-* Multiline typed text blocks on the same canvas as ink: insert, edit, move, resize, colour, size.
-* PDF import as page backgrounds (original bytes kept), write/type on them, export an annotated
-  PDF with vector ink and text.
-* Durable autosave with explicit saved/saving/unsaved/error states and crash recovery.
-* `.penroam` export/import (lossless, documented ZIP format).
-* Light, dark and ePaper themes; responsive desktop/tablet/phone layouts.
+- **Write naturally.** A pressure-sensitive pen, a highlighter and a stroke eraser (including
+  your stylus's eraser button). On BOOX e-ink tablets, ink is drawn by the device's own
+  low-latency pen layer.
+- **Ink and typing together.** Drop a text box anywhere on the page, then move it, resize it,
+  recolour it or change its size alongside your handwriting.
+- **Annotate PDFs.** Import a PDF as pages, then write and type on it. Export an annotated PDF
+  in which your ink stays sharp vector lines. The original PDF is kept unchanged.
+- **Paper that suits the note.** Letter or A4 pages, blank, ruled, grid or dotted.
+  Add, reorder, delete and restore pages from the sidebar.
+- **Never lose work.** Every stroke is saved to disk as you go, and the indicator in the top
+  bar tells you when it has been. If the app or computer crashes, your notebook reopens with
+  everything you'd written.
+- **Your files, your choice.** Export any notebook as a `.penroam` file (a documented,
+  lossless format) and open it on another device.
+- **Light, dark and ePaper themes**, with layouts for desktop, tablet and phone.
 
-## Repository
+| Your library | Annotating a PDF |
+|---|---|
+| ![The library showing five notebooks with covers and page previews](docs/images/library.png) | ![A PDF article with highlights and handwritten margin notes](docs/images/pdf-annotation.png) |
 
-```text
-apps/desktop-mobile/   Tauri app (Vue frontend in src/, Rust shell in src-tauri/)
-crates/                penroam-core · penroam-storage · penroam-pdf
-plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters)
-android/ ios/          M00 native ink modules (BooxInkView, InkKit) reused by M01
-tests/fixtures/        geometry/text goldens, M00 scenes, PDF fixture
-benchmarks/            M00 protocol + raw results, M01 results
-tools/linux-e2e/       real-input E2E driver for Linux (XTest)
-reference/             M00 prototypes kept for regression baselines
-docs/                  architecture, file format, platforms, progress, results, M00 record
-```
+| Dark theme | ePaper theme |
+|---|---|
+| ![A packing list with checkboxes, a typed itinerary and a sketch, in the dark theme](docs/images/dark-theme.png) | ![The same notebook in the high-contrast ePaper theme](docs/images/epaper-theme.png) |
 
-## Build and run
+## Install
 
-Prerequisites: Rust stable, Node 24 + pnpm 10, Tauri 2 Linux deps (`libwebkit2gtk-4.1-dev`).
+Penroam hasn't published ready-made installers yet, so for now you build it from source.
+It has been tested on **Linux** and on **Android BOOX** e-ink tablets. Windows, macOS and
+iPad versions build from the same code but haven't been tested on those systems yet.
+
+### Linux
+
+You need [Rust](https://rustup.rs), [Node.js](https://nodejs.org) 24 with
+[pnpm](https://pnpm.io) 10, and the WebKitGTK development package (on Debian/Ubuntu:
+`sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev librsvg2-dev`).
 
 ```bash
+git clone https://github.com/penroam/penroam.git
+cd penroam
 pnpm install
-pnpm tauri dev                     # run the desktop app (Vite dev server + Rust)
-pnpm dev                           # frontend only (no storage engine: shows an error state)
-pnpm build                         # type-check + production frontend build
-pnpm tauri build --no-bundle       # release binary: target/release/penroam-app
-pnpm test                          # TypeScript/Vue tests (Vitest)
-pnpm typecheck && pnpm lint
-cargo test --workspace             # Rust tests (also regenerates TS bindings in src/generated)
-pnpm fixtures:check                # verify M00 fixtures against frozen hashes (pnpm fixtures regenerates)
+pnpm tauri build --no-bundle
+./target/release/penroam-app
 ```
 
-Android (BOOX):
+### Android and BOOX
 
-```bash
-export ANDROID_HOME=~/Android/sdk NDK_HOME=~/Android/sdk/ndk/29.0.14206865
-cd apps/desktop-mobile
-pnpm tauri android init --ci && python3 scripts/patch-android.py   # once (gen/android is committed)
-pnpm tauri android build --apk --target aarch64
-adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
-cd ../../android && ./gradlew :boox-ink:testDebugUnitTest          # JVM tests of the BOOX module
-```
+Building the Android app needs the Android SDK and NDK. See
+[docs/development.md](docs/development.md) for the steps. Then install the APK with
+`adb install`.
 
-iOS/iPadOS (requires macOS + Xcode; not run in this environment):
+## Using Penroam
 
-```bash
-cd apps/desktop-mobile && pnpm tauri ios init && pnpm tauri ios build --export-method debugging
-cd ios/InkKit && swift test        # Linux or macOS: InkCore + PencilSurface tests
-```
+**Notebooks.** Click **New notebook** and choose a title, cover colour, paper size and page
+style. To rename, recolour or delete a notebook, open the **⋮** menu on its card. Deleted
+notebooks go to the **Trash**, where you can restore them or delete them for good.
 
-Benchmarks (M00 Workload D in the real app):
+**Writing.** Choose a tool from the toolbar, then a colour and thickness:
 
-```bash
-PENROAM_AUTOBENCH=linux,exit PENROAM_RESULTS_DIR=$PWD/benchmarks/results/m01/linux \
-  PENROAM_LIBRARY_DIR=$(mktemp -d) target/release/penroam-app
-```
+| Tool | Key | What it does |
+|---|---|---|
+| Pen | `P` | Pressure-sensitive ink |
+| Highlighter | `M` | Translucent marker |
+| Eraser | `E` | Removes whole strokes |
+| Select | `V` | Drag a box around ink or text to move or delete it |
+| Text | `T` | Click anywhere to type. `Esc` finishes the text box |
+| Pan | `H` | Move around the page |
 
-Linux real-input E2E (XTest; run inside Xephyr when the desktop is locked):
+Undo and redo with `Ctrl+Z` / `Ctrl+Shift+Z`. Zoom with `Ctrl` and the mouse wheel, a pinch,
+or `Ctrl+=` / `Ctrl+-`. `Ctrl+0` fits the page to the window width.
 
-```bash
-cc -O2 -o tools/linux-e2e/xdrive tools/linux-e2e/xdrive.c -lX11 -lXtst
-Xephyr :7 -screen 1300x940 -ac & DISPLAY=:7 python3 tools/linux-e2e/e2e.py script.txt out/
-```
+On a touchscreen, **Settings** decides what your fingers do:
 
-## Documentation
+- **Automatic** (the default): fingers draw until you use a pen, then they pan and zoom.
+- **Pen only**: fingers always pan and zoom.
+- **Fingers draw**: one finger draws, two fingers pan and zoom.
 
-* [docs/architecture/M01-architecture.md](docs/architecture/M01-architecture.md) — design, data ownership, M00→M01 map
-* [docs/format/penroam-format.md](docs/format/penroam-format.md) — notebook, page and `.penroam` formats
-* [docs/platforms/](docs/platforms/) — BOOX, iPad and Linux notes and checklists
-* [docs/M01-progress.md](docs/M01-progress.md), [docs/M01-results.md](docs/M01-results.md)
-* [docs/m00/](docs/m00/) — the M00 framework bake-off record
+**Pages.** The sidebar shows all pages. Use **+** (or `Ctrl+Shift+N`) to add a page, drag
+thumbnails to reorder them, and open a page's **⋮** menu to insert, move or delete it.
+**Page template** in the top bar changes the current page's style. `PgUp` / `PgDn` move
+between pages.
+
+**PDFs.** Click **Import PDF as pages** in the top bar to add every page of a PDF to the
+notebook, then write on it like any other page. To get the PDF back with your notes on it,
+choose **Export → Annotated PDF**.
+
+**Moving notebooks between devices.** Use **Export → Notebook (.penroam)** to save a
+notebook as a file. On the other device, click **Import** in the library. Everything comes
+across exactly as you left it: ink, text, PDFs and page order.
+
+**Saving.** There is no save button to remember. Changes are written to disk as you make
+them, and the top bar shows **Saved** once they are safe. `Ctrl+S` writes everything
+immediately if you want extra reassurance.
+
+## Where your notes live
+
+Notebooks are stored in the app's private data folder on your device and nowhere else.
+Penroam has no accounts and no analytics. The `.penroam` format is documented
+in [docs/formats/](docs/formats/), so your notes are never locked into this app.
+
+## Contributing
+
+Developer documentation lives in [docs/](docs/). Start with
+[docs/development.md](docs/development.md) for building and testing, and
+[docs/architecture/overview.md](docs/architecture/overview.md) for how the app fits together.
 
 ## License
 
-Code: MPL-2.0. Bundled font Liberation Sans: SIL OFL 1.1
-(`apps/desktop-mobile/src/assets/fonts/LICENSE-LiberationSans.txt`). PDF.js: Apache-2.0.
-Onyx SDK: proprietary BOOX SDK fetched from the official Onyx Maven repository at build time
-(Android only).
+Penroam is licensed under the [MPL-2.0](https://www.mozilla.org/MPL/2.0/).
+The bundled Liberation Sans font is under the SIL Open Font License 1.1, and PDF.js is under
+Apache-2.0. The Android build fetches the proprietary BOOX Onyx SDK from Onyx's official
+repository to support BOOX pens.

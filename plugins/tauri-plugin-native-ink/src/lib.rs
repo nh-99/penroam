@@ -1,9 +1,9 @@
-//! `NativeInkSurface` bridge (see `docs/architecture/M01-architecture.md` §5).
+//! `NativeInkSurface` bridge (see `docs/architecture/overview.md` §5).
 //!
 //! The Vue editor owns document semantics; a platform view owns *live* pen
 //! rendering where the WebView cannot match native latency:
 //!
-//! * Android: Kotlin `NativeInkPlugin` hosting the M00 `BooxInkView`
+//! * Android: Kotlin `NativeInkPlugin` hosting the shared `BooxInkView` (android/boox-ink)
 //!   (Onyx SDK raw drawing, "Mode B") as a transparent overlay above the
 //!   WebView.
 //! * iOS/iPadOS: Swift `NativeInkPlugin` with a UIKit Pencil preview layer

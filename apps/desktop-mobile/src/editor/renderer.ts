@@ -242,7 +242,7 @@ export class PageRenderer {
     }
     if (rect) ctx.restore();
     if (!rect) {
-      ctx.getImageData(0, 0, 1, 1); // GPU flush, as in M00's timing method
+      ctx.getImageData(0, 0, 1, 1); // GPU flush, as in the benchmark protocol's timing method
       this.lastFullRedrawMs = performance.now() - t0;
     }
   }

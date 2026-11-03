@@ -1,5 +1,5 @@
 use penroam_core::binary::{decode_page, encode_page, BinaryError};
-use penroam_core::migrate::m00_strokes_to_elements;
+use penroam_core::migrate::stroke_doc_to_elements;
 use penroam_core::*;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -11,11 +11,11 @@ fn fixture_path(p: &str) -> PathBuf {
         .join(p)
 }
 
-/// Deterministic page from an M00 stroke document (fixed ids/timestamps).
-fn page_from_m00(file: &str) -> Page {
+/// Deterministic page from a canonical stroke document (fixed ids/timestamps).
+fn page_from_stroke_doc(file: &str) -> Page {
     let v: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture_path(file)).unwrap()).unwrap();
-    let mut els = m00_strokes_to_elements(&v, 1).unwrap();
+    let mut els = stroke_doc_to_elements(&v, 1).unwrap();
     for (i, e) in els.iter_mut().enumerate() {
         if let Element::Ink(s) = e {
             s.id = Uuid::from_u128(i as u128 + 1);
@@ -58,7 +58,7 @@ fn round_trip_is_exact_for_fixtures_and_scenes() {
         "benchmark-scenes/scene-100.json",
         "benchmark-scenes/scene-1000.json",
     ] {
-        let mut p = page_from_m00(f);
+        let mut p = page_from_stroke_doc(f);
         p.elements.push(text(9999, "typed ✓\nsecond line"));
         let bytes = encode_page(&p);
         let back = decode_page(&bytes).unwrap();
@@ -69,7 +69,7 @@ fn round_trip_is_exact_for_fixtures_and_scenes() {
 
 #[test]
 fn awkward_values_round_trip_bit_for_bit() {
-    let mut p = page_from_m00("sample-strokes.json");
+    let mut p = page_from_stroke_doc("sample-strokes.json");
     let Element::Ink(s) = &mut p.elements[3] else {
         panic!()
     };
@@ -132,7 +132,7 @@ fn awkward_values_round_trip_bit_for_bit() {
 
 #[test]
 fn unknown_fields_and_metadata_survive() {
-    let mut p = page_from_m00("sample-strokes.json");
+    let mut p = page_from_stroke_doc("sample-strokes.json");
     p.extra
         .insert("futurePageField".into(), serde_json::json!({"a": [1, 2]}));
     if let Element::Ink(s) = &mut p.elements[0] {
@@ -146,7 +146,7 @@ fn unknown_fields_and_metadata_survive() {
 
 #[test]
 fn compact_compared_with_json() {
-    let p = page_from_m00("benchmark-scenes/scene-1000.json");
+    let p = page_from_stroke_doc("benchmark-scenes/scene-1000.json");
     let json = serde_json::to_vec(&p).unwrap();
     let bin = encode_page(&p);
     let points: usize = p
@@ -174,7 +174,7 @@ fn compact_compared_with_json() {
 
 #[test]
 fn corruption_is_detected_never_panics() {
-    let p = page_from_m00("sample-strokes.json");
+    let p = page_from_stroke_doc("sample-strokes.json");
     let bytes = encode_page(&p);
     // every single-byte change is caught (checksum or structure)
     for i in 0..bytes.len() {
@@ -202,7 +202,7 @@ fn corruption_is_detected_never_panics() {
 #[test]
 fn hostile_counts_are_rejected_without_huge_allocations() {
     // valid header + meta for one stroke, then a point count of 2^40 with a valid checksum
-    let mut p = page_from_m00("sample-strokes.json");
+    let mut p = page_from_stroke_doc("sample-strokes.json");
     p.elements.truncate(1);
     let good = encode_page(&p);
     let meta_len = u32::from_le_bytes(good[8..12].try_into().unwrap()) as usize;
@@ -217,7 +217,7 @@ fn hostile_counts_are_rejected_without_huge_allocations() {
 /// and add a migration instead of editing the golden file.
 #[test]
 fn golden_file_is_stable() {
-    let p = page_from_m00("sample-strokes.json");
+    let p = page_from_stroke_doc("sample-strokes.json");
     let bytes = encode_page(&p);
     let path = fixture_path("format/sample-page-v1.prp");
     if std::env::var("UPDATE_GOLDEN").is_ok() || !path.exists() {

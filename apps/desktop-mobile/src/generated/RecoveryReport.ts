@@ -18,6 +18,6 @@ replayedBatches: number,
  */
 fallbackSnapshots: number, 
 /**
- * Notebooks migrated from M01 storage.
+ * Notebooks migrated from the legacy storage layout.
  */
 migratedNotebooks: number, warnings: Array<string>, };

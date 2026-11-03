@@ -18,7 +18,7 @@ android {
 
 dependencies {
     implementation(project(":tauri-android"))
-    // Shared M00 BOOX module (android/boox-ink); included by scripts/patch-android.py.
+    // Shared BOOX module (android/boox-ink); included by scripts/patch-android.py.
     implementation(project(":boox-ink"))
 }
 

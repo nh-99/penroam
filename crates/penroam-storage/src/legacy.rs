@@ -1,13 +1,13 @@
-//! Migration of M01 notebooks (notebook schema 1, per-page JSON-lines
+//! Migration of legacy notebooks (notebook schema 1, per-page JSON-lines
 //! journals `pages/<id>.journal`, pre-binary `pages/<id>.json` snapshots).
 //!
 //! Order (each step is atomic; a crash anywhere leaves a state the next
 //! open migrates again, idempotently):
 //!
 //! 1. Copy `notebook.json` and every legacy file (plus the `.prp` it will
-//!    overwrite) to `<library>/migration-backups/<ts>-m01/<notebook>/`.
+//!    overwrite) to `<library>/migration-backups/<ts>-legacy/<notebook>/`.
 //! 2. Fold each legacy journal into its snapshot (records at or below the
-//!    snapshot revision are skipped, exactly like M01) and write `.prp`.
+//!    snapshot revision are skipped, exactly like the legacy loader) and write `.prp`.
 //! 3. Write `notebook.json` at schema 2 — the commit point.
 //! 4. Remove the legacy journals and JSON snapshots.
 //!
@@ -45,7 +45,7 @@ fn legacy_files(pages_dir: &Path, page: Uuid) -> (std::path::PathBuf, std::path:
     )
 }
 
-/// Whether the notebook directory still needs the M01 migration.
+/// Whether the notebook directory still needs the legacy migration.
 pub(crate) fn needed(nb_dir: &Path, raw: &[u8]) -> bool {
     let v1 = serde_json::from_slice::<serde_json::Value>(raw)
         .ok()
@@ -68,7 +68,7 @@ pub(crate) fn migrate(root: &Path, nb_dir: &Path, raw: &[u8]) -> Result<(Noteboo
     // 1. backups
     let backup = root
         .join("migration-backups")
-        .join(format!("{}-m01", now_ms()))
+        .join(format!("{}-legacy", now_ms()))
         .join(nb.id.to_string());
     write_atomic(&backup.join("notebook.json"), raw)?;
     let mut work = Vec::new();
@@ -107,7 +107,7 @@ pub(crate) fn migrate(root: &Path, nb_dir: &Path, raw: &[u8]) -> Result<(Noteboo
                 let Some(entry) = entry else {
                     out.truncated += 1;
                     out.warnings.push(format!(
-                        "page {page_id}: discarded an incomplete M01 journal record (crash during write)"
+                        "page {page_id}: discarded an incomplete legacy journal record (crash during write)"
                     ));
                     break;
                 };
@@ -116,7 +116,7 @@ pub(crate) fn migrate(root: &Path, nb_dir: &Path, raw: &[u8]) -> Result<(Noteboo
                 }
                 if entry.revision != page.revision + 1 {
                     out.warnings.push(format!(
-                        "page {page_id}: M01 journal gap at revision {}",
+                        "page {page_id}: legacy journal gap at revision {}",
                         entry.revision
                     ));
                     break;
@@ -124,7 +124,7 @@ pub(crate) fn migrate(root: &Path, nb_dir: &Path, raw: &[u8]) -> Result<(Noteboo
                 if let Err(e) = ops::replay_batch(&mut page, &entry.batch, entry.revision, entry.at)
                 {
                     out.warnings.push(format!(
-                        "page {page_id}: M01 journal record {} could not be replayed: {e}",
+                        "page {page_id}: legacy journal record {} could not be replayed: {e}",
                         entry.revision
                     ));
                     break;
@@ -153,7 +153,7 @@ pub(crate) fn migrate(root: &Path, nb_dir: &Path, raw: &[u8]) -> Result<(Noteboo
     }
     if !work.is_empty() || out.replayed > 0 {
         out.warnings.push(format!(
-            "notebook {}: migrated from M01 storage (backup in {})",
+            "notebook {}: migrated from the legacy storage layout (backup in {})",
             nb.id,
             backup.display()
         ));

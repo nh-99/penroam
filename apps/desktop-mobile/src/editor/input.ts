@@ -25,7 +25,7 @@ const r4 = (v: number) => Math.round(v * 10000) / 10000;
 /**
  * Maps one pointer sample to a canonical document point. Coordinates are
  * rounded to 0.001 pt and pressure to 1e-4 (capture precision; far below
- * digitiser resolution). Mouse and pressure-less pens record 0.5, as in M00.
+ * digitiser resolution). Mouse and pressure-less pens record 0.5, as in the canonical stroke format.
  */
 export function samplePoint(e: RawSample, rect: { left: number; top: number }, t: ViewTransform, t0: number, coalesced = false): InkPoint {
   const [x, y] = toDoc(t, e.clientX - rect.left, e.clientY - rect.top);

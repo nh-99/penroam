@@ -69,7 +69,7 @@ pub struct EnvelopeHeader {
     /// Exact ciphertext length in bytes.
     pub ciphertext_length: u64,
     /// Device signature over [`crate::canonical_signing_bytes`], unpadded
-    /// base64url. Not verified in M02 (signatures arrive in M03).
+    /// base64url. Not verified yet (device signatures are not implemented).
     pub signature: String,
 }
 
@@ -327,7 +327,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
 
 /// Verify `ciphertext` against the header's declared length and SHA-256.
 /// This is integrity only (transport corruption, buggy clients); it is not
-/// authentication — that is the device signature (M03).
+/// authentication — that is the device signature (not implemented yet).
 pub fn verify_ciphertext(header: &EnvelopeHeader, ciphertext: &[u8]) -> Result<(), IntegrityError> {
     let actual = ciphertext.len() as u64;
     if actual != header.ciphertext_length {

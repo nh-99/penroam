@@ -1,4 +1,4 @@
-//! Rust port of the shared M00 brush geometry (reference implementation:
+//! Rust port of the shared brush geometry (reference implementation:
 //! `tests/fixtures/generate-fixtures.mjs`, golden: `geometry-golden.json`).
 //! Used by the annotated-PDF exporter so exported ink matches on-screen ink.
 

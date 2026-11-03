@@ -2,10 +2,10 @@
 //!
 //! All geometry is in **document points** (1 pt = 1/72 in), origin at the
 //! top-left corner of the page as displayed, y pointing down. At zoom 1.0 one
-//! point renders as one CSS pixel, which keeps M00's canonical stroke semantics
-//! ("document units = logical px at zoom 1") unchanged: M00 strokes map 1:1.
+//! point renders as one CSS pixel, which keeps the canonical stroke document semantics
+//! ("document units = logical px at zoom 1") unchanged: its strokes map 1:1.
 //!
-//! The JSON encoding is camelCase and documented in `docs/format/penroam-format.md`.
+//! The JSON encoding is camelCase and documented in `docs/formats/model-and-archive.md`.
 //! Unknown fields are preserved through `extra` maps where the type allows it,
 //! so files written by a newer minor revision survive a round trip.
 
@@ -18,10 +18,10 @@ use uuid::Uuid;
 /// with a migration in [`crate::migrate`]. Independent of the page schema,
 /// the binary file format version and the operation schema version.
 ///
-/// * 1 — M01.
-/// * 2 — M02: adds `orderKeys` (fractional page order keys). Also marks a
-///   notebook as managed by the M02 operation journal, so M01 builds refuse
-///   it instead of reading pages while ignoring the journal.
+/// * 1 — original schema (per-page snapshots + per-page JSON-lines journals).
+/// * 2 — adds `orderKeys` (fractional page order keys). Also marks a
+///   notebook as managed by the operation journal, so builds that only know
+///   schema 1 refuse it instead of reading pages while ignoring the journal.
 pub const NOTEBOOK_SCHEMA_VERSION: u32 = 2;
 
 /// Current page schema version (the JSON page model, also the `.prp`
@@ -118,7 +118,7 @@ impl Default for PageDefaults {
 pub enum Paper {
     Letter,
     A4,
-    /// Size given explicitly (benchmarks, imported M00 scenes).
+    /// Size given explicitly (benchmarks, imported stroke-document scenes).
     Custom,
     /// Size taken from a PDF page.
     Pdf,
@@ -344,14 +344,14 @@ pub struct InkStroke {
     pub color: String,
     #[serde(default = "default_opacity")]
     pub opacity: f64,
-    /// Nominal width in points (M00 `brush.width`).
+    /// Nominal width in points (stroke document `brush.width`).
     pub width: f64,
-    /// Whether pressure modulated the width when drawn (M00 `brush.pressure`).
+    /// Whether pressure modulated the width when drawn (stroke document `brush.pressure`).
     #[serde(default = "default_true")]
     pub pressure: bool,
     /// "stylus" | "mouse" | "touch" | "fixture" | ...
     pub source: String,
-    /// Input diagnostics and platform metadata (M00 `input`), kept verbatim:
+    /// Input diagnostics and platform metadata (stroke document `input`), kept verbatim:
     /// `api`, `device`, raw pressure range, coalesced counts, Onyx stream, ...
     #[serde(default)]
     #[ts(type = "Record<string, unknown>")]
@@ -365,7 +365,7 @@ pub struct InkStroke {
     pub extra: Extra,
 }
 
-/// One pen sample. Same fields and units as M00's canonical point plus the
+/// One pen sample. Same fields and units as the stroke document's canonical point plus the
 /// optional `twist` and `flags`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

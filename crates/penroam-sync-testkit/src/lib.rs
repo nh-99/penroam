@@ -1,7 +1,7 @@
 //! Public Penroam sync testkit.
 //!
 //! * [`InMemoryServer`]: a protocol-compatible **fake** server for tests and
-//!   local development (scaffolding for the M03 client sync engine). It is
+//!   local development (scaffolding for the client sync engine). It is
 //!   not a production server: no auth, no persistence, no real crypto.
 //! * [`fixtures`]: the deterministic generator behind the
 //!   `penroam-sync-fixtures` binary, which writes/checks the committed

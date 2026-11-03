@@ -1,4 +1,4 @@
-// Deterministic benchmark scenes, ported unchanged from M00
+// Deterministic benchmark scenes, ported unchanged from the Tauri prototype
 // (reference/m00-tauri-app/src/ink/scene.ts). Must reproduce
 // tests/fixtures/benchmark-scenes/scene-<N>.json exactly (tests/scene.test.ts),
 // so the app does not bundle the 11-22 MB fixture files.

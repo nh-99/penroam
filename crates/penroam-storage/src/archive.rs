@@ -1,5 +1,5 @@
 //! Portable `.penroam` notebook archive (ZIP). Format spec:
-//! `docs/format/penroam-format.md`.
+//! `docs/formats/model-and-archive.md`.
 //!
 //! ```text
 //! mimetype                 "application/vnd.penroam.notebook+zip" (first entry, stored)

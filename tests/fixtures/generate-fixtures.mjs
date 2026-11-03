@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Deterministic generator for the shared M00 fixtures.
+// Deterministic generator for the shared stroke, geometry and scene fixtures.
 //
 //   node fixtures/generate-fixtures.mjs          # writes everything
 //   node fixtures/generate-fixtures.mjs --check  # verifies files on disk match

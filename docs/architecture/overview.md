@@ -1,0 +1,140 @@
+# Penroam architecture
+
+Penroam is a Tauri 2 app: a Vue 3 + TypeScript editor in the system WebView, a Rust core that
+owns all notebook data, and native ink surfaces on BOOX (Onyx Pen SDK) and iPadOS (UIKit Pencil).
+Tauri was chosen over Flutter after an evaluation of both on the target devices.
+
+## 1. Layout
+
+```text
+apps/desktop-mobile/            Tauri 2 app
+  src/                          Vue 3 + TS + Vite + Tailwind 4 + @lucide/vue
+    editor/                     framework-free editor: engine, renderer, session, geometry, text layout, PDF.js
+    components/ views/          UI (library, editor, toolbar, sidebar, dialogs)
+    composables/                editor host (page loading, flushing, native surface wiring)
+    stores/                     Pinia: library + UI state + device preferences (UI state only)
+    platform/                   typed facades: ipc (Rust commands), files (dialogs), nativeInk, lifecycle
+    generated/                  TS types generated from the Rust schema (ts-rs) — do not edit
+    bench/                      Workload D benchmark harness (docs/benchmarks/protocol.md)
+  src-tauri/                    Rust shell: typed commands, structured errors, flush-on-close
+    gen/android/                generated Android project (+ scripts/patch-android.py)
+crates/penroam-core             schema, validation, page ops, operation schema + merge model (replica), binary page codec, geometry, text layout, migrations
+crates/penroam-storage          live library: device-wide operation journal, checkpoints, trash, recovery, outbox counters, .penroam archive
+crates/penroam-pdf              PDF inspection (import) and annotated vector export (lopdf)
+crates/penroam-sync-protocol    public sync wire contract: versions, ids, limits, envelope header, canonical bytes, framing, DTOs, errors
+crates/penroam-sync-testkit     in-memory fake sync server (test scaffolding) + protocol fixture generator
+plugins/tauri-plugin-native-ink NativeInkSurface: Rust bridge, android/ (Kotlin), ios/ (Swift/UIKit)
+android/  ios/                  native ink modules: BooxInkView (Kotlin), InkKit (Swift), BenchHost (iPad test harness)
+tests/fixtures/                 shared fixtures (strokes, geometry and text-layout goldens, scenes, PDF, .prp golden, legacy libraries)
+fuzz/                           cargo-fuzz targets (page decoder, journal open, sync batch frame)
+tools/linux-e2e/                XTest input driver + session runner for real-app E2E on Linux
+reference/  docs/          (benchmarks/ = local, git-ignored benchmark output)
+```
+
+## 2. Data ownership
+
+| Data | Owner | Notes |
+|---|---|---|
+| Notebook/page/asset content | **Rust** (`penroam-storage`) | Operation journal + snapshots on disk. Every change is journaled as typed operations and acknowledged only after an fsync |
+| Open page working copy, undo/redo stacks | Vue editor (`PageSession`) | Mirror of the Rust page; edits are applied locally with the same semantics and queued to Rust in order |
+| Live pen samples | The active surface (web canvas or native view) | Never cross IPC while a stroke is live; only finalised strokes do |
+| Rendered caches (page bitmaps, thumbnails) | Frontend | Thumbnails are stored by Rust as derived files, never exported |
+| UI preferences (theme, tool colours, pen-only mode) | `localStorage` | Per device, not notebook data |
+
+Rust is the only writer. The renderer never sees library paths; import/export pass a
+path/URI chosen in a system dialog straight back to Rust (`tauri-plugin-fs` resolves Android
+`content://` URIs). No `fs` commands are exposed to the WebView (`capabilities/default.json`).
+
+## 3. Document model and persistence
+
+Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSON model, archive) and
+[`../formats/penroam-binary-v1.md`](../formats/penroam-binary-v1.md) (`.prp`, journal, checkpoints, operations).
+
+* Units: **points** (1/72 in), page-local, y down. At zoom 1 one point is one CSS px, so the
+  shared geometry golden (`tests/fixtures/geometry-golden.json`) applies unchanged.
+* `Page.elements` = `ink | text | image`; the PDF page is `Page.background` (`PdfBackgroundRef`).
+* Stroke points keep `x, y, pressure, tiltX, tiltY, timeUs` plus optional `twist`/`flags`; the
+  stroke `input` map keeps platform metadata verbatim (Onyx stream counts, raw pressure range,
+  coalesced counts…). Smoothing is derived at render time.
+* **Operations.** Every change becomes `LocalOperation`s (`penroam_core::operation`): a stable
+  op id, the device id, a per-device `local_sequence` (never a wall clock), causal dependencies,
+  and a typed body (notebook create/rename/cover/trash/restore/purge, page create/trash/restore/
+  reorder/template, element add/remove/replace, asset reference). Editor batches
+  (`OperationBatch`) are translated one-to-one, so local replay is bit-identical to applying
+  the batch.
+* **Journal.** One device-wide, segmented, append-only binary log in `<library>/journal/`. A
+  transaction is fsynced before the call returns — that is what *Saved locally* means.
+  Snapshots (`notebooks/<id>/notebook.json`, `pages/<id>.prp` + one `.prp.prev` fallback) are
+  checkpoints that may lag; `checkpoint.json` records which sequences they cover. Start-up
+  recovery truncates a torn tail, quarantines (never deletes) mid-log damage, replays everything
+  after the checkpoint floor, removes temp files and moves unreferenced files to `orphans/`.
+  An exclusive file lock prevents a second writer.
+* **No database**: snapshots plus journal are the source of truth, so no index can drift out of
+  sync. `list_notebooks` reads small `notebook.json` files.
+* **Merge model.** `penroam_core::replica::Replica` merges operations from several devices
+  order-independently: multi-value registers with version-vector dominance, a deterministic
+  visible winner (highest op id) with every alternate retained as a conflict, tombstones,
+  add-wins restore, fractional page order keys. It is tested for convergence but **not yet wired
+  into storage** — nothing applies remote operations yet.
+* **Sync contract.** `penroam-sync-protocol` defines the wire format (envelope header, canonical
+  signing/AEAD bytes, `PRSB` batch framing, errors, retry policy); `penroam-sync-testkit` is a
+  fake in-memory server for tests. Neither depends on core or storage. There is no network code,
+  authentication or encryption in the app. See [`../protocol/sync-protocol-v1.md`](../protocol/sync-protocol-v1.md).
+* Undo/redo are semantic: each change carries forward + inverse ops; undo enqueues the inverse
+  as a new batch with fresh op ids. Page revisions guard against stale batches (a mismatch is a
+  conflict, never a merge); a retried batch id returns the original outcome.
+
+## 4. Editor and ink pipeline
+
+* **Page-sized cached layers** (`renderer.ts`): `bg` (paper, PDF bitmap, template), `ink`
+  (strokes, images), `text`. They live inside a CSS-transformed element, so pan and zoom never
+  redraw; the backing resolution is re-rendered once a zoom settles (160 ms), capped by pixel
+  area (16 Mpx desktop, 8 Mpx mobile — WebKit's iOS canvas limit). Erase/undo/move redraw only
+  the dirty rectangle; a new stroke is appended incrementally.
+* **Live stroke**: screen-space `active` canvas for stable pieces drawn
+  incrementally and `tail` canvas for the provisional piece and predicted samples (50 % alpha,
+  never stored). One sample stream (`pointerrawupdate` when present, else `pointermove`) plus
+  `getCoalescedEvents()`.
+* **Hand-off**: on pen-up the stroke is committed to the session, which paints it into the
+  page cache synchronously; the preview is cleared in the same task, so both changes reach the
+  same frame (no flash, no double). Native surfaces use an explicit acknowledgement (§6).
+* Text blocks are rendered from a deterministic layout (`textLayout.ts` = `penroam-core::text`,
+  same metrics file, golden-tested) with the bundled Liberation Sans (metric-compatible with
+  Helvetica, which the PDF export uses). Editing uses a textarea overlay positioned in the same
+  page coordinate system; the canvas copy is hidden while editing.
+* Paint order is ink → images → text (same in the PDF exporter).
+* Input rules: pen eraser button erases; palm-sized touches are ignored; touches are ignored
+  while the pen is down; "pen-only" mode (auto after the first pen event) makes fingers pan and
+  zoom; `pointercancel`, lost capture, window blur and app backgrounding finish or cancel
+  gestures so no stroke is ever left stuck.
+
+## 5. NativeInkSurface
+
+`src/platform/nativeInk.ts` defines the interface (`mount/unmount`, `setBounds`,
+`setViewportTransform`, `setTool`, `setVisible`, `loadCommittedInk`, `addStrokes`,
+`removeStrokes`, `commitAck`, events `stroke/erased/viewport/status/error`). Coordinates:
+the native view covers exactly the editor element's CSS rect; both sides use
+`viewPx = (doc * scale + offset) * dpr`.
+
+| | Android / BOOX ("owner" surface) | iOS / iPadOS ("preview" surface) |
+|---|---|---|
+| Implementation | `NativeInkPlugin.kt` hosting `BooxInkView` (Onyx `TouchHelper` raw drawing, Mode B) | `NativeInkPlugin.swift`: UIKit `PencilPreviewView` + Pencil-only gesture recogniser on the WKWebView |
+| Live ink | ePaper hardware pen layer (Onyx) | UIKit `draw(_:)` at display rate (120 Hz on ProMotion in the UIKit reference) |
+| Committed ink while visible | Rendered by the native view (transparent background); the web ink layer is hidden to avoid doubled edges | Rendered by the web canvas; native keeps the stroke until `commitAck` (2 s timeout) |
+| Pen-up | Native commits into its own bitmap (`PEN_UP_REFRESH` hand-off), then emits `stroke`; web adds it to the model and persists | Native emits `stroke`; web commits + paints, then acks two frames later |
+| Shown for | pen, highlighter, eraser | pen, highlighter |
+| Hidden for | text, select, pan tools; any open dialog/menu/drawer (`ui.overlays`) | same |
+| Sync when web edits | `addStrokes`/`removeStrokes` (undo, delete, move) | not needed |
+
+Non-BOOX Android devices use the web canvas (the generalised native Mode C exists in
+`BooxInkView` but is not enabled by default until validated).
+
+## 6. Platform constraints
+
+* **Linux/Windows/macOS desktop**: WebKitGTK / WebView2 / WKWebView. Web canvas only.
+* **Android**: system WebView (Chromium). Release builds drop the `INTERNET` permission.
+  BOOX Onyx SDK pinned (pen 1.5.2 / device 1.3.3 / base 1.8.4) from the official Onyx Maven repo.
+* **iOS/iPadOS**: Tauri iOS builds require macOS + Xcode (not available in this environment).
+  WKWebView renders rAF at 60 Hz unless the private `PreferPageRenderingUpdatesNear60FPSEnabled`
+  flag is lifted (`WebTuning` hook in `ios/InkKit`; App Store risk) — hence the native preview layer.
+* **Offline**: strict CSP (`connect-src ipc:` only), PDF.js data files bundled, no network code.

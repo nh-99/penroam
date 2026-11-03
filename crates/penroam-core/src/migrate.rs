@@ -1,4 +1,4 @@
-//! Versioned schema migrations and the M00 → M01 stroke import.
+//! Versioned schema migrations and the canonical stroke document import.
 //!
 //! Every canonical JSON document carries `schemaVersion`. Notebooks and pages
 //! have **independent** schema versions ([`NOTEBOOK_SCHEMA_VERSION`],
@@ -25,8 +25,8 @@ pub enum MigrateError {
     NoVersion,
     #[error("malformed document: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("not an M00 stroke document")]
-    NotM00,
+    #[error("not a canonical stroke document")]
+    NotStrokeDocument,
 }
 
 type Step = fn(Value) -> Result<Value, MigrateError>;
@@ -100,24 +100,25 @@ pub fn notebook_from_slice(b: &[u8]) -> Result<Notebook, MigrateError> {
     notebook_from_value(serde_json::from_slice(b)?)
 }
 
-/// Converts an M00 canonical stroke document (`{"format":"m00-strokes",
-/// "version":1, strokes:[...]}`, or a bare stroke array) into M01 ink
-/// elements. Coordinates are kept 1:1 (M00 document units = points at zoom
-/// 1); `brush.width/color/pressure`, `source`, the full `input` map and every
-/// point field are preserved. M00 string ids that are not UUIDs get a fresh
-/// UUID and the original id is kept in `input.m00Id`.
-pub fn m00_strokes_to_elements(doc: &Value, first_z: i64) -> Result<Vec<Element>, MigrateError> {
+/// Converts a canonical stroke document (`{"format":"m00-strokes",
+/// "version":1, strokes:[...]}`, or a bare stroke array; the format string
+/// is a stable wire identifier) into ink elements. Coordinates are kept 1:1
+/// (document units = points at zoom 1); `brush.width/color/pressure`,
+/// `source`, the full `input` map and every point field are preserved.
+/// String ids that are not UUIDs get a fresh UUID and the original id is
+/// kept in `input.m00Id` (stable key).
+pub fn stroke_doc_to_elements(doc: &Value, first_z: i64) -> Result<Vec<Element>, MigrateError> {
     let arr = match doc {
         Value::Array(a) => a,
         Value::Object(o) => {
             if o.get("format").and_then(Value::as_str) != Some("m00-strokes") {
-                return Err(MigrateError::NotM00);
+                return Err(MigrateError::NotStrokeDocument);
             }
             o.get("strokes")
                 .and_then(Value::as_array)
-                .ok_or(MigrateError::NotM00)?
+                .ok_or(MigrateError::NotStrokeDocument)?
         }
-        _ => return Err(MigrateError::NotM00),
+        _ => return Err(MigrateError::NotStrokeDocument),
     };
     let mut out = Vec::with_capacity(arr.len());
     for (i, s) in arr.iter().enumerate() {
@@ -199,9 +200,9 @@ pub fn m00_strokes_to_elements(doc: &Value, first_z: i64) -> Result<Vec<Element>
     Ok(out)
 }
 
-/// Converts M01 strokes back to the M00 canonical document (used by the
-/// native ink adapters, which still speak the M00 format).
-pub fn elements_to_m00(strokes: &[&InkStroke]) -> Value {
+/// Converts ink strokes back to the canonical stroke document (used by the
+/// native ink adapters, which exchange strokes in that format).
+pub fn elements_to_stroke_doc(strokes: &[&InkStroke]) -> Value {
     let arr: Vec<Value> = strokes
         .iter()
         .map(|s| {

@@ -1,7 +1,7 @@
 //! Route paths for the v1 HTTP API.
 //!
 //! **Proposed, not frozen.** These names follow §4 of the protocol design and
-//! may still change before the contract is frozen in M03. No HTTP client or
+//! may still change before the contract is frozen. No HTTP client or
 //! server is implemented in this crate. All routes except [`META`] require
 //! authentication. There are no billing routes in the public protocol.
 
@@ -15,11 +15,11 @@ pub const DEVICE: &str = "/v1/devices/{id}";
 pub const OPS_BATCH: &str = "/v1/ops/batch";
 /// `GET ?cursor=..&limit=..` paginated envelopes; see [`crate::PullOpsResponse`].
 pub const OPS: &str = "/v1/ops";
-/// `POST` initiate a scoped blob upload (M03/M04).
+/// `POST` initiate a scoped blob upload (not implemented).
 pub const BLOB_UPLOADS: &str = "/v1/blobs/uploads";
-/// `PUT` upload / `GET` download an encrypted blob (M03/M04).
+/// `PUT` upload / `GET` download an encrypted blob (not implemented).
 pub const BLOB: &str = "/v1/blobs/{id}";
-/// `POST` advertise / `GET` fetch encrypted checkpoints (M03/M04).
+/// `POST` advertise / `GET` fetch encrypted checkpoints (not implemented).
 pub const CHECKPOINTS: &str = "/v1/checkpoints";
 /// `POST` per-device applied-cursor acknowledgement ([`crate::AckRequest`]).
 pub const ACKS: &str = "/v1/acks";

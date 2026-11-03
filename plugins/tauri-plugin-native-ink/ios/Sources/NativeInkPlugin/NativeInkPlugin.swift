@@ -1,7 +1,7 @@
-// Penroam NativeInkSurface for iPadOS (M01.6): a UIKit Pencil preview layer
+// Penroam NativeInkSurface for iPadOS: a UIKit Pencil preview layer
 // above the Tauri WKWebView.
 //
-// Why: WKWebView renders rAF at 60 Hz by default (measured in M00 on an
+// Why: WKWebView renders rAF at 60 Hz by default (measured during the framework comparison on an
 // iPad Pro M1, 120 Hz display) while UIKit renders at 120 Hz. Live Pencil
 // strokes are therefore drawn natively; Vue/Rust keep document semantics.
 //
@@ -317,7 +317,7 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
 
 @_cdecl("init_plugin_native_ink")
 func initPlugin() -> Plugin {
-    // As in M00: lift WKWebView's 60 fps rendering-update cap so the committed
+    // As in the iPad prototype: lift WKWebView's 60 fps rendering-update cap so the committed
     // web layer can also follow 120 Hz. Private SPI (App Store review risk);
     // applied only if WebKit still exposes it.
     WebFrameRate.installHighRefreshHook()

@@ -435,10 +435,10 @@ pub fn export_annotated_pdf(
     Ok(report)
 }
 
-/// Imports an M00 canonical stroke document (`m00-strokes` v1) onto a page.
-/// Used by the benchmark harness and for bringing M00 test captures forward.
+/// Imports a canonical stroke document (`m00-strokes` v1) onto a page.
+/// Used by the benchmark harness and for bringing native test captures forward.
 #[tauri::command(async)]
-pub fn import_m00_strokes(
+pub fn import_stroke_document(
     state: State<'_, AppState>,
     notebook_id: Uuid,
     page_id: Uuid,
@@ -448,7 +448,7 @@ pub fn import_m00_strokes(
     drop(json);
     let mut lib = lib!(state);
     let (rev, z) = lib.with_page(notebook_id, page_id, |p| (p.revision, p.max_z()))?;
-    let elements = penroam_core::migrate::m00_strokes_to_elements(&v, z + 1)
+    let elements = penroam_core::migrate::stroke_doc_to_elements(&v, z + 1)
         .map_err(|e| invalid(e.to_string()))?;
     drop(v);
     let batch = OperationBatch {

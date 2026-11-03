@@ -1,5 +1,5 @@
-//! Measurement helpers carried over from the M00 harness (same methods, so
-//! M01 numbers are comparable with `benchmarks/results/linux/*`).
+//! Measurement helpers carried over from the framework-comparison harness
+//! (same methods, so app numbers are comparable with `benchmarks/results/linux/*`).
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -156,7 +156,7 @@ pub fn proc_stats() -> ProcStats {
     read_proc_tree()
 }
 
-/// Milliseconds from process start (/proc, as in M00) to this call.
+/// Milliseconds from process start (/proc, as in the benchmark protocol) to this call.
 #[tauri::command]
 pub fn startup_ms() -> f64 {
     process_age_ms().unwrap_or_else(|| {

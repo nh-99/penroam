@@ -1,4 +1,4 @@
-// Shared brush geometry, ported unchanged from M00 (reference implementation:
+// Shared brush geometry, identical across Kotlin/Swift/TS/Rust (reference implementation:
 // tests/fixtures/generate-fixtures.mjs; golden: geometry-golden.json; Rust
 // port: crates/penroam-core/src/geometry.rs).
 import type { InkPoint } from "../generated/InkPoint";
@@ -171,7 +171,7 @@ export function strokeBounds(s: StrokeLike): Rect {
   return b;
 }
 
-/** Stroke eraser hit test (document units). Same rule as M00 Kotlin/Dart/TS. */
+/** Stroke eraser hit test (document units). Same rule as the Kotlin/Dart/TS prototypes. */
 export function hitTest(s: StrokeLike, cx: number, cy: number, r: number): boolean {
   const b = strokeBounds(s);
   if (cx < b[0] - r || cx > b[2] + r || cy < b[1] - r || cy > b[3] + r) return false;

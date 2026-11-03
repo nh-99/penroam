@@ -4,7 +4,8 @@ import PencilKit
 import UIKit
 
 /// Reusable native PencilKit handwriting backend (InkBackend contract, see
-/// docs/architecture.md). Shared by the standalone UIKit host (ios/M00iOS),
+/// the framework-comparison architecture notes in docs/). Shared by the
+/// standalone UIKit host (ios/BenchHost),
 /// the Tauri iOS plugin and the Flutter iOS Platform View.
 ///
 /// PencilKit renders ink itself with no host involvement. The backend only

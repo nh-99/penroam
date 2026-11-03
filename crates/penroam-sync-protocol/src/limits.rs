@@ -30,7 +30,7 @@ pub struct Limits {
     /// Default 16 KiB, hard max 64 KiB.
     pub max_header_json_bytes: u32,
     /// Maximum size of one encrypted blob (asset) in bytes.
-    /// Default 64 MiB, hard max 1 GiB. (Blobs land in M03/M04.)
+    /// Default 64 MiB, hard max 1 GiB. (Blob transfer is not implemented yet.)
     pub max_blob_bytes: u64,
     /// Maximum number of `depends_on` causal references per envelope.
     /// Default 64, hard max 256.

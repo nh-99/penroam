@@ -191,7 +191,7 @@ pub struct UsageResponse {
     pub quota_bytes: Option<u64>,
 }
 
-/// `POST /v1/devices` request. **Placeholder** until M03: public keys are
+/// `POST /v1/devices` request. **Placeholder** until device enrollment exists: public keys are
 /// opaque unpadded-base64url strings; no key format is fixed yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRegistrationRequest {
@@ -226,7 +226,7 @@ impl DeviceRegistrationRequest {
     }
 }
 
-/// `POST /v1/devices` response. **Placeholder** until M03.
+/// `POST /v1/devices` response. **Placeholder** until device enrollment exists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRegistrationResponse {
     /// Assigned device id.

@@ -9,7 +9,7 @@
 //!
 //! * **Local** ([`apply_to_notebook`], [`apply_to_page`]): the single-writer
 //!   path used by the live library and by journal replay. Page edits reuse
-//!   the M01 page-operation semantics exactly, so replaying a journal yields
+//!   the editor's page-operation semantics exactly, so replaying a journal yields
 //!   bit-identical pages; notebook edits are idempotent "set" operations so
 //!   re-applying a journal suffix converges to the same state.
 //! * **Merge** ([`crate::replica::Replica`]): order-independent convergence
@@ -344,7 +344,7 @@ pub fn bodies_from_batch(
 }
 
 /// Validates page content operations against a page (all or nothing) and
-/// applies them in order with exactly the M01 batch semantics. Returns
+/// applies them in order with exactly the editor's batch semantics. Returns
 /// without modifying the page if any operation is invalid.
 pub fn apply_to_page(page: &mut Page, bodies: &[&DocumentOperation]) -> Result<(), OpError> {
     let kinds: Vec<ops::PageOperation> = bodies

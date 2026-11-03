@@ -7,7 +7,7 @@ import org.json.JSONObject
 
 /**
  * Benchmark instrumentation for the native module. Event names follow
- * benchmarks/protocol.md sections 11.1/11.2 so results can be merged with the
+ * docs/benchmarks/protocol.md sections 11.1/11.2 so results can be merged with the
  * Flutter and Tauri recorders.
  *
  * All internal timing uses SystemClock.elapsedRealtimeNanos() (monotonic).

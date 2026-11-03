@@ -1,4 +1,4 @@
-use penroam_core::migrate::m00_strokes_to_elements;
+use penroam_core::migrate::stroke_doc_to_elements;
 use penroam_core::*;
 use penroam_storage::*;
 use std::fs;
@@ -10,7 +10,7 @@ fn fixture_elements() -> Vec<Element> {
     let p =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/sample-strokes.json");
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(p).unwrap()).unwrap();
-    m00_strokes_to_elements(&v, 1).unwrap()
+    stroke_doc_to_elements(&v, 1).unwrap()
 }
 
 fn text(z: i64, s: &str) -> Element {

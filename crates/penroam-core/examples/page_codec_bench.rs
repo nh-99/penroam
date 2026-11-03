@@ -1,4 +1,4 @@
-//! Size and speed of the binary page encoding vs JSON on an M00 benchmark scene.
+//! Size and speed of the binary page encoding vs JSON on a benchmark scene.
 //!
 //!     pnpm fixtures   # generates scene-5000/10000 if missing
 //!     cargo run --release -p penroam-core --example page_codec_bench [-- 10000]
@@ -23,7 +23,7 @@ fn main() {
         Template::default(),
         0,
     );
-    page.elements = migrate::m00_strokes_to_elements(&v, 1).unwrap();
+    page.elements = migrate::stroke_doc_to_elements(&v, 1).unwrap();
     let points: usize = page
         .elements
         .iter()
