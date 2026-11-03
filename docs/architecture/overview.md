@@ -81,7 +81,15 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   signing/AEAD bytes, `PRSB` batch framing, DTOs, errors, retry policy). `penroam-sync-testkit`
   is the development test server (in memory or persisted to a folder, with an HTTP front end
   and fault injection). Neither depends on core or storage. See
-  [`../protocol/sync-protocol-v1.md`](../protocol/sync-protocol-v1.md).
+  [`../protocol/sync-protocol-v1.md`](../protocol/sync-protocol-v1.md) and
+  [`../protocol/openapi.yaml`](../protocol/openapi.yaml).
+* **Sign-in (`auth.v1`).** Servers with real accounts advertise `auth.v1`. `penroam_sync::auth`
+  signs in with the server's OpenID Connect provider in the system browser (authorization code
+  + PKCE, loopback redirect, `state` and `nonce` checks), exchanges the ID token for an account
+  session, and gets a device session by signing a server challenge with the device key; the
+  server only grants that to active key-log members. The hosted Penroam Cloud server is a
+  separate, private codebase that implements the same public protocol; nothing in this
+  repository depends on it, and the development test server keeps its stub sign-in.
 * **Sync engine (developer preview).** `penroam-sync` keeps its own state under
   `<library>/sync/`: an append-only operation log of every synced operation (local and remote),
   parked and quarantined envelopes, and the verified key log pin. One reconcile has three phases

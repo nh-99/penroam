@@ -94,8 +94,10 @@ Sessions used so far are in `tools/linux-e2e/sessions/`; see [`platforms/linux.m
 
 ## Sync (developer preview)
 
-Sync only works against the **development test server**. It has a stub sign-in, no TLS and no
-hardening, so keep it on loopback.
+The app's sync settings work against the **development test server**. It has a stub sign-in, no
+TLS and no hardening, so keep it on loopback. Servers that advertise `auth.v1` (sign-in through
+an OpenID Connect provider, protocol §12a) are supported by the client crate and the CLI below;
+the app does not offer that sign-in yet.
 
 ```bash
 cargo run -p penroam-sync-testkit --bin penroam-sync-testserver -- --listen 127.0.0.1:8787 --data /tmp/penroam-sync-server
@@ -124,10 +126,23 @@ cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-b pair-poll
 cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a sync
 ```
 
+Against a server with `auth.v1`, sign in first (system browser; `--id-token-file` takes an ID
+token obtained elsewhere, for scripted tests) and pass `-` as the account:
+
+```bash
+cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a login https://sync.example
+cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a create https://sync.example -
+```
+
+The CLI keeps its sessions in `<profile>/sessions.json` (mode 0600). Never enable TRACE logging
+for `ureq`/`ureq_proto` in a program that uses this crate: that HTTP library hex-dumps requests,
+bearer tokens included, at TRACE level.
+
 Tests: `cargo test -p penroam-sync` runs the convergence and fault-injection scenarios
 (`tests/sync.rs`), the randomized three-device convergence test (`tests/random.rs`, slow in
 debug builds; use `--release`), two CLI processes against the HTTP test server
-(`tests/processes.rs`) and the pinned crypto vectors (`tests/vectors.rs`).
+(`tests/processes.rs`) and the pinned crypto vectors (`tests/vectors.rs`). The protocol crate's
+`tests/fixtures.rs` also checks that `docs/protocol/openapi.yaml` lists every route.
 
 ## README screenshots
 
