@@ -1,3 +1,19 @@
+//! Tauri commands for the library, pages, assets, import/export and app exit.
+//!
+//! Each command is a thin wrapper over [`penroam_storage::Library`] (held in
+//! [`AppState`] behind a mutex) or [`penroam_pdf`]. Errors reach the UI as
+//! [`CmdError`] `{ code, message }`. Commands run on Tauri's async pool
+//! (`#[tauri::command(async)]`), so file and storage work never blocks the
+//! UI thread.
+//!
+//! Commands that change notebook data call [`crate::sync::SyncSlot::nudge`]
+//! first. That only schedules a debounced background sync (and does nothing
+//! when sync is not set up); the sync worker waits for the library lock, so
+//! nudging before the change is safe.
+//!
+//! Large payloads (pages, thumbnails, assets) travel as raw IPC bodies
+//! instead of JSON-encoded byte arrays.
+
 use crate::AppState;
 use penroam_core::*;
 use penroam_storage::{
@@ -14,7 +30,9 @@ use uuid::Uuid;
 /// Structured error returned to the UI: `{ code, message }`.
 #[derive(Debug, Serialize)]
 pub struct CmdError {
+    /// Machine-readable category (shared with the TS bindings).
     pub code: ErrorCode,
+    /// Safe, human-readable message.
     pub message: String,
 }
 
@@ -68,6 +86,7 @@ pub fn trim_heap() {
     }
 }
 
+/// Checkpoints everything to disk (window close, app exit, watchdog).
 pub fn flush(app: &AppHandle) {
     if let Some(s) = app.try_state::<AppState>() {
         if let Ok(mut l) = s.lib.lock() {
@@ -81,6 +100,7 @@ pub fn flush(app: &AppHandle) {
 const GENERATOR: &str = concat!("Penroam ", env!("CARGO_PKG_VERSION"));
 const MAX_IMPORT_BYTES: u64 = 2 << 30;
 
+/// Result of creating a notebook or a page.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotebookAndPage {
@@ -88,6 +108,7 @@ pub struct NotebookAndPage {
     page: Page,
 }
 
+/// Result of creating several pages (PDF import).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotebookAndPages {
@@ -95,21 +116,26 @@ pub struct NotebookAndPages {
     pages: Vec<Page>,
 }
 
+/// What start-up recovery did (truncated journals, replayed batches, warnings).
 #[tauri::command(async)]
 pub fn library_status(state: State<'_, AppState>) -> R<RecoveryReport> {
     Ok(lib!(state).recovery.clone())
 }
 
+/// Summaries of every notebook (live and trashed) for the library view.
 #[tauri::command(async)]
 pub fn list_notebooks(state: State<'_, AppState>) -> R<Vec<NotebookSummary>> {
     Ok(lib!(state).list_notebooks())
 }
 
+/// One notebook document (page order, trash, assets).
 #[tauri::command(async)]
 pub fn get_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
     Ok(lib!(state).notebook(id)?.clone())
 }
 
+/// Creates a notebook with one empty page. Only Letter and A4 are accepted
+/// for new notebooks.
 #[tauri::command(async)]
 pub fn create_notebook(
     state: State<'_, AppState>,
@@ -118,7 +144,7 @@ pub fn create_notebook(
     template: Option<Template>,
     cover: Option<String>,
 ) -> R<NotebookAndPage> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     let defaults = PageDefaults {
         paper: paper.unwrap_or(Paper::Letter),
         template: template.unwrap_or_default(),
@@ -130,36 +156,42 @@ pub fn create_notebook(
     Ok(NotebookAndPage { notebook, page })
 }
 
+/// Renames a notebook.
 #[tauri::command(async)]
 pub fn rename_notebook(state: State<'_, AppState>, id: Uuid, title: String) -> R<Notebook> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     Ok(lib!(state).rename_notebook(id, &title)?)
 }
 
+/// Sets the cover colour (`#rrggbb`).
 #[tauri::command(async)]
 pub fn set_notebook_cover(state: State<'_, AppState>, id: Uuid, cover: String) -> R<Notebook> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     Ok(lib!(state).set_notebook_cover(id, &cover)?)
 }
 
+/// Moves a notebook to the trash (restorable).
 #[tauri::command(async)]
 pub fn delete_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     Ok(lib!(state).delete_notebook(id)?)
 }
 
+/// Takes a notebook out of the trash.
 #[tauri::command(async)]
 pub fn restore_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     Ok(lib!(state).restore_notebook(id)?)
 }
 
+/// Erases a trashed notebook from this device (local only; not synced).
 #[tauri::command(async)]
 pub fn purge_notebook(state: State<'_, AppState>, id: Uuid) -> R<()> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).purge_notebook(id)?)
 }
 
+/// Inserts a page at `index` (default: end). An explicit `size` creates a
+/// custom-size page (used by the benchmark harness).
 #[tauri::command(async)]
 pub fn create_page(
     state: State<'_, AppState>,
@@ -169,7 +201,7 @@ pub fn create_page(
     paper: Option<Paper>,
     size: Option<Size>,
 ) -> R<NotebookAndPage> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     let mut lib = lib!(state);
     if let Some(size) = size {
         // explicit size (custom paper): used by the benchmark harness
@@ -188,29 +220,33 @@ pub fn create_page(
     Ok(NotebookAndPage { notebook, page })
 }
 
+/// Reorders live pages; `order` must contain exactly the notebook's live pages.
 #[tauri::command(async)]
 pub fn update_page_order(
     state: State<'_, AppState>,
     notebook_id: Uuid,
     order: Vec<Uuid>,
 ) -> R<Notebook> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     Ok(lib!(state).update_page_order(notebook_id, order)?)
 }
 
+/// Moves a page to the notebook's trash.
 #[tauri::command(async)]
 pub fn delete_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Notebook> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     Ok(lib!(state).delete_page(notebook_id, page_id)?)
 }
 
+/// Restores a trashed page to its former position.
 #[tauri::command(async)]
 pub fn restore_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Notebook> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     Ok(lib!(state).restore_page(notebook_id, page_id)?)
 }
 
-/// Returns the page as raw JSON bytes (avoids a second serde pass for large pages).
+/// Returns the page as raw JSON bytes (avoids a second serde pass for large
+/// pages). After a very large page the heap is trimmed shortly afterwards.
 #[tauri::command(async)]
 pub fn load_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Response> {
     let bytes = lib!(state)
@@ -227,6 +263,10 @@ pub fn load_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -
     Ok(r)
 }
 
+/// Applies an editor batch; returns once it is durable on disk ("Saved
+/// locally"). A stale `base_revision` fails with a `conflict` error and the
+/// editor reloads the page; retrying the same batch id returns the original
+/// outcome.
 #[tauri::command(async)]
 pub fn apply_page_operations(
     state: State<'_, AppState>,
@@ -234,26 +274,30 @@ pub fn apply_page_operations(
     page_id: Uuid,
     batch: OperationBatch,
 ) -> R<ApplyOutcome> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     Ok(lib!(state).apply_page_operations(notebook_id, page_id, &batch)?)
 }
 
+/// Checkpoints one page (writes its snapshot) when the editor leaves it.
 #[tauri::command(async)]
 pub fn flush_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<()> {
     Ok(lib!(state).flush_page(notebook_id, page_id)?)
 }
 
+/// Checkpoints everything (Ctrl+S, app close).
 #[tauri::command(async)]
 pub fn flush_all(state: State<'_, AppState>) -> R<()> {
     Ok(lib!(state).flush_all()?)
 }
 
+/// Asset bytes (verified against their hash) as a raw body.
 #[tauri::command(async)]
 pub fn read_asset(state: State<'_, AppState>, notebook_id: Uuid, hash: String) -> R<Response> {
     Ok(Response::new(lib!(state).read_asset(notebook_id, &hash)?))
 }
 
-/// Raw PNG body; ids in headers (`x-notebook`, `x-page`).
+/// Stores a page thumbnail (derived cache, never exported). Raw PNG body;
+/// ids in headers (`x-notebook`, `x-page`).
 #[tauri::command(async)]
 pub fn save_thumbnail(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> R<()> {
     let h = |k: &str| {
@@ -283,6 +327,7 @@ pub fn save_thumbnail(state: State<'_, AppState>, request: tauri::ipc::Request<'
     Ok(lib!(state).save_thumbnail(nb, page, bytes)?)
 }
 
+/// A page thumbnail as a raw PNG body (empty when none was generated yet).
 #[tauri::command(async)]
 pub fn get_thumbnail(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Response> {
     Ok(Response::new(
@@ -333,6 +378,8 @@ fn write_user_file(app: &AppHandle, path: &str, bytes: &[u8]) -> R<()> {
     Ok(())
 }
 
+/// Imports a user-chosen PDF (≤ 1 GiB) as pages: the original bytes become a
+/// notebook asset and every PDF page becomes a page with that background.
 #[tauri::command(async)]
 pub fn import_pdf(
     app: AppHandle,
@@ -342,7 +389,7 @@ pub fn import_pdf(
     file_name: Option<String>,
     index: Option<usize>,
 ) -> R<NotebookAndPages> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     let bytes = read_user_file(&app, &path, 1 << 30)?;
     if !bytes.starts_with(b"%PDF") && !bytes.windows(5).take(1024).any(|w| w == b"%PDF-") {
         return Err(CmdError {
@@ -372,6 +419,7 @@ pub fn import_pdf(
     Ok(NotebookAndPages { notebook, pages })
 }
 
+/// Size of an exported archive.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportResult {
@@ -379,6 +427,9 @@ pub struct ExportResult {
     pages: u32,
 }
 
+/// Exports a notebook as a `.penroam` archive to a user-chosen destination.
+/// The archive is built in the staging folder first, so a failure never
+/// leaves a truncated file at the destination.
 #[tauri::command(async)]
 pub fn export_notebook(
     app: AppHandle,
@@ -414,19 +465,22 @@ pub fn export_notebook(
     Ok(ExportResult { bytes: n, pages })
 }
 
+/// Imports a `.penroam` archive (≤ 2 GiB) as a new notebook.
 #[tauri::command(async)]
 pub fn import_notebook(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
 ) -> R<ImportReport> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     let bytes = read_user_file(&app, &path, MAX_IMPORT_BYTES)?;
     let r = lib!(state).import_archive(std::io::Cursor::new(bytes));
     trim_heap();
     Ok(r?)
 }
 
+/// Exports the live pages as a PDF with vector ink and text over the original
+/// PDF backgrounds.
 #[tauri::command(async)]
 pub fn export_annotated_pdf(
     app: AppHandle,
@@ -457,7 +511,7 @@ pub fn import_stroke_document(
     page_id: Uuid,
     json: String,
 ) -> R<ApplyOutcome> {
-    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
+    state.sync.nudge();
     let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| invalid(e.to_string()))?;
     drop(json);
     let mut lib = lib!(state);
@@ -479,6 +533,7 @@ pub fn import_stroke_document(
     Ok(r?)
 }
 
+/// Flushes and exits (the editor calls this after saving on window close).
 #[tauri::command(async)]
 pub fn exit_app(app: AppHandle) {
     flush(&app);

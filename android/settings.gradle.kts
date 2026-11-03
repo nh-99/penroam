@@ -1,5 +1,6 @@
-// Standalone Android build for the shared BOOX ink module and its native
-// reference/test host app.
+// Standalone Android build of the BOOX ink module used by the app's native
+// ink plugin (runs its JVM unit tests; the app build includes it via
+// apps/desktop-mobile/scripts/patch-android.py).
 pluginManagement {
     repositories {
         google()
@@ -33,4 +34,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "boox-android"
 include(":boox-ink")
-include(":boox-ink-demo")

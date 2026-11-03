@@ -5,8 +5,10 @@
 //! deterministic result of applying batches in revision order.
 //!
 //! Each operation and batch has a stable UUID and each batch names the page
-//! revision it was built on. This is not a sync/CRDT mechanism: a revision
-//! mismatch is rejected rather than merged.
+//! revision it was built on. A revision mismatch is rejected rather than
+//! merged: this is the single-writer path of one device. Merging operations
+//! from several devices happens in [`crate::replica`], on the
+//! [`crate::operation::DocumentOperation`]s these batches are journaled as.
 
 use crate::model::{Element, Page, Template, Timestamp};
 use crate::validate::{validate_element, ValidationError};
@@ -18,19 +20,25 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// One atomic edit from the editor: applies completely or not at all.
 pub struct OperationBatch {
+    /// Stable id; a retried batch id returns the original outcome.
     pub batch_id: Uuid,
     /// The page revision this batch was built against.
     #[ts(type = "number")]
     pub base_revision: u64,
+    /// The operations, applied in order.
     pub ops: Vec<PageOperation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// One operation inside a batch.
 pub struct PageOperation {
+    /// Stable id (becomes the journaled operation's id).
     pub op_id: Uuid,
+    /// What it does.
     #[serde(flatten)]
     pub kind: OpKind,
 }
@@ -38,27 +46,51 @@ pub struct PageOperation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "op", rename_all = "camelCase")]
 #[ts(export)]
+/// The kinds of page edit. JSON-tagged by `op`.
 pub enum OpKind {
     /// Inserts new elements (ids must not exist yet).
-    AddElements { elements: Vec<Element> },
+    AddElements {
+        /// Elements to append.
+        elements: Vec<Element>,
+    },
     /// Removes existing elements by id.
-    RemoveElements { ids: Vec<Uuid> },
+    RemoveElements {
+        /// Ids to remove.
+        ids: Vec<Uuid>,
+    },
     /// Replaces existing elements (matched by id) with new versions.
-    ReplaceElements { elements: Vec<Element> },
+    ReplaceElements {
+        /// New versions; each id must exist.
+        elements: Vec<Element>,
+    },
     /// Changes the page background template.
-    SetTemplate { template: Template },
+    SetTemplate {
+        /// The new template.
+        template: Template,
+    },
 }
 
+/// Why a batch was rejected (the page is unchanged in every case).
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ApplyError {
+    /// The batch was built on another revision (the editor must reload).
     #[error("revision conflict: page is at {actual}, batch was built on {expected}")]
-    RevisionConflict { expected: u64, actual: u64 },
+    RevisionConflict {
+        /// Revision named by the batch.
+        expected: u64,
+        /// Revision of the page.
+        actual: u64,
+    },
+    /// An added element id already exists on the page.
     #[error("element {0} already exists")]
     DuplicateElement(Uuid),
+    /// A removed or replaced element id does not exist.
     #[error("element {0} does not exist")]
     MissingElement(Uuid),
+    /// Element data failed validation.
     #[error("invalid element: {0}")]
     Invalid(#[from] ValidationError),
+    /// The batch has no operations.
     #[error("empty operation batch")]
     Empty,
 }

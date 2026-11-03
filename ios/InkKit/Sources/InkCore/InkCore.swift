@@ -296,7 +296,7 @@ struct AnyEncodable: Encodable {
     }
 }
 
-/// Gap analysis on delivered sample timestamps (same rule as Kotlin/TS/Dart).
+/// Gap analysis on delivered sample timestamps (same rule as Kotlin/TS).
 public func analyzeSamples(_ ts: [Double], _ xs: [Double], _ ys: [Double]) -> [String: Double] {
     let dts = ts.count > 1 ? (1..<ts.count).map { ts[$0] - ts[$0 - 1] } : []
     let sorted = dts.sorted()

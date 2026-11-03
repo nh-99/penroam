@@ -1,5 +1,4 @@
-// Deterministic benchmark scenes, ported unchanged from the Tauri prototype
-// (reference/m00-tauri-app/src/ink/scene.ts). Must reproduce
+// Deterministic benchmark scenes (generator: tests/fixtures/generate-fixtures.mjs). Must reproduce
 // tests/fixtures/benchmark-scenes/scene-<N>.json exactly (tests/scene.test.ts),
 // so the app does not bundle the 11-22 MB fixture files.
 

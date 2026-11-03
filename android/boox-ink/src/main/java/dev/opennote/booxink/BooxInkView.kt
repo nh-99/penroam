@@ -27,8 +27,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Native Android writing surface shared by the Flutter and Tauri hosts and by
- * the standalone reference app.
+ * Native Android writing surface hosted by the app's native ink plugin.
  *
  * Modes (docs/benchmarks/protocol.md, "BOOX rendering modes"):
  *  - [Mode.BOOX_HARDWARE]   Mode B: Onyx TouchHelper raw drawing shows the

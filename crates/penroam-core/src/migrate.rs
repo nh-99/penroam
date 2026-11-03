@@ -13,18 +13,26 @@ use crate::model::*;
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+/// Why a document could not be loaded.
 #[derive(Debug, thiserror::Error)]
 pub enum MigrateError {
+    /// Written by a newer build; refused rather than partially read.
     #[error("{kind} schema version {found} is newer than this build supports ({supported}); please update Penroam")]
     TooNew {
+        /// `"page"` or `"notebook"`.
         kind: &'static str,
+        /// Version in the file.
         found: u64,
+        /// Newest version this build reads.
         supported: u32,
     },
+    /// `schemaVersion` missing, zero or not a number.
     #[error("missing or invalid schemaVersion")]
     NoVersion,
+    /// Not valid JSON for the model.
     #[error("malformed document: {0}")]
     Json(#[from] serde_json::Error),
+    /// Not a `{"format": "m00-strokes"}` stroke document.
     #[error("not a canonical stroke document")]
     NotStrokeDocument,
 }
@@ -74,6 +82,7 @@ fn run_chain(
     Ok(v)
 }
 
+/// Migrates a raw page JSON value to the current schema and parses it.
 pub fn page_from_value(v: Value) -> Result<Page, MigrateError> {
     Ok(serde_json::from_value(run_chain(
         v,
@@ -83,6 +92,7 @@ pub fn page_from_value(v: Value) -> Result<Page, MigrateError> {
     )?)?)
 }
 
+/// Migrates a raw notebook JSON value to the current schema and parses it.
 pub fn notebook_from_value(v: Value) -> Result<Notebook, MigrateError> {
     Ok(serde_json::from_value(run_chain(
         v,
@@ -92,10 +102,12 @@ pub fn notebook_from_value(v: Value) -> Result<Notebook, MigrateError> {
     )?)?)
 }
 
+/// [`page_from_value`] from JSON bytes.
 pub fn page_from_slice(b: &[u8]) -> Result<Page, MigrateError> {
     page_from_value(serde_json::from_slice(b)?)
 }
 
+/// [`notebook_from_value`] from JSON bytes.
 pub fn notebook_from_slice(b: &[u8]) -> Result<Notebook, MigrateError> {
     notebook_from_value(serde_json::from_slice(b)?)
 }

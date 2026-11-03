@@ -1,8 +1,10 @@
 //! Penroam binary page encoding (`.prp`), file format version 1. Normative
 //! spec: `docs/formats/penroam-binary-v1.md`.
 //!
-//! The same idea as a custom container (magic + version + payload), but
-//! lossless for everything a page holds:
+//! A small container (magic, version, flags, payload, checksum) that is
+//! lossless for everything a page holds. Page metadata stays JSON (so unknown
+//! fields survive); ink points, which are almost all of the bytes, are stored
+//! as compressed columns:
 //!
 //! ```text
 //! 0      4  magic "PRPG"
@@ -40,6 +42,7 @@
 use crate::model::{BinaryExtension, Element, InkPoint, InkStroke, Page};
 use crate::validate::limits;
 
+/// First four bytes of every `.prp` file.
 pub const MAGIC: &[u8; 4] = b"PRPG";
 /// `.prp` file format version. Independent of the page model schema
 /// version carried inside the metadata ([`crate::PAGE_SCHEMA_VERSION`]).
@@ -57,32 +60,42 @@ pub const FLAG_EXTENSIONS: u16 = 1 << 8;
 pub const MAX_META: u64 = 256 << 20;
 /// Extension area limits (hostile-input guard).
 pub const MAX_EXTENSIONS: usize = 1024;
+/// Total extension payload limit (hostile-input guard).
 pub const MAX_EXTENSION_BYTES: usize = 64 << 20;
 /// |q| must stay below 2^53 so the f64 <-> i64 conversion is exact.
 const MAX_EXACT: f64 = 9_007_199_254_740_992.0;
 
+/// Why a `.prp` file could not be decoded.
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum BinaryError {
+    /// Not a page file (wrong magic).
     #[error("not a Penroam page file")]
     BadMagic,
+    /// Written by a newer format version.
     #[error("page file version {0} is newer than this build supports")]
     TooNew(u16),
+    /// Uses a required feature flag this build does not know.
     #[error("page file needs feature {0} that this build does not support; please update Penroam")]
     UnsupportedFeature(String),
+    /// Truncated or structurally invalid.
     #[error("page file is truncated or malformed: {0}")]
     Malformed(&'static str),
+    /// The trailing CRC-32 does not match (damaged file).
     #[error("page file checksum mismatch")]
     Checksum,
+    /// The JSON metadata could not be parsed.
     #[error("page metadata: {0}")]
     Meta(String),
 }
 
+/// Whether `bytes` start with the `.prp` magic (vs a legacy JSON page).
 pub fn is_binary_page(bytes: &[u8]) -> bool {
     bytes.starts_with(MAGIC)
 }
 
 // ------------------------------------------------------------- encode --
 
+/// LEB128 unsigned varint: 7 bits per byte, high bit = more bytes follow.
 fn put_varint(out: &mut Vec<u8>, mut v: u64) {
     while v >= 0x80 {
         out.push((v as u8) | 0x80);
@@ -91,10 +104,13 @@ fn put_varint(out: &mut Vec<u8>, mut v: u64) {
     out.push(v as u8);
 }
 
+/// Maps signed to unsigned so small negative deltas stay short varints
+/// (0, -1, 1, -2, … → 0, 1, 2, 3, …).
 fn zigzag(v: i64) -> u64 {
     ((v << 1) ^ (v >> 63)) as u64
 }
 
+/// Inverse of [`zigzag`].
 fn unzigzag(v: u64) -> i64 {
     ((v >> 1) as i64) ^ -((v & 1) as i64)
 }
@@ -125,6 +141,9 @@ fn decimal_scale(values: &[f64]) -> Option<(u32, Vec<i64>)> {
     None
 }
 
+/// Writes a float column in the smallest lossless form: CONST if every value
+/// is bit-identical, DECIMAL (delta-coded scaled integers) if every value is
+/// an exact short decimal, else RAW f64s.
 fn put_float_column(out: &mut Vec<u8>, values: &[f64]) {
     if let Some(first) = values.first() {
         if values.iter().all(|v| v.to_bits() == first.to_bits()) {
@@ -149,6 +168,7 @@ fn put_float_column(out: &mut Vec<u8>, values: &[f64]) {
     }
 }
 
+/// Writes an int column: CONST, or zig-zag deltas from the previous value.
 fn put_int_column(out: &mut Vec<u8>, values: &[i64]) {
     if let Some(first) = values.first() {
         if values.iter().all(|v| v == first) {
@@ -165,6 +185,7 @@ fn put_int_column(out: &mut Vec<u8>, values: &[i64]) {
     }
 }
 
+/// Presence byte for an optional column: none, all, or a bitmap (LSB first).
 fn put_presence(out: &mut Vec<u8>, present: &[bool]) {
     if present.iter().all(|p| !p) {
         out.push(0);
@@ -182,6 +203,7 @@ fn put_presence(out: &mut Vec<u8>, present: &[bool]) {
     }
 }
 
+/// One stroke's point block (see the module docs for the column order).
 fn put_points(out: &mut Vec<u8>, pts: &[InkPoint]) {
     put_varint(out, pts.len() as u64);
     let col = |f: fn(&InkPoint) -> f64| pts.iter().map(f).collect::<Vec<f64>>();

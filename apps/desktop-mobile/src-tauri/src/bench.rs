@@ -1,5 +1,8 @@
-//! Measurement helpers carried over from the framework-comparison harness
-//! (same methods, so app numbers are comparable with `benchmarks/results/linux/*`).
+//! Measurement helpers for the in-app benchmark harness
+//! (`apps/desktop-mobile/src/bench`, method in `docs/benchmarks/protocol.md`):
+//! system and process information, start-up time, writing result files and
+//! detecting a scripted benchmark run. None of this runs during normal use
+//! unless the frontend asks for it.
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -9,10 +12,13 @@ use tauri::{AppHandle, Manager};
 
 static STARTED: OnceLock<Instant> = OnceLock::new();
 
+/// Records the process start instant (fallback for [`startup_ms`] where
+/// `/proc` is unavailable). Called first thing in `run()`.
 pub fn mark_start() {
     STARTED.get_or_init(Instant::now);
 }
 
+/// Environment details recorded with every benchmark result.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemInfo {
@@ -29,6 +35,8 @@ pub struct SystemInfo {
     desktop: Option<String>,
 }
 
+/// OS, architecture, kernel, WebView/Tauri/app versions and (Linux) the
+/// display server actually in use.
 #[tauri::command]
 pub fn system_info(app: AppHandle) -> SystemInfo {
     SystemInfo {
@@ -70,6 +78,7 @@ fn display_server() -> Option<&'static str> {
     }
 }
 
+/// Memory of the app process tree (Linux/Android `/proc`; elsewhere `available: false`).
 #[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcStats {
@@ -151,6 +160,7 @@ fn read_proc_tree() -> ProcStats {
     }
 }
 
+/// Current [`ProcStats`].
 #[tauri::command]
 pub fn proc_stats() -> ProcStats {
     read_proc_tree()

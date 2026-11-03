@@ -3,4 +3,32 @@
 /**
  * Minimal raster/vector image placed on a page (asset reference).
  */
-export type ImageElement = { id: string, z: number, x: number, y: number, width: number, height: number, assetHash: string, };
+export type ImageElement = { 
+/**
+ * Stable id.
+ */
+id: string, 
+/**
+ * Stacking position.
+ */
+z: number, 
+/**
+ * Left edge in points.
+ */
+x: number, 
+/**
+ * Top edge in points.
+ */
+y: number, 
+/**
+ * Width in points.
+ */
+width: number, 
+/**
+ * Height in points.
+ */
+height: number, 
+/**
+ * SHA-256 of the image asset in the notebook.
+ */
+assetHash: string, };

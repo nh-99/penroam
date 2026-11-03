@@ -1,1 +1,0 @@
-Normal builds ship this folder empty; tools/install_autorun.sh writes autorun.txt into it.

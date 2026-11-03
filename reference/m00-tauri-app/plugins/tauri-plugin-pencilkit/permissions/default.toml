@@ -1,3 +1,0 @@
-[default]
-description = "Allows the frontend to drive the native PencilKit canvas."
-permissions = ["allow-call", "allow-registerListener", "allow-remove-listener"]

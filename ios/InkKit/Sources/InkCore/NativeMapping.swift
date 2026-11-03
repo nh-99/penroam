@@ -1,8 +1,6 @@
 // Pure conversions between the canonical stroke format and native pen models
-// (UIKit/PencilKit). Foundation-only so they are unit-tested on Linux; the
-// PencilKit adapter (PencilInk) only calls these.
-//
-// What is and is not preserved is documented in docs/interop.md.
+// (UIKit/PencilKit). Foundation-only so they are unit-tested on Linux; native
+// adapters only call these.
 import Foundation
 
 public enum NativeMapping {

@@ -28,6 +28,8 @@ pub const NOTEBOOK_SCHEMA_VERSION: u32 = 2;
 /// metadata section). Independent of [`crate::binary::FILE_FORMAT_VERSION`].
 pub const PAGE_SCHEMA_VERSION: u32 = 1;
 
+/// Free-form JSON object used to carry fields this build does not know, so
+/// they survive a load/save round trip.
 pub type Extra = Map<String, Value>;
 
 fn is_empty_map(m: &Extra) -> bool {
@@ -46,12 +48,19 @@ pub type Timestamp = i64;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// A notebook: its metadata, page list (live order, trash, order keys) and
+/// assets. Page content lives in separate [`Page`] documents.
 pub struct Notebook {
+    /// [`NOTEBOOK_SCHEMA_VERSION`] when written by this build.
     pub schema_version: u32,
+    /// Stable random id (never derived from the title).
     pub id: Uuid,
+    /// User-visible title.
     pub title: String,
+    /// Creation time (informational, never used for ordering).
     #[ts(type = "number")]
     pub created_at: Timestamp,
+    /// Last change (informational).
     #[ts(type = "number")]
     pub updated_at: Timestamp,
     /// Live pages in reading order. Always sorted by (`order_keys`, id).
@@ -70,25 +79,31 @@ pub struct Notebook {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub deleted_at: Option<Timestamp>,
+    /// Paper and template used for new pages.
     pub defaults: PageDefaults,
     /// Cover colour (`#rrggbb`).
     pub cover: String,
     /// Immutable content-addressed attachments (original PDFs, images).
     #[serde(default)]
     pub assets: Vec<Asset>,
+    /// Application metadata (free-form, preserved).
     #[serde(default, skip_serializing_if = "is_empty_map")]
     #[ts(type = "Record<string, unknown>", optional)]
     pub metadata: Extra,
+    /// Unknown top-level fields, preserved verbatim.
     #[serde(flatten)]
     #[ts(skip)]
     pub extra: Extra,
 }
 
+/// A page in the notebook's trash.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TrashedPage {
+    /// The page id.
     pub id: Uuid,
+    /// When it was trashed (informational).
     #[ts(type = "number")]
     pub deleted_at: Timestamp,
     /// Index in `pageOrder` at deletion time (restore puts the page back there).
@@ -98,8 +113,11 @@ pub struct TrashedPage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// Defaults for pages added to a notebook.
 pub struct PageDefaults {
+    /// Paper size of new pages.
     pub paper: Paper,
+    /// Background template of new pages.
     pub template: Template,
 }
 
@@ -115,8 +133,11 @@ impl Default for PageDefaults {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// Page size class.
 pub enum Paper {
+    /// US Letter, 612 × 792 pt.
     Letter,
+    /// ISO A4, 595.276 × 841.89 pt.
     A4,
     /// Size given explicitly (benchmarks, imported stroke-document scenes).
     Custom,
@@ -144,25 +165,35 @@ impl Paper {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// Width and height in document points.
 pub struct Size {
+    /// Width in points.
     pub width: f64,
+    /// Height in points.
     pub height: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// Background pattern drawn under a page's elements.
 pub enum TemplateKind {
+    /// Nothing.
     Blank,
+    /// Horizontal lines with a left margin line.
     Ruled,
+    /// Square grid.
     Grid,
+    /// Dot grid.
     Dotted,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// A page background pattern and its pitch.
 pub struct Template {
+    /// Which pattern.
     pub kind: TemplateKind,
     /// Line / grid / dot pitch in points.
     pub spacing: f64,
@@ -180,27 +211,39 @@ impl Default for Template {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// One page: size, background and elements (ink, text, images) in z order.
+/// Stored as a binary `.prp` file (see [`crate::binary`]).
 pub struct Page {
+    /// [`PAGE_SCHEMA_VERSION`] when written by this build.
     pub schema_version: u32,
+    /// Stable random id.
     pub id: Uuid,
+    /// Size class (the actual size is [`Page::size`]).
     pub paper: Paper,
     /// Displayed page size in points (for PDF pages: the rotated crop box).
     pub size: Size,
+    /// Background pattern.
     pub template: Template,
+    /// PDF page rendered under the elements, for imported PDFs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub background: Option<PdfBackgroundRef>,
     /// Incremented once per applied operation batch.
     #[ts(type = "number")]
     pub revision: u64,
+    /// Creation time (informational).
     #[ts(type = "number")]
     pub created_at: Timestamp,
+    /// Last change (informational).
     #[ts(type = "number")]
     pub updated_at: Timestamp,
+    /// Ink strokes, text blocks and images. Drawn in order of (`z`, id).
     pub elements: Vec<Element>,
+    /// Application metadata (free-form, preserved).
     #[serde(default, skip_serializing_if = "is_empty_map")]
     #[ts(type = "Record<string, unknown>", optional)]
     pub metadata: Extra,
+    /// Unknown top-level fields, preserved verbatim.
     #[serde(flatten)]
     #[ts(skip)]
     pub extra: Extra,
@@ -215,7 +258,9 @@ pub struct Page {
 /// An opaque extension record from a `.prp` file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinaryExtension {
+    /// Record tag; the top bits are [`Self::REQUIRED`] and [`Self::COPY_SAFE`].
     pub tag: u32,
+    /// Raw record payload.
     pub data: Vec<u8>,
 }
 
@@ -226,9 +271,11 @@ impl BinaryExtension {
     /// without this bit make the page read-only for this build.
     pub const COPY_SAFE: u32 = 1 << 30;
 
+    /// The record has the [`Self::REQUIRED`] bit.
     pub fn required(&self) -> bool {
         self.tag & Self::REQUIRED != 0
     }
+    /// The record has the [`Self::COPY_SAFE`] bit.
     pub fn copy_safe(&self) -> bool {
         self.tag & Self::COPY_SAFE != 0
     }
@@ -245,6 +292,7 @@ pub struct PdfBackgroundRef {
     pub page_index: u32,
     /// PDF user-space boxes `[x0, y0, x1, y1]` (unrotated, y up).
     pub media_box: [f64; 4],
+    /// Visible region in PDF user space (same convention as `media_box`).
     pub crop_box: [f64; 4],
     /// Effective `/Rotate` (0, 90, 180, 270), clockwise.
     pub rotation: u32,
@@ -286,11 +334,16 @@ impl PdfBackgroundRef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// An immutable attachment stored once per notebook under its hash.
 pub struct Asset {
+    /// SHA-256 (lowercase hex) of the bytes; also the file name on disk.
     pub sha256: String,
+    /// MIME type, e.g. `application/pdf`.
     pub media_type: String,
+    /// Size in bytes.
     #[ts(type = "number")]
     pub byte_size: u64,
+    /// File name the user imported, if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub original_name: Option<String>,
@@ -299,13 +352,18 @@ pub struct Asset {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export)]
+/// Something drawn on a page. JSON-tagged by `type`.
 pub enum Element {
+    /// A handwritten stroke.
     Ink(InkStroke),
+    /// A typed text block.
     Text(TextBlock),
+    /// An image referencing an asset.
     Image(ImageElement),
 }
 
 impl Element {
+    /// The element's stable id.
     pub fn id(&self) -> Uuid {
         match self {
             Element::Ink(s) => s.id,
@@ -313,6 +371,7 @@ impl Element {
             Element::Image(i) => i.id,
         }
     }
+    /// Stacking position (higher draws on top; ties broken by id).
     pub fn z(&self) -> i64 {
         match self {
             Element::Ink(s) => s.z,
@@ -325,8 +384,11 @@ impl Element {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// How a stroke is rendered.
 pub enum InkTool {
+    /// Opaque ink whose width may follow pressure.
     Pen,
+    /// Translucent, fixed-width marker.
     Highlighter,
 }
 
@@ -336,12 +398,16 @@ pub enum InkTool {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct InkStroke {
+    /// Stable id.
     pub id: Uuid,
+    /// Stacking position.
     #[ts(type = "number")]
     pub z: i64,
+    /// Pen or highlighter.
     pub tool: InkTool,
     /// `#rrggbb`.
     pub color: String,
+    /// 0..1; highlighters are translucent.
     #[serde(default = "default_opacity")]
     pub opacity: f64,
     /// Nominal width in points (stroke document `brush.width`).
@@ -360,6 +426,7 @@ pub struct InkStroke {
     /// where points live in the column block (see `crate::binary`).
     #[serde(default)]
     pub points: Vec<InkPoint>,
+    /// Unknown fields, preserved verbatim.
     #[serde(flatten)]
     #[ts(skip)]
     pub extra: Extra,
@@ -371,19 +438,23 @@ pub struct InkStroke {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct InkPoint {
+    /// Document x in points.
     pub x: f64,
+    /// Document y in points (down).
     pub y: f64,
     /// Normalised 0..1 (mouse: 0.5). Raw ranges live in the stroke `input`.
     pub pressure: f64,
     /// Degrees, W3C convention.
     #[serde(default)]
     pub tilt_x: f64,
+    /// Degrees, W3C convention.
     #[serde(default)]
     pub tilt_y: f64,
     /// Microseconds since the first sample of the stroke.
     #[serde(default)]
     #[ts(type = "number")]
     pub time_us: i64,
+    /// Barrel rotation in degrees, when the platform reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub twist: Option<f64>,
@@ -393,6 +464,7 @@ pub struct InkPoint {
     pub flags: Option<u32>,
 }
 
+/// Bits of [`InkPoint::flags`].
 pub mod point_flags {
     /// Pressure was an estimate later refined by the platform (iOS estimated properties).
     pub const ESTIMATED_PRESSURE: u32 = 1;
@@ -403,9 +475,13 @@ pub mod point_flags {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+/// Horizontal alignment of text lines inside a [`TextBlock`].
 pub enum TextAlign {
+    /// Flush left.
     Left,
+    /// Centered.
     Center,
+    /// Flush right.
     Right,
 }
 
@@ -416,18 +492,29 @@ pub enum TextAlign {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TextBlock {
+    /// Stable id.
     pub id: Uuid,
+    /// Stacking position.
     #[ts(type = "number")]
     pub z: i64,
+    /// Left edge in points.
     pub x: f64,
+    /// Top edge in points.
     pub y: f64,
+    /// Wrapping width in points.
     pub width: f64,
+    /// Box height in points (see the type docs).
     pub height: f64,
+    /// Plain text; `\n` starts a new line.
     pub text: String,
+    /// Font size in points.
     pub font_size: f64,
+    /// `#rrggbb`.
     pub color: String,
+    /// Line alignment.
     #[serde(default = "default_align")]
     pub align: TextAlign,
+    /// Unknown fields, preserved verbatim.
     #[serde(flatten)]
     #[ts(skip)]
     pub extra: Extra,
@@ -442,20 +529,29 @@ fn default_align() -> TextAlign {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ImageElement {
+    /// Stable id.
     pub id: Uuid,
+    /// Stacking position.
     #[ts(type = "number")]
     pub z: i64,
+    /// Left edge in points.
     pub x: f64,
+    /// Top edge in points.
     pub y: f64,
+    /// Width in points.
     pub width: f64,
+    /// Height in points.
     pub height: f64,
+    /// SHA-256 of the image asset in the notebook.
     pub asset_hash: String,
+    /// Unknown fields, preserved verbatim.
     #[serde(flatten)]
     #[ts(skip)]
     pub extra: Extra,
 }
 
 impl Page {
+    /// An empty page at revision 0.
     pub fn new(id: Uuid, paper: Paper, size: Size, template: Template, now: Timestamp) -> Self {
         Self {
             schema_version: PAGE_SCHEMA_VERSION,
@@ -507,10 +603,12 @@ impl Page {
         }
     }
 
+    /// Highest `z` of any element (0 for an empty page).
     pub fn max_z(&self) -> i64 {
         self.elements.iter().map(Element::z).max().unwrap_or(0)
     }
 
+    /// Hashes of every asset the page uses (images and PDF background).
     pub fn asset_refs(&self) -> Vec<&str> {
         let mut v: Vec<&str> = self
             .elements
@@ -528,6 +626,7 @@ impl Page {
 }
 
 impl Notebook {
+    /// An empty notebook (no pages) at the current schema.
     pub fn new(
         id: Uuid,
         title: String,

@@ -2,4 +2,40 @@
 import type { ManifestAsset } from "./ManifestAsset";
 import type { ManifestPage } from "./ManifestPage";
 
-export type Manifest = { format: string, formatVersion: number, schemaVersion: number, generator: string, exportedAt: number, notebook: unknown, pages: Array<ManifestPage>, assets: Array<ManifestAsset>, };
+/**
+ * `manifest.json`: everything needed to verify and rebuild the notebook.
+ */
+export type Manifest = { 
+/**
+ * Always [`FORMAT`].
+ */
+format: string, 
+/**
+ * Archive layout version (see [`FORMAT_VERSION`]).
+ */
+formatVersion: number, 
+/**
+ * Notebook model schema of `notebook`.
+ */
+schemaVersion: number, 
+/**
+ * Free-form producer string (app name and version).
+ */
+generator: string, 
+/**
+ * Export time (ms since the epoch; informational).
+ */
+exportedAt: number, 
+/**
+ * The notebook metadata (title, cover, page order, assets, …), kept as
+ * raw JSON so older schemas can be migrated on import.
+ */
+notebook: unknown, 
+/**
+ * Every page entry with its checksum.
+ */
+pages: Array<ManifestPage>, 
+/**
+ * Every asset entry with its checksum.
+ */
+assets: Array<ManifestAsset>, };

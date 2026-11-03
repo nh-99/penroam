@@ -30,6 +30,26 @@
 //!
 //! Operation order comes from the per-device `local_sequence` only — never
 //! from wall-clock time.
+//!
+//! **Bookkeeping that makes this safe.** Each cached page tracks the first
+//! journal sequence not yet in its snapshot; notebooks whose `notebook.json`
+//! lags do the same; transactions for pages that are not loaded wait in
+//! `pending`; and journal data of a notebook that failed to open is *held*.
+//! The checkpoint floor is the minimum of all of these, so a segment is
+//! never deleted while anything it contains exists only in the journal.
+//! Page transactions replay only when their revision is exactly one above
+//! the snapshot's; a gap stops replay for that page (data is kept, never
+//! guessed).
+//!
+//! **Sync.** [`Library::install_merged`] writes a merged result from the sync
+//! engine as snapshots without journaling; it bumps page revisions past any
+//! journaled local batch and records an install mark in the manifest so that
+//! replay skips notebook-level transactions the merged snapshot already
+//! contains. With sync enabled, journal segments are also kept until the
+//! engine has copied them ([`Library::mark_uploaded`]).
+//!
+//! **Legacy libraries** (per-page JSON-lines journals) are migrated on open
+//! by the private `legacy` module, with the original bytes backed up.
 
 use crate::error::{Result, StorageError};
 use crate::fsutil::{self, write_atomic, TMP_MARKER};
@@ -55,29 +75,42 @@ const PAGE_CACHE: usize = 3;
 /// Batch ids remembered for retry deduplication.
 const RECENT_BATCHES: usize = 4096;
 
+/// One row of the library view (cheap: read from `notebook.json` only).
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct NotebookSummary {
+    /// Notebook id.
     pub id: Uuid,
+    /// Title as shown.
     pub title: String,
+    /// Cover colour (`#rrggbb`).
     pub cover: String,
+    /// Number of live (not trashed) pages.
     pub page_count: u32,
+    /// Creation time (ms since the epoch; informational).
     #[ts(type = "number")]
     pub created_at: Timestamp,
+    /// Last change (ms since the epoch); the list is sorted by it.
     #[ts(type = "number")]
     pub updated_at: Timestamp,
+    /// Set when the notebook is in the trash.
     #[ts(optional, type = "number")]
     pub deleted_at: Option<Timestamp>,
+    /// First live page, used for the cover thumbnail.
     #[ts(optional)]
     pub first_page_id: Option<Uuid>,
 }
 
+/// What start-up recovery found and did. Shown to the user only when
+/// something noteworthy happened (warnings are never silent).
 #[derive(Debug, Clone, Default, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct RecoveryReport {
+    /// Leftover temporary files from interrupted atomic writes (removed).
     pub removed_temp_files: u32,
+    /// Unreferenced page/asset files moved to `orphans/` (kept, not deleted).
     pub orphaned_files: u32,
     /// Incomplete trailing records discarded (crash during a write).
     pub truncated_journals: u32,
@@ -89,15 +122,20 @@ pub struct RecoveryReport {
     pub fallback_snapshots: u32,
     /// Notebooks migrated from the legacy storage layout.
     pub migrated_notebooks: u32,
+    /// Human-readable descriptions of everything above and of anything that
+    /// could not be repaired.
     pub warnings: Vec<String>,
 }
 
+/// Result of [`Library::apply_page_operations`].
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ApplyOutcome {
+    /// The page revision after the batch; the editor builds its next batch on it.
     #[ts(type = "number")]
     pub revision: u64,
+    /// Time of the change (ms since the epoch; informational).
     #[ts(type = "number")]
     pub updated_at: Timestamp,
     /// The batch is on disk (journal fsynced): "Saved locally".
@@ -108,10 +146,15 @@ pub struct ApplyOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutboxStatus {
+    /// This library's device id.
     pub device_id: Uuid,
+    /// Highest journaled local sequence.
     pub enqueued_through: u64,
+    /// Highest sequence the sync engine has taken over.
     pub uploaded_through: u64,
+    /// `enqueued_through - uploaded_through`.
     pub pending: u64,
+    /// Whether journal retention waits for the sync engine.
     pub sync_enabled: bool,
 }
 
@@ -129,15 +172,23 @@ struct CachedPage {
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
 pub struct Tuning {
+    /// Checkpoint a page after this many journaled batches.
     pub max_entries: usize,
+    /// ... or once its journal bytes exceed max(this, snapshot size / 4).
     pub min_compact_bytes: u64,
 }
 
+/// The open notebook library (single writer: holds an exclusive lock file).
+///
+/// Every mutating method journals its operations durably before returning
+/// (see the module docs). Pages are loaded lazily and kept in a small LRU
+/// cache; evicting a page checkpoints it.
 pub struct Library {
     root: PathBuf,
     notebooks: HashMap<Uuid, Notebook>,
     pages: HashMap<(Uuid, Uuid), CachedPage>,
     tick: u64,
+    /// What start-up recovery found (and later non-fatal problems).
     pub recovery: RecoveryReport,
     journal: Journal,
     device_id: Uuid,
@@ -161,6 +212,7 @@ pub struct Library {
     _lock: File,
 }
 
+/// Default cover colours, assigned in turn to new notebooks.
 pub const COVERS: &[&str] = &[
     "#3b5b7a", "#7a3b3b", "#3b7a52", "#6b4f8a", "#8a6f3b", "#3b6f7a", "#545454",
 ];
@@ -307,14 +359,17 @@ impl Library {
         Ok(lib)
     }
 
+    /// The library folder.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    /// Scratch folder for import/export (emptied on every open).
     pub fn staging_dir(&self) -> PathBuf {
         self.root.join("staging")
     }
 
+    /// This installation's device id (recorded in every operation).
     pub fn device_id(&self) -> Uuid {
         self.device_id
     }
@@ -776,6 +831,7 @@ impl Library {
 
     // ----------------------------------------------------------- notebooks --
 
+    /// All notebooks (live and trashed), most recently changed first.
     pub fn list_notebooks(&self) -> Vec<NotebookSummary> {
         let mut v: Vec<NotebookSummary> = self
             .notebooks
@@ -795,6 +851,7 @@ impl Library {
         v
     }
 
+    /// A notebook, live or trashed. `NotFound` if it does not exist.
     pub fn notebook(&self, id: Uuid) -> Result<&Notebook> {
         self.notebooks
             .get(&id)
@@ -811,6 +868,9 @@ impl Library {
         Ok(nb)
     }
 
+    /// Creates a notebook with one blank page (from `defaults`). Without a
+    /// `cover`, the next colour of [`COVERS`] is used. Returns the notebook
+    /// and its first page; both are durable on return.
     pub fn create_notebook(
         &mut self,
         title: &str,
@@ -853,6 +913,7 @@ impl Library {
         Ok((nb, page))
     }
 
+    /// Renames a notebook (the title is validated and trimmed).
     pub fn rename_notebook(&mut self, id: Uuid, title: &str) -> Result<Notebook> {
         validate_title(title)?;
         self.notebook(id)?;
@@ -866,6 +927,7 @@ impl Library {
         Ok(self.notebook(id)?.clone())
     }
 
+    /// Changes the cover colour (stored lowercase).
     pub fn set_notebook_cover(&mut self, id: Uuid, cover: &str) -> Result<Notebook> {
         self.notebook(id)?;
         self.commit_notebook_ops(
@@ -878,7 +940,9 @@ impl Library {
         Ok(self.notebook(id)?.clone())
     }
 
+    /// Moves a notebook to the trash (a tombstone; nothing is erased).
     pub fn delete_notebook(&mut self, id: Uuid) -> Result<Notebook> {
+        // checkpoint first so a trashed notebook has no journal-only content
         self.flush_notebook(id)?;
         self.commit_notebook_ops(
             id,
@@ -887,6 +951,7 @@ impl Library {
         Ok(self.notebook(id)?.clone())
     }
 
+    /// Takes a notebook out of the trash.
     pub fn restore_notebook(&mut self, id: Uuid) -> Result<Notebook> {
         self.commit_notebook_ops(
             id,
@@ -982,6 +1047,9 @@ impl Library {
         Ok((self.notebook(nb_id)?.clone(), created))
     }
 
+    /// Reorders the live pages. `order` must contain exactly the current
+    /// live pages (else `Conflict`). Only pages that actually move get new
+    /// order keys, so concurrent reorders on other devices merge well.
     pub fn update_page_order(&mut self, nb_id: Uuid, order: Vec<Uuid>) -> Result<Notebook> {
         let nb = self.live_notebook(nb_id)?.clone();
         let mut a = nb.page_order.clone();
@@ -1013,6 +1081,8 @@ impl Library {
         Ok(nb)
     }
 
+    /// Moves a page to the notebook's trash (recoverable with
+    /// [`Library::restore_page`]).
     pub fn delete_page(&mut self, nb_id: Uuid, page: Uuid) -> Result<Notebook> {
         if !self.live_notebook(nb_id)?.page_order.contains(&page) {
             return Err(StorageError::NotFound(format!("page {page}")));
@@ -1028,6 +1098,7 @@ impl Library {
         Ok(self.notebook(nb_id)?.clone())
     }
 
+    /// Restores a trashed page to its former position.
     pub fn restore_page(&mut self, nb_id: Uuid, page: Uuid) -> Result<Notebook> {
         if !self
             .live_notebook(nb_id)?
@@ -1047,6 +1118,8 @@ impl Library {
         Ok(self.notebook(nb_id)?.clone())
     }
 
+    /// A copy of a page (live or trashed), with every journaled batch
+    /// applied. Use [`Library::with_page`] to avoid copying large pages.
     pub fn load_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<Page> {
         self.cached_page(nb_id, page_id).map(|c| c.page.clone())
     }
@@ -1386,19 +1459,27 @@ impl Library {
         if new == self.manifest {
             return Ok(());
         }
+        // the manifest must be durable before any segment it covers is
+        // deleted: otherwise a crash could leave a manifest that points at
+        // replay data that no longer exists
         write_manifest(&self.root, &self.manifest, &new)?;
         self.manifest = new;
+        // keep what the previous checkpoint still needs: if a new snapshot
+        // turns out damaged, its `.prev` snapshot plus this journal rebuild it
         let mut release = self.manifest.prev_floor.min(self.manifest.floor);
         if self.outbox.sync_enabled {
             release = release.min(self.outbox.uploaded_through);
         }
         self.journal.delete_through(release)?;
         if self.journal.active_is_covered_by(floor) {
+            // start a fresh segment so the covered one can be deleted next time
             self.journal.seal();
         }
         Ok(())
     }
 
+    /// Checkpoints one page now (snapshot + notebook + manifest). Not
+    /// needed for durability; it shortens replay and lets the journal shrink.
     pub fn flush_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<()> {
         self.checkpoint_page(nb_id, page_id)
     }
@@ -1468,6 +1549,7 @@ impl Library {
 
     // -------------------------------------------------------------- outbox --
 
+    /// Outbox counters (see [`OutboxStatus`]).
     pub fn outbox_status(&self) -> OutboxStatus {
         OutboxStatus {
             device_id: self.device_id,
@@ -1627,6 +1709,9 @@ impl Library {
 
     // -------------------------------------------------------------- assets --
 
+    /// Stores an immutable attachment (e.g. a PDF) and references it from
+    /// the notebook. Assets are addressed by SHA-256, so adding the same
+    /// bytes twice returns the existing entry.
     pub fn add_asset(
         &mut self,
         nb_id: Uuid,
@@ -1640,6 +1725,8 @@ impl Library {
             return Ok(a.clone());
         }
         let path = self.asset_path(nb_id, &hash);
+        // bytes first, reference second: a crash in between leaves an
+        // unreferenced file (moved to orphans/ on open), never a dangling reference
         if !path.exists() {
             write_atomic(&path, bytes)?;
         }
@@ -1659,6 +1746,7 @@ impl Library {
         Ok(asset)
     }
 
+    /// Reads an asset of a notebook, verifying its checksum (`Corrupt` on mismatch).
     pub fn read_asset(&self, nb_id: Uuid, hash: &str) -> Result<Vec<u8>> {
         let nb = self.notebook(nb_id)?;
         if !nb.assets.iter().any(|a| a.sha256 == hash) {
@@ -1675,6 +1763,8 @@ impl Library {
 
     // ---------------------------------------------------------- thumbnails --
 
+    /// Caches a page thumbnail (PNG under 4 MiB). Thumbnails are derived
+    /// data: never journaled and never exported.
     pub fn save_thumbnail(&self, nb_id: Uuid, page_id: Uuid, png: &[u8]) -> Result<()> {
         self.notebook(nb_id)?;
         if png.len() > 4 << 20 || !png.starts_with(b"\x89PNG") {
@@ -1686,6 +1776,7 @@ impl Library {
         Ok(())
     }
 
+    /// The cached thumbnail of a page, if any.
     pub fn thumbnail(&self, nb_id: Uuid, page_id: Uuid) -> Option<Vec<u8>> {
         fs::read(self.thumb_path(nb_id, page_id)).ok()
     }
@@ -1822,6 +1913,7 @@ pub fn decode_page_bytes(bytes: &[u8]) -> std::result::Result<Page, String> {
     }
 }
 
+/// Lowercase hex SHA-256 (the asset address format).
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);

@@ -5,7 +5,7 @@
 //   node fixtures/generate-fixtures.mjs --check  # verifies files on disk match
 //
 // This file is the *reference implementation* for three things that every
-// framework port (TypeScript, Dart, Kotlin) must reproduce exactly:
+// implementation (TypeScript, Kotlin, Swift) must reproduce exactly:
 //
 //   1. mulberry32 PRNG + benchmark-scene generator  (scene-<N>.json)
 //   2. pressure -> width mapping                    (widthFor)

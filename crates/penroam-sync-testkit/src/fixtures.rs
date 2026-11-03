@@ -2,9 +2,9 @@
 //!
 //! Everything here uses fixed ids, fixed "ciphertext" bytes and a fixed
 //! server secret, so [`generate`] is byte-identical across runs and
-//! platforms. Signatures are a **placeholder** byte pattern (no crypto is
-//! implemented yet); the sync engine will replace them with real test-key signatures and add
-//! `crypto-vectors.json`.
+//! platforms. Signatures are a **placeholder** byte pattern: these fixtures
+//! pin wire shapes, not cryptography. Pinned test-key crypto vectors live in
+//! `crates/penroam-sync/tests/vectors/crypto-vectors.json`.
 
 use std::collections::BTreeMap;
 use std::path::Path;

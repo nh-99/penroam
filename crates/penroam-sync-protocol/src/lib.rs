@@ -1,7 +1,7 @@
 //! Public Penroam sync protocol v1 contract.
 //!
 //! This crate defines the *wire contract* shared by Penroam clients, the
-//! public in-memory test server (`penroam-sync-testkit`) and any private
+//! public development test server (`penroam-sync-testkit`) and any private
 //! server implementation:
 //!
 //! * protocol / format version numbers and negotiation ([`version`]),
@@ -9,9 +9,11 @@
 //! * size limits with defaults and hard maxima ([`limits`]),
 //! * the envelope control header and its validation ([`envelope`]),
 //! * deterministic canonical byte layouts for signatures and AEAD associated
-//!   data ([`canonical`]) — **no cryptography is implemented here**,
+//!   data ([`canonical`]) — **no cryptography is implemented here**; the client
+//!   crate `penroam-sync` signs and encrypts over these bytes,
 //! * binary batch framing for push/pull bodies ([`framing`]),
-//! * request/response DTOs and proposed route paths ([`dto`], [`routes`]),
+//! * request/response DTOs and the HTTP routes, media types and headers
+//!   ([`dto`], [`routes`]),
 //! * normalized error codes and a deterministic retry policy ([`error`]),
 //! * the contract manifest and fixture helpers ([`contract`]).
 //!

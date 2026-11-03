@@ -15,7 +15,11 @@ pageIndex: number,
 /**
  * PDF user-space boxes `[x0, y0, x1, y1]` (unrotated, y up).
  */
-mediaBox: [number, number, number, number], cropBox: [number, number, number, number], 
+mediaBox: [number, number, number, number], 
+/**
+ * Visible region in PDF user space (same convention as `media_box`).
+ */
+cropBox: [number, number, number, number], 
 /**
  * Effective `/Rotate` (0, 90, 180, 270), clockwise.
  */

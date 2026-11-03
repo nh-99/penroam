@@ -7,9 +7,8 @@ package dev.opennote.booxink
  *   viewPx = (doc * scale + offset) * density
  *   doc    = (viewPx / density - offset) / scale
  *
- * `density` is the host framework's devicePixelRatio (Flutter
- * MediaQuery.devicePixelRatio, WebView window.devicePixelRatio), so that one
- * document unit equals one logical pixel at zoom 1.0 on every host. `offset`
+ * `density` is the WebView's window.devicePixelRatio, so that one document unit
+ * equals one logical pixel at zoom 1.0. `offset`
  * is in logical px. Status bars, cutouts and the View's on-screen origin are
  * already removed because all coordinates are View-local; see
  * [BooxInkView.rawCoordinateSpace] for the probe that verifies the Onyx SDK

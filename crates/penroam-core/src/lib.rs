@@ -1,6 +1,23 @@
 //! Penroam core: the canonical, versioned notebook document model and the pure
-//! logic around it (validation, semantic operations, brush geometry, text
-//! layout, migrations). No I/O lives here; see `penroam-storage`.
+//! logic around it. No I/O lives here; storage is `penroam-storage`.
+//!
+//! * [`model`]: notebooks, pages and elements (ink, text, images) in document
+//!   points; the JSON shape is documented in `docs/formats/model-and-archive.md`.
+//! * [`binary`]: the compact lossless `.prp` page encoding
+//!   (`docs/formats/penroam-binary-v1.md`).
+//! * [`ops`]: editor batches applied atomically to one page (single writer).
+//! * [`operation`]: the journaled, sync-ready operations those batches and
+//!   notebook edits become, with the local (single-writer) appliers.
+//! * [`replica`]: order-independent merge of operations from several devices,
+//!   with conflicts kept as alternates.
+//! * [`order_key`]: fractional keys that make page order converge.
+//! * [`validate`], [`migrate`]: hostile-input limits and schema migrations.
+//! * [`geometry`], [`text`]: brush geometry and text layout shared with the
+//!   renderer and the PDF exporter.
+//!
+//! Architecture overview: `docs/architecture/overview.md`.
+
+#![warn(missing_docs)]
 
 pub mod binary;
 pub mod geometry;

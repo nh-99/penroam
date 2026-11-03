@@ -3,7 +3,31 @@ import type { Asset } from "./Asset";
 import type { PageDefaults } from "./PageDefaults";
 import type { TrashedPage } from "./TrashedPage";
 
-export type Notebook = { schemaVersion: number, id: string, title: string, createdAt: number, updatedAt: number, 
+/**
+ * A notebook: its metadata, page list (live order, trash, order keys) and
+ * assets. Page content lives in separate [`Page`] documents.
+ */
+export type Notebook = { 
+/**
+ * [`NOTEBOOK_SCHEMA_VERSION`] when written by this build.
+ */
+schemaVersion: number, 
+/**
+ * Stable random id (never derived from the title).
+ */
+id: string, 
+/**
+ * User-visible title.
+ */
+title: string, 
+/**
+ * Creation time (informational, never used for ordering).
+ */
+createdAt: number, 
+/**
+ * Last change (informational).
+ */
+updatedAt: number, 
 /**
  * Live pages in reading order. Always sorted by (`order_keys`, id).
  */
@@ -22,7 +46,11 @@ trashedPages: Array<TrashedPage>,
 /**
  * Set when the notebook is in the trash.
  */
-deletedAt?: number, defaults: PageDefaults, 
+deletedAt?: number, 
+/**
+ * Paper and template used for new pages.
+ */
+defaults: PageDefaults, 
 /**
  * Cover colour (`#rrggbb`).
  */
@@ -30,4 +58,8 @@ cover: string,
 /**
  * Immutable content-addressed attachments (original PDFs, images).
  */
-assets: Array<Asset>, metadata?: Record<string, unknown>, };
+assets: Array<Asset>, 
+/**
+ * Application metadata (free-form, preserved).
+ */
+metadata?: Record<string, unknown>, };

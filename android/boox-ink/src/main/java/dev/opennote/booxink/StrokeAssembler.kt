@@ -27,7 +27,7 @@ data class RawSample(
  *  - the *list stream*: onRawDrawingTouchPointListReceived, documented as the
  *    accumulated point list delivered before onEndRawDrawing.
  *
- * Firmware differs in which stream is complete (see docs/boox-integration.md),
+ * Firmware differs in which stream is complete (see docs/platforms/boox.md),
  * so both are kept and the choice is recorded with the stroke. Neither stream
  * is synthesized or resampled: only delivered samples are committed.
  *

@@ -5,8 +5,8 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
- * Canonical stroke representation (the "Canonical stroke format" of the
- * framework-comparison architecture notes in docs/). Identical in the Dart and TypeScript prototypes.
+ * Canonical stroke representation exchanged with the web editor
+ * (apps/desktop-mobile/src/platform/nativeInk.ts) and the Swift InkCore.
  *
  * Coordinates are document units (logical px at zoom 1.0), pressure is
  * normalized to 0..1, timeUs is microseconds relative to the first sample.
@@ -30,7 +30,7 @@ data class InkBrush(
 )
 
 data class InkInput(
-    /** e.g. "onyx-touchhelper", "android-motionevent", "flutter-pointer", "web-pointer", "generated" */
+    /** e.g. "onyx-touchhelper", "android-motionevent", "web-pointer", "generated" */
     val api: String,
     /** e.g. "stylus", "mouse", "touch", "eraser" */
     val device: String,

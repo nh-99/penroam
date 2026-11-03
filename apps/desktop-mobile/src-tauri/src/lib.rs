@@ -14,12 +14,18 @@ use penroam_storage::Library;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
+/// State shared by every command.
 pub struct AppState {
+    /// The open library. One lock serialises all storage access; the sync
+    /// worker takes it only for its local phases.
     pub lib: Mutex<Library>,
     /// Background sync worker (developer preview), if set up.
     pub sync: sync::SyncSlot,
 }
 
+/// App entry point (desktop `main` and the mobile entry point): opens the
+/// library (running crash recovery), resumes sync if it was set up, wires the
+/// close handler that lets the editor flush first, and registers commands.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     bench::mark_start();

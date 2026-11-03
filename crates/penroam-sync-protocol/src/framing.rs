@@ -36,7 +36,7 @@ pub const FRAME_VERSION: u16 = 1;
 pub const PREAMBLE_LEN: usize = 10;
 /// Smallest possible encoded item (two empty length prefixes).
 pub const MIN_ITEM_LEN: usize = 8;
-/// Proposed media type of a framed body (not frozen).
+/// Media type of a framed body (same as [`crate::routes::MEDIA_BATCH`]).
 pub const CONTENT_TYPE: &str = "application/vnd.penroam.batch.v1";
 
 /// One framed item: raw header JSON bytes and raw ciphertext.
@@ -141,6 +141,8 @@ impl FrameError {
     }
 }
 
+/// Per-item length checks, shared by encoder and decoder. The decoder calls
+/// it with the declared lengths *before* slicing or allocating.
 fn check_item(index: usize, h: u64, c: u64, limits: &Limits) -> Result<(), FrameError> {
     if h == 0 {
         return Err(FrameError::EmptyHeader { index });

@@ -8,6 +8,7 @@
 //! apply the same set of key assignments sort pages identically (ties —
 //! two devices picking the same key — are broken by page id).
 
+/// The key alphabet, in sort order.
 pub const DIGITS: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 /// Hard limit on key length (hostile-input guard; ~10^1800 positions).
 pub const MAX_KEY_LEN: usize = 1024;
@@ -35,6 +36,10 @@ pub fn between(a: Option<&str>, b: Option<&str>) -> String {
     String::from_utf8(out).expect("ascii")
 }
 
+/// A key strictly between `a` and `b` (`None` = +∞), as short as possible:
+/// copy the common prefix, then pick a digit halfway between the first
+/// differing digits; if they are adjacent, keep `a`'s digit and recurse on the
+/// rest of `a` against +∞ (or use `b`'s first digit when `b` is longer).
 fn midpoint(a: &[u8], b: Option<&[u8]>) -> Vec<u8> {
     if let Some(b) = b {
         // common prefix (a padded with '0')

@@ -17,6 +17,49 @@
 //! Local operations are re-sequenced into the sync device's contiguous
 //! sequence and depend on the full version vector the library view had
 //! absorbed (`installed`), so concurrency is decided correctly everywhere.
+//!
+//! ## Why re-sequence local operations
+//!
+//! The library journal numbers operations per *library* device and records
+//! only the previous local operation as a dependency. Merging needs more: each
+//! operation must say which remote operations its author had already seen, or
+//! an edit made after receiving a remote change would look concurrent with it
+//! (and, say, a rename would conflict with the rename it replaced). The engine
+//! therefore copies each journal operation into the operation log as an
+//! operation of the *sync device*, with `causal_dependencies` set to the
+//! version vector that the library view reflected when the user made it. That
+//! vector is exactly [`SyncState::installed`](crate::store::SyncState::installed),
+//! because every local operation ingested in a reconcile was made after the
+//! previous install and before the next one.
+//!
+//! ## Causal delivery
+//!
+//! Remote envelopes arrive in server order, which is not causal order. An
+//! envelope is *delivered* (appended to the operation log) only when the
+//! writer's previous sequence and every dependency are already in the log;
+//! otherwise it is parked under `pending` and retried after each page. This
+//! makes delivery causal across the whole account, which is what
+//! [`Replica::apply_delivered`] requires: per notebook, device sequences may
+//! have gaps (the device also wrote to other notebooks), so the replica cannot
+//! check contiguity itself.
+//!
+//! ## Durability and at-least-once delivery
+//!
+//! * Local: an operation is only released from the library journal
+//!   (`Library::mark_uploaded`) after it is durable in the operation log.
+//! * Upload: per-operation acks; a retried envelope is byte-identical (derived
+//!   nonces), so the server reports `duplicate` instead of a conflict.
+//! * Download: the cursor is saved only after every envelope of the page is in
+//!   the operation log or parked, both fsynced. A crash before that just
+//!   redelivers the page, and redelivered operations are deduplicated by id.
+//! * Install: notebooks with delivered remote operations are recorded as
+//!   dirty in the state and installed (again) after a restart.
+//!
+//! Everything a remote envelope claims is verified before use: signer in the
+//! verified key log, Ed25519 signature, ciphertext hash, AEAD, and the
+//! decrypted operation matching its signed header. Failures are quarantined
+//! and never applied. See `docs/protocol/sync-protocol-v1.md` §13–§15 and
+//! `docs/security/threat-model.md`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -51,80 +94,122 @@ const PULL_PAGE: u32 = 200;
 /// default 1 MiB per-op limit after encryption overhead).
 const SPLIT_ABOVE: usize = 512 * 1024;
 
+/// Everything a sync call can fail with. `Display` texts are written for the
+/// user (no secrets, no note content).
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
+    /// The network or the server (see [`TransportError::is_retryable`]).
     #[error(transparent)]
     Transport(#[from] TransportError),
+    /// The library refused or failed an operation.
     #[error("local storage: {0}")]
     Storage(#[from] StorageError),
+    /// Reading or writing the sync folder or the secret store failed.
     #[error("sync files: {0}")]
     Io(#[from] std::io::Error),
+    /// The key log failed verification (treated as an integrity alert).
     #[error(transparent)]
     KeyLog(#[from] KeyLogError),
+    /// A cryptographic operation failed (for example a bad recovery code).
     #[error(transparent)]
     Crypto(#[from] CryptoError),
+    /// Account setup was attempted on an account whose key log is not empty.
     #[error("this account already has encryption keys; add this device by pairing or with the recovery code")]
     AccountHasKeys,
+    /// Pairing or recovery was attempted on an account with no key log yet.
     #[error("this account has no encryption keys yet; set it up on your first device")]
     AccountHasNoKeys,
+    /// This device has no epoch keys yet (pairing not approved).
     #[error("this device is waiting for approval from a trusted device")]
     NotEnrolled,
+    /// This device is no longer an active member; nothing more is synced.
     #[error("this device was removed from the account; local notes are kept")]
     Revoked,
+    /// The server or the data needs a newer Penroam; nothing is lost meanwhile.
     #[error("an update is required: {0}")]
     UpgradeRequired(String),
+    /// Local sync data or server responses are inconsistent in a way that must
+    /// not be papered over (for example a reused operation id).
     #[error("integrity problem: {0}")]
     Integrity(String),
+    /// A request that cannot work as asked (bad code, wrong state).
     #[error("{0}")]
     Invalid(String),
 }
 
 impl SyncError {
+    /// Whether retrying later (with backoff) may succeed without user action.
     pub fn is_retryable(&self) -> bool {
         matches!(self, SyncError::Transport(t) if t.is_retryable())
     }
 }
 
+/// Result of a sync call.
 pub type Result<T> = std::result::Result<T, SyncError>;
 
 /// What the status indicator shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
+    /// Set up by pairing; waiting for a trusted device to approve it.
     AwaitingApproval,
+    /// Nothing in progress; the last reconcile succeeded.
     Idle,
+    /// A reconcile is running.
     Syncing,
+    /// The server could not be reached; changes stay queued.
     Offline,
+    /// A retryable server error; the next attempt is scheduled with backoff.
     Backoff,
+    /// Paused by the user.
     Paused,
+    /// The session token was rejected; sign in again.
     NeedsReauth,
+    /// This device was removed from the account (local notes are kept).
     Revoked,
+    /// Data or server need a newer Penroam.
     NeedsUpgrade,
+    /// The server refuses new data until space is freed (changes stay queued).
     QuotaExceeded,
+    /// The server no longer has the changes after this device's cursor; a
+    /// snapshot rebase is needed (not implemented yet). Uploads continue.
     RebaseRequired,
+    /// Something failed verification (signature, tag, key log, reused id).
     IntegrityAlert,
+    /// Any other failure; see `last_error`.
     Error,
 }
 
+/// A snapshot of sync state for the UI ([`SyncEngine::status`]).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
+    /// What is happening now.
     pub phase: Phase,
-    /// Local operations not yet acknowledged by the server.
+    /// Local changes the server has not acknowledged yet, including journal
+    /// operations not yet copied into the sync log.
     pub queued: u64,
     /// Remote operations received but not applied yet (waiting for
     /// dependencies, keys or an update).
     pub pending_remote: usize,
+    /// Envelopes that failed verification and were set aside.
     pub quarantined: usize,
+    /// Unresolved conflicts in notebooks merged since the engine started.
     pub conflicts: usize,
     /// True only when nothing is queued, everything received is applied and
     /// the last pull reached the end of the log.
     pub up_to_date: bool,
+    /// Wall-clock time of the last successful reconcile.
     pub last_success_ms: Option<i64>,
+    /// User-facing text of the last failure, if the last reconcile failed.
     pub last_error: Option<String>,
+    /// This sync device's id.
     pub device_id: String,
+    /// The account id.
     pub account_id: String,
+    /// The server base URL.
     pub server_url: String,
+    /// Where the device keys are kept ([`SecretStore::kind`]).
     pub secret_store: String,
     /// E2EE has not been independently reviewed.
     pub security_review_pending: bool,
@@ -134,68 +219,120 @@ pub struct SyncStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceView {
+    /// Sync device id.
     pub device_id: String,
+    /// User-chosen label from its certificate.
     pub label: String,
+    /// Key fingerprint (compare with the device's own screen).
     pub fingerprint: String,
+    /// False once removed.
     pub active: bool,
+    /// Whether this is the device running the engine.
     pub this_device: bool,
+    /// Who added it: a device id, or `"account"` (recovery code / first device).
     pub added_by: String,
 }
 
 /// Where a new sync connection points.
 #[derive(Debug, Clone)]
 pub struct Setup {
+    /// Root of the library to sync (the sync folder is created inside it).
     pub library_root: PathBuf,
+    /// Server base URL (stored for display and reconnects).
     pub server_url: String,
+    /// Account id on that server.
     pub account_id: String,
+    /// Device label other devices will see (inside the encrypted key log).
     pub label: String,
 }
 
+/// What one reconcile did (diagnostics, UI refresh hints).
 #[derive(Debug, Default, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReconcileReport {
+    /// Local operations copied into the sync log (including seeded ones).
     pub ingested: usize,
+    /// Envelopes acknowledged by the server (accepted or duplicate).
     pub pushed: usize,
+    /// Envelopes received.
     pub pulled: usize,
+    /// Remote operations appended to the sync log.
     pub delivered: usize,
+    /// Notebooks whose merged state was installed into the library.
     pub installed_notebooks: Vec<Uuid>,
+    /// `(notebook, page)` pairs whose content was reinstalled (open editors
+    /// should reload these).
     pub installed_pages: Vec<(Uuid, Uuid)>,
+    /// Envelopes quarantined during this reconcile.
     pub quarantined: usize,
 }
 
+/// The sync engine for one library and one sync device. Single writer: run
+/// one reconcile at a time (the app does so from one worker thread).
+///
+/// Create it with [`SyncEngine::create_account`] (first device),
+/// [`SyncEngine::begin_pairing`] / [`SyncEngine::enroll_with_recovery`]
+/// (additional devices) or [`SyncEngine::open`] (existing setup), then call
+/// [`SyncEngine::reconcile`] repeatedly.
 pub struct SyncEngine<T: SyncTransport> {
+    /// Durable sync state and operation log.
     pub store: SyncStore,
     transport: T,
     secrets: Box<dyn SecretStore>,
     keys: DeviceKeys,
+    /// `keys.device_id` as a UUID (operations carry device ids as UUIDs).
     my_uuid: Uuid,
+    /// Verified key log state; `None` until first read.
     membership: Option<Membership>,
+    /// Raw key-log entries fetched so far (re-verified as a whole each time).
     keylog_raw: Vec<Vec<u8>>,
+    /// Every epoch key granted to this device.
     epoch_keys: BTreeMap<u32, EpochKey>,
+    /// Per-notebook merge state and how many of the notebook's log entries
+    /// it has applied (cache; rebuilt from the operation log when missing).
     replicas: HashMap<Uuid, (Replica, usize)>,
+    /// Limits advertised by the server (defaults until the first handshake).
     limits: Limits,
+    /// Assets to upload in this reconcile: `(notebook, sha256, bytes)`,
+    /// collected under the library lock in `prepare`.
     outgoing_blobs: Vec<(Uuid, String, Vec<u8>)>,
+    /// Assets the library references but does not hold yet. Rebuilt from the
+    /// library in every `prepare` (so it survives restarts), filled by
+    /// delivered `AssetReferenced` operations, downloaded into the blob cache
+    /// during `exchange`, and cleared only once `apply` installs the bytes.
     missing_blobs: BTreeSet<(Uuid, String)>,
+    /// Op ids currently parked in `pending/` (loaded lazily, kept in step
+    /// with park/unpark) so admitting an envelope does not re-read the folder.
+    pending_ids: Option<std::collections::HashSet<String>>,
+    /// The last pull reached the end of the server log (`has_more == false`).
     pull_done: bool,
+    /// Cursor to acknowledge at the next exchange.
     ack_due: Option<Cursor>,
     phase: Phase,
     last_error: Option<String>,
+    /// Unresolved conflict counts per notebook, from the last merge.
     conflicts: HashMap<Uuid, usize>,
+    /// Consecutive retryable failures (drives the backoff delay).
     pub attempt: u32,
     /// Privacy-safe diagnostic events (no content, no keys, no tokens).
     pub events: Vec<String>,
 }
 
+/// Wall clock in ms (display only; never used for ordering).
 fn now_ms() -> i64 {
     penroam_core::now_ms()
 }
 
+/// Parses a UUID only in canonical hyphenated lowercase form, so the same id
+/// cannot be written two ways (that would defeat comparisons against signed
+/// headers).
 fn parse_uuid(s: &str) -> Option<Uuid> {
     Uuid::parse_str(s)
         .ok()
         .filter(|u| u.hyphenated().to_string() == s)
 }
 
+/// A protocol [`DeviceId`] from a string.
 fn did(s: &str) -> Result<DeviceId> {
     DeviceId::new(s).map_err(|e| SyncError::Invalid(e.to_string()))
 }
@@ -203,6 +340,9 @@ fn did(s: &str) -> Result<DeviceId> {
 impl<T: SyncTransport> SyncEngine<T> {
     // ------------------------------------------------------------ setup --
 
+    /// Generates this device's keys and stores them in the secret store first,
+    /// so a crash right after setup never leaves a registered device whose
+    /// private keys are lost.
     fn new_device(setup: &Setup, secrets: &dyn SecretStore) -> Result<DeviceKeys> {
         let keys = DeviceKeys::generate(Uuid::new_v4().hyphenated().to_string())?;
         secrets.set(DEVICE_SECRET, &keys.to_secret_string())?;
@@ -210,6 +350,9 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(keys)
     }
 
+    /// Registers the public keys with the server under the client-chosen id.
+    /// The server-visible label is deliberately generic; the real label only
+    /// appears inside the key log.
     fn register(transport: &mut T, keys: &DeviceKeys, label: &str) -> Result<()> {
         transport.register_device(&DeviceRegistrationRequest {
             device_id: Some(did(&keys.device_id)?),
@@ -222,6 +365,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
+    /// Builds the engine from its parts (common tail of every constructor).
     fn assemble(
         store: SyncStore,
         transport: T,
@@ -247,6 +391,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             limits: Limits::DEFAULT,
             outgoing_blobs: Vec::new(),
             missing_blobs: BTreeSet::new(),
+            pending_ids: None,
             pull_done: false,
             ack_due: None,
             phase,
@@ -310,6 +455,8 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok((e, root.recovery_code()))
     }
 
+    /// Appends a signed key-log entry at `index` (fails with `conflict` if the
+    /// log grew in the meantime; callers re-read and retry).
     fn append_entry(transport: &mut T, index: u64, entry: &[u8]) -> Result<()> {
         transport.keylog_append(&KeyLogAppendRequest {
             index,
@@ -598,6 +745,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
+    /// Every device in the verified key log (empty before the first refresh).
     pub fn devices(&self) -> Vec<DeviceView> {
         let Some(m) = &self.membership else {
             return Vec::new();
@@ -615,10 +763,12 @@ impl<T: SyncTransport> SyncEngine<T> {
             .collect()
     }
 
+    /// This sync device's id.
     pub fn device_id(&self) -> &str {
         &self.keys.device_id
     }
 
+    /// The transport (to refresh a token, or to simulate faults in tests).
     pub fn transport_mut(&mut self) -> &mut T {
         &mut self.transport
     }
@@ -631,6 +781,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
+    /// Fails unless this device is enrolled and still an active member.
     fn require_member(&mut self) -> Result<()> {
         if !self.store.state.enrolled {
             return Err(SyncError::NotEnrolled);
@@ -649,6 +800,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
+    /// Records a diagnostic event (bounded; callers must not pass content or secrets).
     fn event(&mut self, e: impl Into<String>) {
         if self.events.len() > 500 {
             self.events.drain(..100);
@@ -658,6 +810,7 @@ impl<T: SyncTransport> SyncEngine<T> {
 
     // ---------------------------------------------------------- key log --
 
+    /// Fetches key-log entries after those in `have`, page by page.
     fn fetch_keylog(transport: &mut T, mut have: Vec<Vec<u8>>) -> Result<Vec<Vec<u8>>> {
         loop {
             let page = transport.keylog_get(have.len() as u64)?;
@@ -680,6 +833,10 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(have)
     }
 
+    /// Fetches new key-log entries, verifies the whole log against this
+    /// device's pin, updates membership and epoch keys, and moves the pin
+    /// forward once this device appears in the log with its own keys. A log
+    /// that fails verification puts the engine in [`Phase::IntegrityAlert`].
     fn refresh_keylog(&mut self) -> Result<()> {
         let raw = Self::fetch_keylog(&mut self.transport, std::mem::take(&mut self.keylog_raw))?;
         let pin = self.store.state.pin.clone();
@@ -711,6 +868,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
+    /// The epoch new writes use and its key.
     fn current_epoch(&self) -> Result<(u32, &EpochKey)> {
         let m = self.membership.as_ref().ok_or(SyncError::NotEnrolled)?;
         let k = self.epoch_keys.get(&m.current_epoch).ok_or_else(|| {
@@ -721,6 +879,9 @@ impl<T: SyncTransport> SyncEngine<T> {
 
     // ---------------------------------------------------------- prepare --
 
+    /// Dependencies for a local operation with sync sequence `own_seq`: the
+    /// installed version vector of every other device plus this device's
+    /// previous operation (see the module docs).
     fn installed_deps(&self, own_seq: u64) -> Vec<OperationRef> {
         let mut deps: Vec<OperationRef> = self
             .store
@@ -770,8 +931,12 @@ impl<T: SyncTransport> SyncEngine<T> {
                 target: TxnTarget::Notebook { notebook_id: nb },
                 ops: vec![op.clone()],
             });
+            // remember the epoch: a retry after a lost response must be
+            // sealed with the same key even if the epoch changed meanwhile
+            let epoch = self.membership.as_ref().map(|m| m.current_epoch);
             self.store.oplog.append_buffered(
                 OpMeta {
+                    epoch,
                     origin: Origin::Local,
                     nb,
                     op: op.id,
@@ -794,87 +959,98 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(n)
     }
 
+    /// Synthesizes creation operations for one notebook from its current
+    /// snapshot: create, assets, pages (with order keys, templates and
+    /// backgrounds), their elements, and trash state. Used when sync is first
+    /// enabled and for notebooks that enter the library without journal
+    /// operations (archive imports).
+    fn seed_notebook(&mut self, lib: &mut Library, nb_id: Uuid) -> Result<usize> {
+        let mut n = 0;
+        let nb = lib.notebook(nb_id)?.clone();
+        n += self.append_local(
+            Uuid::new_v4(),
+            nb.created_at,
+            DocumentOperation::NotebookCreated {
+                notebook_id: nb.id,
+                title: nb.title.clone(),
+                cover: nb.cover.clone(),
+                defaults: nb.defaults.clone(),
+            },
+            None,
+        )?;
+        for a in &nb.assets {
+            n += self.append_local(
+                Uuid::new_v4(),
+                nb.created_at,
+                DocumentOperation::AssetReferenced {
+                    notebook_id: nb.id,
+                    asset: a.clone(),
+                },
+                None,
+            )?;
+        }
+        for page_id in nb.all_page_ids().collect::<Vec<_>>() {
+            let page = lib.load_page(nb.id, page_id)?;
+            let order_key = nb
+                .key_of(page_id)
+                .map(str::to_string)
+                .unwrap_or_else(|| penroam_core::order_key::n_between(None, None, 1).remove(0));
+            n += self.append_local(
+                Uuid::new_v4(),
+                page.created_at,
+                DocumentOperation::PageCreated {
+                    notebook_id: nb.id,
+                    page_id,
+                    order_key,
+                    paper: page.paper,
+                    size: page.size,
+                    template: page.template.clone(),
+                    background: page.background.clone(),
+                },
+                None,
+            )?;
+            if !page.elements.is_empty() {
+                n += self.append_local(
+                    Uuid::new_v4(),
+                    page.updated_at,
+                    DocumentOperation::ElementsAdded {
+                        notebook_id: nb.id,
+                        page_id,
+                        elements: page.elements.clone(),
+                    },
+                    None,
+                )?;
+            }
+            if nb.trashed_pages.iter().any(|t| t.id == page_id) {
+                n += self.append_local(
+                    Uuid::new_v4(),
+                    page.updated_at,
+                    DocumentOperation::PageDeleted {
+                        notebook_id: nb.id,
+                        page_id,
+                    },
+                    None,
+                )?;
+            }
+        }
+        if nb.deleted_at.is_some() {
+            n += self.append_local(
+                Uuid::new_v4(),
+                nb.deleted_at.unwrap_or(nb.updated_at),
+                DocumentOperation::NotebookDeleted { notebook_id: nb.id },
+                None,
+            )?;
+        }
+        Ok(n)
+    }
+
     /// Synthesizes creation operations for every existing notebook (the
     /// library may have checkpointed its history away).
     fn seed(&mut self, lib: &mut Library) -> Result<usize> {
         let mut n = 0;
         let at_seq = lib.last_seq();
         for nb_id in lib.notebook_ids() {
-            let nb = lib.notebook(nb_id)?.clone();
-            n += self.append_local(
-                Uuid::new_v4(),
-                nb.created_at,
-                DocumentOperation::NotebookCreated {
-                    notebook_id: nb.id,
-                    title: nb.title.clone(),
-                    cover: nb.cover.clone(),
-                    defaults: nb.defaults.clone(),
-                },
-                None,
-            )?;
-            for a in &nb.assets {
-                n += self.append_local(
-                    Uuid::new_v4(),
-                    nb.created_at,
-                    DocumentOperation::AssetReferenced {
-                        notebook_id: nb.id,
-                        asset: a.clone(),
-                    },
-                    None,
-                )?;
-            }
-            for page_id in nb.all_page_ids().collect::<Vec<_>>() {
-                let page = lib.load_page(nb.id, page_id)?;
-                let order_key = nb
-                    .key_of(page_id)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| penroam_core::order_key::n_between(None, None, 1).remove(0));
-                n += self.append_local(
-                    Uuid::new_v4(),
-                    page.created_at,
-                    DocumentOperation::PageCreated {
-                        notebook_id: nb.id,
-                        page_id,
-                        order_key,
-                        paper: page.paper,
-                        size: page.size,
-                        template: page.template.clone(),
-                        background: page.background.clone(),
-                    },
-                    None,
-                )?;
-                if !page.elements.is_empty() {
-                    n += self.append_local(
-                        Uuid::new_v4(),
-                        page.updated_at,
-                        DocumentOperation::ElementsAdded {
-                            notebook_id: nb.id,
-                            page_id,
-                            elements: page.elements.clone(),
-                        },
-                        None,
-                    )?;
-                }
-                if nb.trashed_pages.iter().any(|t| t.id == page_id) {
-                    n += self.append_local(
-                        Uuid::new_v4(),
-                        page.updated_at,
-                        DocumentOperation::PageDeleted {
-                            notebook_id: nb.id,
-                            page_id,
-                        },
-                        None,
-                    )?;
-                }
-            }
-            if nb.deleted_at.is_some() {
-                n += self.append_local(
-                    Uuid::new_v4(),
-                    nb.deleted_at.unwrap_or(nb.updated_at),
-                    DocumentOperation::NotebookDeleted { notebook_id: nb.id },
-                    None,
-                )?;
-            }
+            n += self.seed_notebook(lib, nb_id)?;
         }
         self.store.state.seeded = true;
         self.store.state.ingested_lib_seq = at_seq;
@@ -901,6 +1077,8 @@ impl<T: SyncTransport> SyncEngine<T> {
             }
             n += self.append_local(op.id, op.at, op.body, Some(op.local_sequence))?;
         }
+        // order matters: the copies must be durable (save flushes the log)
+        // before the library may release its journal entries
         self.store.state.ingested_lib_seq = last;
         self.store.save()?;
         lib.mark_uploaded(last)?;
@@ -917,6 +1095,33 @@ impl<T: SyncTransport> SyncEngine<T> {
             n += self.seed(lib)?;
         }
         n += self.ingest(lib)?;
+        // Notebooks that entered the library without journal operations (an
+        // archive import) are unknown to the operation log: seed them now.
+        // Everything created or edited locally after enabling sync arrives
+        // through the journal instead, and remote notebooks are in the log.
+        let mut seeded_any = false;
+        for nb_id in lib.notebook_ids() {
+            if self.store.oplog.indexes_for(&nb_id).is_empty() {
+                let k = self.seed_notebook(lib, nb_id)?;
+                self.event(format!(
+                    "seeded {k} operations for a notebook added without history"
+                ));
+                n += k;
+                seeded_any = true;
+            }
+        }
+        if seeded_any {
+            self.store.save()?;
+        }
+        // Assets the library references but does not hold (a download that
+        // failed earlier, possibly before a restart): fetch them next exchange.
+        for nb_id in lib.notebook_ids() {
+            for a in lib.notebook(nb_id)?.assets.clone() {
+                if !lib.has_asset(nb_id, &a.sha256) {
+                    self.missing_blobs.insert((nb_id, a.sha256));
+                }
+            }
+        }
         // assets referenced by unacknowledged local operations
         self.outgoing_blobs.clear();
         for idx in 0..self.store.oplog.len() {
@@ -945,6 +1150,12 @@ impl<T: SyncTransport> SyncEngine<T> {
 
     // --------------------------------------------------------- exchange --
 
+    /// Seals operation-log entry `idx` into a signed envelope for `epoch`.
+    ///
+    /// Retries must produce identical bytes (the server deduplicates by id and
+    /// rejects the same id with different content), which holds because the
+    /// record is fixed, the nonce is derived from it, and Ed25519 is
+    /// deterministic.
     fn seal_local(
         &self,
         idx: usize,
@@ -976,6 +1187,9 @@ impl<T: SyncTransport> SyncEngine<T> {
                 .collect::<Result<_>>()?,
             key_epoch: epoch,
             op_schema_version: op.schema_version,
+            // placeholders: the AAD covers the length (known before encrypting,
+            // fixed overhead) but not the hash or signature, which depend on
+            // the ciphertext and are filled in below
             ciphertext_sha256: "0".repeat(64),
             ciphertext_length: crypto::sealed_len(record.len()) as u64,
             signature: String::new(),
@@ -987,11 +1201,16 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok((h, ct))
     }
 
+    /// [`Self::current_epoch`] with an owned key (so `self` can be borrowed mutably).
     fn epoch_for_local(&self) -> Result<(u32, EpochKey)> {
         let (e, k) = self.current_epoch()?;
         Ok((e, k.clone()))
     }
 
+    /// Uploads pending blobs, then every unacknowledged local operation in
+    /// batches that respect the server limits. Acks are recorded per operation;
+    /// the first rejection ends the push with that error after saving the acks
+    /// that did succeed.
     fn push(&mut self, report: &mut ReconcileReport) -> Result<()> {
         // blobs first: an operation never references an asset the server lacks
         let (epoch, ek) = self.epoch_for_local()?;
@@ -1039,6 +1258,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             let frame =
                 encode_batch(batch, &me.limits).map_err(|e| SyncError::Invalid(e.to_string()))?;
             let resp = me.transport.push(frame)?;
+            // acks name exact operations, in request order
             if resp.acks.len() != seqs.len() {
                 return Err(SyncError::Transport(TransportError::Protocol(
                     "ack count mismatch".into(),
@@ -1065,7 +1285,14 @@ impl<T: SyncTransport> SyncEngine<T> {
             Ok(())
         };
         for idx in pending {
-            let (h, ct) = self.seal_local(idx, epoch, &ek)?;
+            // seal with the epoch recorded when the operation was queued
+            // (header epoch and key always change together)
+            let recorded = self.store.oplog.entry(idx).meta.epoch.unwrap_or(epoch);
+            let (op_epoch, op_key) = match self.epoch_keys.get(&recorded) {
+                Some(k) => (recorded, k.clone()),
+                None => (epoch, ek.clone()),
+            };
+            let (h, ct) = self.seal_local(idx, op_epoch, &op_key)?;
             let header = serde_json::to_vec(&h).expect("header serializes");
             let item_len = header.len() + ct.len() + 8;
             if !batch.is_empty()
@@ -1094,6 +1321,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         self.push(report)
     }
 
+    /// Sets an envelope aside permanently (failed verification); it is never applied.
     fn quarantine(
         &mut self,
         server_seq: u64,
@@ -1118,7 +1346,13 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
-    /// Verifies a pulled envelope. `Ok(None)` = already known (dedup).
+    /// Verifies a pulled envelope. `Ok(None)` = already known (dedup) or
+    /// quarantined; `Ok(Some(reason))` = verified as far as currently possible,
+    /// where `"deps"` means fully verified and only waiting for causal delivery,
+    /// and `"upgrade"`, `"unknown-device"`, `"key"` mean it must be parked.
+    ///
+    /// Checks run from cheap to expensive, and nothing is decrypted here:
+    /// decryption happens at delivery, after the signature was checked.
     fn admit(
         &mut self,
         server_seq: u64,
@@ -1131,6 +1365,8 @@ impl<T: SyncTransport> SyncEngine<T> {
             return Ok(None);
         };
         let sha = crypto::sha256_hex(ct);
+        // a known operation id is a redelivery (lost cursor, our own upload
+        // echoed back) unless its content differs, which is an integrity alert
         if let Some(meta) = self.store.oplog.meta_of(&op_id) {
             let same = match meta.origin {
                 Origin::Local => {
@@ -1150,12 +1386,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             }
             return Ok(None);
         }
-        if self
-            .store
-            .parked("pending")
-            .iter()
-            .any(|p| p.header.op_id == h.op_id)
-        {
+        if self.is_pending(h.op_id.as_str()) {
             return Ok(None);
         }
         if let Err(e) = h.validate(&self.limits) {
@@ -1175,6 +1406,10 @@ impl<T: SyncTransport> SyncEngine<T> {
         if h.check_op_schema_supported().is_err() {
             return Ok(Some("upgrade"));
         }
+        // the signer must be certified by the verified key log; keys the
+        // server returns from /v1/devices are never used for verification.
+        // Removed devices are still accepted here (envelopes carry no
+        // trustworthy time); see the threat model.
         let m = self.membership.as_ref().ok_or(SyncError::NotEnrolled)?;
         let Some(member) = m.devices.get(h.device_id.as_str()) else {
             return Ok(Some("unknown-device"));
@@ -1192,10 +1427,14 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(Some("deps"))
     }
 
+    /// Causal delivery check: the writer's previous sequence and every
+    /// dependency are already in the operation log.
     fn deliverable(&self, h: &EnvelopeHeader) -> bool {
         let Some(dev) = parse_uuid(h.device_id.as_str()) else {
             return false;
         };
+        // the log frontier is the delivered version vector (operations are
+        // appended in causal order only)
         let f = &self.store.oplog.frontier;
         if f.get(&dev).copied().unwrap_or(0) + 1 != h.device_seq {
             return false;
@@ -1220,6 +1459,9 @@ impl<T: SyncTransport> SyncEngine<T> {
             .get(&h.key_epoch)
             .cloned()
             .ok_or(SyncError::NotEnrolled)?;
+        // the AAD binds the ciphertext to its header (ids, sequence, epoch,
+        // length, dependencies): a valid ciphertext moved under another header
+        // fails here
         let key = ek.notebook_key(h.notebook_id.as_str());
         let record = match crypto::open(&key, &canonical_aad_bytes(h), ct) {
             Ok(r) => r,
@@ -1241,6 +1483,9 @@ impl<T: SyncTransport> SyncEngine<T> {
                 return Ok(false);
             }
         };
+        // the server only sees the header, and other devices trust it for
+        // routing and causal delivery: the decrypted operation must say exactly
+        // the same thing (and be mergeable: a purge is local-only)
         let ok = txn.ops.len() == 1 && {
             let op = &txn.ops[0];
             let mut deps: Vec<(String, u64)> = op
@@ -1278,6 +1523,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         let nb = op.body.notebook_id();
         self.store.oplog.append_buffered(
             OpMeta {
+                epoch: Some(h.key_epoch),
                 origin: Origin::Remote,
                 nb,
                 op: op.id,
@@ -1290,13 +1536,13 @@ impl<T: SyncTransport> SyncEngine<T> {
         )?;
         self.store.state.dirty.insert(nb);
         if let Some(p) = op.body.content_page() {
-            self.store.state.page_revs.insert(format!("{nb}/{p}"), 0);
+            self.store.state.dirty_pages.insert(format!("{nb}/{p}"));
         }
         if let DocumentOperation::PageCreated { page_id, .. } = &op.body {
             self.store
                 .state
-                .page_revs
-                .insert(format!("{nb}/{page_id}"), 0);
+                .dirty_pages
+                .insert(format!("{nb}/{page_id}"));
         }
         if let DocumentOperation::AssetReferenced { asset, .. } = &op.body {
             self.missing_blobs.insert((nb, asset.sha256.clone()));
@@ -1305,6 +1551,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(true)
     }
 
+    /// Parks an envelope under `kind` with a reason (see [`Parked`]).
     fn park_kind(
         &mut self,
         kind: &str,
@@ -1322,6 +1569,34 @@ impl<T: SyncTransport> SyncEngine<T> {
                 reason: reason.to_string(),
             },
         )?;
+        if kind == "pending" {
+            self.pending_set().insert(h.op_id.as_str().to_string());
+        }
+        Ok(())
+    }
+
+    /// The in-memory index of parked op ids, loaded from disk on first use.
+    fn pending_set(&mut self) -> &mut std::collections::HashSet<String> {
+        if self.pending_ids.is_none() {
+            let ids = self
+                .store
+                .parked("pending")
+                .into_iter()
+                .map(|p| p.header.op_id.as_str().to_string())
+                .collect();
+            self.pending_ids = Some(ids);
+        }
+        self.pending_ids.as_mut().expect("just loaded")
+    }
+
+    fn is_pending(&mut self, op: &str) -> bool {
+        self.pending_set().contains(op)
+    }
+
+    /// Removes a parked envelope (after its oplog copy is durable).
+    fn unpark_pending(&mut self, op: &str) -> Result<()> {
+        self.store.unpark("pending", op)?;
+        self.pending_set().remove(op);
         Ok(())
     }
 
@@ -1337,7 +1612,7 @@ impl<T: SyncTransport> SyncEngine<T> {
                     _ => match self.admit_parked(&p, &ct, report)? {
                         Some(r) => r,
                         None => {
-                            self.store.unpark("pending", p.header.op_id.as_str())?;
+                            self.unpark_pending(p.header.op_id.as_str())?;
                             continue;
                         }
                     },
@@ -1360,7 +1635,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             // the parked copy goes only after the oplog copy is durable
             self.store.oplog.flush()?;
             for op in delivered.drain(..) {
-                self.store.unpark("pending", &op)?;
+                self.unpark_pending(&op)?;
             }
             if !progressed {
                 return Ok(());
@@ -1368,6 +1643,8 @@ impl<T: SyncTransport> SyncEngine<T> {
         }
     }
 
+    /// Re-checks a parked envelope whose reason may have changed (new key-log
+    /// entries can make an unknown signer known or grant a missing epoch key).
     fn admit_parked(
         &mut self,
         p: &Parked,
@@ -1394,6 +1671,9 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(Some("deps"))
     }
 
+    /// Pulls every page after the saved cursor, admitting, delivering or
+    /// parking each envelope, and saves the cursor after each page only once
+    /// all of its envelopes are durable.
     fn pull(&mut self, report: &mut ReconcileReport) -> Result<()> {
         self.pull_done = false;
         loop {
@@ -1462,14 +1742,18 @@ impl<T: SyncTransport> SyncEngine<T> {
         }
     }
 
+    /// Downloads assets referenced by delivered operations, decrypts and checks
+    /// their SHA-256, and writes them to the blob cache. Failures are retried
+    /// in later reconciles (best effort; the notes still install without them).
     fn fetch_blobs(&mut self) {
         let Ok((_, _)) = self.current_epoch() else {
             return;
         };
         let wanted: Vec<(Uuid, String)> = self.missing_blobs.iter().cloned().collect();
+        // Entries stay in `missing_blobs` until `apply` installs the bytes into
+        // the library; this only fills the download cache.
         for (nb, sha) in wanted {
             if self.store.blob_cache(&sha).exists() {
-                self.missing_blobs.remove(&(nb, sha));
                 continue;
             }
             let mut got = false;
@@ -1494,8 +1778,8 @@ impl<T: SyncTransport> SyncEngine<T> {
                     }
                 }
             }
-            if got {
-                self.missing_blobs.remove(&(nb, sha));
+            if !got {
+                self.event("asset download failed; will retry");
             }
         }
     }
@@ -1547,6 +1831,9 @@ impl<T: SyncTransport> SyncEngine<T> {
 
     // ------------------------------------------------------------ apply --
 
+    /// The merge state of a notebook, brought up to date with every operation
+    /// in the log (building it from scratch the first time). Operations the merge
+    /// model rejects are skipped and logged as events; they stay in the log.
     fn replica(&mut self, nb: Uuid) -> Result<&Replica> {
         let idxs: Vec<usize> = self.store.oplog.indexes_for(&nb).to_vec();
         let entry = self
@@ -1574,10 +1861,11 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// Phase 3 (library locked): installs merged notebooks.
     pub fn apply(&mut self, lib: &mut Library, report: &mut ReconcileReport) -> Result<()> {
         report.ingested += self.ingest(lib)?;
+        // ingest first: local edits made during the exchange must be part of
+        // the merged state we install, or the install would hide them
         let dirty: Vec<Uuid> = self.store.state.dirty.iter().copied().collect();
         for nb in dirty {
-            let dirty_pages: BTreeSet<String> =
-                self.store.state.page_revs.keys().cloned().collect();
+            let dirty_pages: BTreeSet<String> = self.store.state.dirty_pages.clone();
             let (merged, pages, conflicts) = {
                 let rep = self.replica(nb)?;
                 let Some(merged) = rep.notebook() else {
@@ -1589,6 +1877,8 @@ impl<T: SyncTransport> SyncEngine<T> {
                     .ok()
                     .map(|n| n.all_page_ids().collect::<BTreeSet<_>>())
                     .unwrap_or_default();
+                // reinstall only pages that changed remotely or are new here;
+                // pages edited only locally already show the right content
                 let mut pages = Vec::new();
                 for pid in merged.all_page_ids() {
                     let key = format!("{prefix}{pid}");
@@ -1614,7 +1904,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             let page_ids: Vec<Uuid> = pages.iter().map(|p| p.id).collect();
             lib.install_merged(merged, pages)?;
             for pid in &page_ids {
-                self.store.state.page_revs.remove(&format!("{nb}/{pid}"));
+                self.store.state.dirty_pages.remove(&format!("{nb}/{pid}"));
                 report.installed_pages.push((nb, *pid));
             }
             self.conflicts.insert(nb, conflicts);
@@ -1650,6 +1940,8 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// only for the local phases.
     pub fn reconcile(&mut self, lib: &Mutex<Library>) -> Result<ReconcileReport> {
         let mut report = ReconcileReport::default();
+        // the lock guard is a temporary, so the library is unlocked during the
+        // exchange (network) and editing continues meanwhile
         let result = (|| {
             report.ingested += self.prepare(&mut lib.lock().unwrap_or_else(|p| p.into_inner()))?;
             let ex = self.exchange(&mut report);
@@ -1677,6 +1969,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         result.map(|_| report)
     }
 
+    /// Updates the phase, error text and backoff counter after a reconcile.
     fn finish(&mut self, result: &Result<()>) {
         match result {
             Ok(()) => {
@@ -1741,6 +2034,7 @@ impl<T: SyncTransport> SyncEngine<T> {
 
     // ----------------------------------------------------------- status --
 
+    /// Pauses or resumes syncing (persisted). Local editing is unaffected.
     pub fn set_paused(&mut self, paused: bool) -> Result<()> {
         self.store.state.paused = paused;
         self.store.save()?;
@@ -1748,6 +2042,8 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
+    /// Current status. `lib_last_seq` is [`Library::last_seq`], so journal
+    /// operations not yet copied into the sync log count as queued.
     pub fn status(&self, lib_last_seq: u64) -> SyncStatus {
         let unacked = self
             .store
@@ -1889,6 +2185,7 @@ impl<T: SyncTransport> SyncEngine<T> {
     }
 }
 
+/// A compact error label for diagnostic events (no messages from the server).
 fn short_error(e: &SyncError) -> String {
     match e {
         SyncError::Transport(TransportError::Api(b)) => b.code.as_str().to_string(),
@@ -1910,6 +2207,8 @@ pub fn pairing_code(device_id: &str, fingerprint: &str) -> String {
     format!("{id}-{fingerprint}")
 }
 
+/// Parses a pairing code typed by a person (case, dashes and spaces ignored)
+/// into the device-id prefix and the formatted fingerprint.
 pub fn parse_pairing_code(code: &str) -> Option<(String, String)> {
     let c: String = code
         .chars()
@@ -1923,6 +2222,8 @@ pub fn parse_pairing_code(code: &str) -> Option<(String, String)> {
     Some((c[..8].to_string(), fp))
 }
 
+/// Deterministic id for chunk `i` of a split operation, so re-ingesting the
+/// same journal operation always yields the same chunk ids.
 fn derived_id(id: Uuid, i: usize) -> Uuid {
     let h = crypto::sha256(&[id.as_bytes().as_slice(), &(i as u64).to_le_bytes()].concat());
     let mut b: [u8; 16] = h[..16].try_into().unwrap();

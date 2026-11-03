@@ -567,3 +567,94 @@ fn rename_conflict_and_notebook_created_on_both_sides() {
     assert_eq!(b.lib.notebook(nb.id).unwrap().title, "Final");
     assert!(b.engine.conflicts(nb.id).unwrap().is_empty());
 }
+
+#[test]
+fn notebook_imported_from_an_archive_after_setup_is_uploaded() {
+    let s = server();
+    let acct = account(&s, "acct-15");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    // a notebook made elsewhere, exported, then imported into A (no journal ops)
+    let other = tempfile::tempdir().unwrap();
+    let mut lib = penroam_storage::Library::open(other.path()).unwrap();
+    let (nb, p) = lib
+        .create_notebook("From an archive", PageDefaults::default(), None)
+        .unwrap();
+    add(
+        &mut lib,
+        nb.id,
+        p.id,
+        (0..4).map(|i| stroke(i, 3.0, "#111111")).collect(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    lib.export_archive(nb.id, &mut bytes, "test").unwrap();
+    bytes.set_position(0);
+    a.lib.import_archive(bytes).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(b.lib.notebook_ids().len(), 1);
+    let id = b.lib.notebook_ids()[0];
+    assert_eq!(b.lib.notebook(id).unwrap().title, "From an archive");
+    assert_eq!(ink_count(&mut b.lib, id), 4);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+}
+
+#[test]
+fn retry_after_an_epoch_change_is_still_a_duplicate() {
+    let s = server();
+    let acct = account(&s, "acct-16");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Epochs", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let c = Client::paired(&s, &acct, "c", &mut a);
+    b.sync().unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    a.engine.prepare(&mut a.lib).unwrap();
+    s.drop_next_responses(1);
+    let mut r = penroam_sync::ReconcileReport::default();
+    assert!(a.engine.push_for_tests(&mut r).is_err(), "response lost");
+    // a removal starts epoch 2 before the retry
+    a.engine.remove_device(c.engine.device_id()).unwrap();
+    a.sync().unwrap();
+    assert_ne!(a.status().phase, Phase::IntegrityAlert, "{:?}", a.status());
+    assert_eq!(a.status().queued, 0);
+    b.sync().unwrap();
+    assert_eq!(ink_count(&mut b.lib, nb.id), 1);
+    // new operations use the new epoch and still reach the remaining device
+    add(&mut a.lib, nb.id, p.id, vec![stroke(2, 2.0, "#111111")]);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut b.lib, nb.id), 2);
+}
+
+#[test]
+fn asset_download_that_failed_is_retried_after_a_restart() {
+    let s = server();
+    let acct = account(&s, "acct-17");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, _) = a
+        .lib
+        .create_notebook("Scans", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    let asset = a
+        .lib
+        .add_asset(nb.id, b"%PDF-1.4 tiny", "application/pdf", None)
+        .unwrap();
+    a.sync().unwrap();
+    b.engine.transport_mut().fail_blob_gets = 10;
+    b.sync().unwrap();
+    assert!(!b.lib.has_asset(nb.id, &asset.sha256), "download failed");
+    let mut b = b.restart();
+    b.sync().unwrap();
+    assert_eq!(
+        b.lib.read_asset(nb.id, &asset.sha256).unwrap(),
+        b"%PDF-1.4 tiny"
+    );
+}

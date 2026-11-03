@@ -1,28 +1,40 @@
 //! Where device private keys live.
 //!
-//! The engine only needs [`SecretStore`]. The app should use the platform
-//! keychain/keystore. [`FileSecretStore`] is the fallback: a file readable
-//! only by the current user (mode 0600 on Unix) inside the library folder.
-//! Its weakness is documented in the threat model: anyone who can read the
-//! user's files can read the key.
+//! The engine only needs [`SecretStore`]. The app uses the platform
+//! keychain/keystore (`KeychainSecretStore`, feature `keychain`).
+//! [`FileSecretStore`] keeps secrets in a file readable only by the current
+//! user (mode 0600 on Unix); tests and the CLI use it, and the app only with an
+//! explicit development override. Its weakness is documented in the threat
+//! model: anyone who can read the user's files can read the key.
 
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 
+/// A small key-value store for secrets (device private keys), by name.
+///
+/// Implementations must make `set` durable before returning and must never
+/// log values.
 pub trait SecretStore: Send {
+    /// The secret stored under `name`, or `None` if there is none.
     fn get(&self, name: &str) -> io::Result<Option<String>>;
+    /// Creates or replaces the secret under `name`.
     fn set(&self, name: &str, value: &str) -> io::Result<()>;
+    /// Removes the secret; succeeds if it did not exist.
     fn delete(&self, name: &str) -> io::Result<()>;
     /// Short description for diagnostics ("file", "keychain", …).
     fn kind(&self) -> &'static str;
 }
 
+/// Secrets as files (`<name>.secret`, mode 0600 on Unix) in one folder.
+/// Used by tests and the CLI, and by the app only with an explicit
+/// development override when no OS keychain exists.
 pub struct FileSecretStore {
     dir: PathBuf,
 }
 
 impl FileSecretStore {
+    /// A store rooted at `dir` (created on the first write).
     pub fn new(dir: PathBuf) -> Self {
         Self { dir }
     }
@@ -107,6 +119,7 @@ mod keychain {
     use std::io;
     use std::sync::Arc;
 
+    /// The OS credential store for one service name and library scope.
     pub struct KeychainSecretStore {
         store: Arc<keyring_core::CredentialStore>,
         service: String,

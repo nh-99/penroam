@@ -25,6 +25,12 @@
 //!
 //! Records from a newer operation schema stop the open with
 //! [`JournalError::NewerSchema`] (fail safe; nothing is modified).
+//!
+//! The journal only stores and returns transactions; deciding what to
+//! replay (everything after the checkpoint floor, skipping what a sync
+//! install covered) and when to delete segments is
+//! [`crate::library::Library`]'s job. The same record encoding is reused as
+//! the plaintext payload of sync envelopes ([`encode_txn`] / [`decode_txn`]).
 
 use crate::fsutil::{self, append_durable, create_durable};
 use penroam_core::binary::{decode_point_block, encode_point_block};
@@ -35,14 +41,17 @@ use std::io;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// First four bytes of every segment file.
 pub const SEGMENT_MAGIC: &[u8; 4] = b"PRJL";
+/// First four bytes of every record (also used to resynchronize after damage).
 pub const RECORD_MAGIC: &[u8; 4] = b"PRJR";
+/// Segment format version written in the header; other versions are refused.
 pub const JOURNAL_FORMAT_VERSION: u16 = 1;
 const HEADER_LEN: usize = 20;
 const RECORD_HEADER_LEN: usize = 12;
 /// Roll to a new segment once the active one exceeds this.
 pub const SEGMENT_TARGET_BYTES: u64 = 8 << 20;
-/// Hostile-input guards.
+/// Largest record accepted when reading (hostile-input guard).
 pub const MAX_RECORD_BYTES: usize = 1 << 30;
 const MAX_OPS_PER_RECORD: usize = 1 << 20;
 const MAX_DEPS: usize = 4096;
@@ -51,17 +60,26 @@ const MAX_DEPS: usize = 4096;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TxnTarget {
     /// Notebook-level operations (notebook and page list changes).
-    Notebook { notebook_id: Uuid },
+    Notebook {
+        /// The notebook changed.
+        notebook_id: Uuid,
+    },
     /// One editor batch on one page; `revision` is the page revision after it.
     Page {
+        /// Notebook of the page.
         notebook_id: Uuid,
+        /// The page edited.
         page_id: Uuid,
+        /// Page revision after this batch. Replay applies a batch only when
+        /// it is exactly one above the snapshot's revision.
         revision: u64,
+        /// Editor batch id; a retried batch with the same id is not applied twice.
         batch_id: Uuid,
     },
 }
 
 impl TxnTarget {
+    /// The notebook this transaction belongs to.
     pub fn notebook_id(&self) -> Uuid {
         match self {
             TxnTarget::Notebook { notebook_id } | TxnTarget::Page { notebook_id, .. } => {
@@ -71,35 +89,51 @@ impl TxnTarget {
     }
 }
 
+/// One journal record: an atomic group of operations with consecutive
+/// sequence numbers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Txn {
+    /// What the operations apply to.
     pub target: TxnTarget,
+    /// The operations, in sequence order (never empty when decoded).
     pub ops: Vec<LocalOperation>,
 }
 
 impl Txn {
+    /// Sequence of the first operation (0 for an empty transaction).
     pub fn first_seq(&self) -> u64 {
         self.ops.first().map_or(0, |o| o.local_sequence)
     }
+    /// Sequence of the last operation (0 for an empty transaction).
     pub fn last_seq(&self) -> u64 {
         self.ops.last().map_or(0, |o| o.local_sequence)
     }
 }
 
+/// Errors that stop the journal from being opened or appended to.
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
+    /// File-system failure (including a full disk).
     #[error("journal: {0}")]
     Io(#[from] io::Error),
+    /// A record uses an operation schema this build does not understand.
+    /// Opening stops without modifying anything; the user must update.
     #[error("the journal was written by a newer Penroam (operation schema {0}); please update")]
     NewerSchema(u16),
+    /// A segment has an unknown version/flags, or a damaged header and no
+    /// readable records.
     #[error("journal segment {0} has an unsupported format")]
     UnsupportedSegment(String),
 }
 
+/// What [`Journal::open`] found and repaired (for the recovery report).
 #[derive(Debug, Default)]
 pub struct ScanReport {
+    /// Incomplete records/segments at the very end discarded (crash mid-write).
     pub truncated_tails: u32,
+    /// Damaged records with valid data after them (segment quarantined).
     pub corrupt_records: u32,
+    /// Human-readable descriptions of the above.
     pub warnings: Vec<String>,
 }
 
@@ -110,6 +144,8 @@ struct Segment {
     last_seq: Option<u64>,
 }
 
+/// The open journal directory. Single writer: the library holds an
+/// exclusive lock while it is open.
 pub struct Journal {
     dir: PathBuf,
     /// Sorted by first_seq; the last one is the active segment unless sealed.
@@ -173,6 +209,13 @@ fn body_without_points(body: &DocumentOperation) -> DocumentOperation {
     }
 }
 
+/// Encodes a transaction as one complete record (header + CRC + payload).
+///
+/// Payload layout: target (kind byte + ids, and for pages the revision and
+/// batch id), operation count, then per operation its id, device, sequence,
+/// schema version, timestamp, causal dependencies, the body as JSON *without*
+/// ink points, and the points of each stroke as compact column blocks
+/// (`penroam_core::binary`), which keeps ink-heavy records small.
 pub fn encode_txn(txn: &Txn) -> Vec<u8> {
     let mut p = Vec::new();
     match &txn.target {
@@ -225,8 +268,10 @@ pub fn encode_txn(txn: &Txn) -> Vec<u8> {
 /// Errors of [`decode_txn`].
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum RecordError {
+    /// Bad header, length, checksum or payload.
     #[error("malformed operation record: {0}")]
     Malformed(String),
+    /// The record is intact but uses a newer operation schema.
     #[error("operation schema {0} is newer than this build supports")]
     NewerSchema(u16),
 }
@@ -546,6 +591,8 @@ impl Journal {
             segments,
             active: None,
         };
+        // never append after damage: a damaged last segment stays as it is
+        // (and quarantined), and the next append starts a fresh segment
         if !last_is_damaged {
             if let Some(s) = j.segments.last() {
                 let f = OpenOptions::new().read(true).append(true).open(&s.path)?;
@@ -556,6 +603,7 @@ impl Journal {
         Ok((j, txns, report))
     }
 
+    /// The journal directory.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -580,6 +628,8 @@ impl Journal {
             Some((_, len)) => *len >= SEGMENT_TARGET_BYTES,
         };
         if need_new {
+            // segments are named by their first sequence, so retention can
+            // decide what to delete from file names and headers alone
             let first = txn.first_seq();
             let path = self.dir.join(segment_name(first));
             let f = create_durable(&path, &segment_header(first))?;
@@ -603,6 +653,8 @@ impl Journal {
         self.active = None;
     }
 
+    /// Whether every record in the newest segment is `<= seq` (then it can
+    /// be sealed and later deleted).
     pub fn active_is_covered_by(&self, seq: u64) -> bool {
         self.segments
             .last()

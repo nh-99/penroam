@@ -1,4 +1,4 @@
-# boox-ink — shared BOOX native ink module
+# boox-ink — BOOX native ink module
 
 `BooxInkView` is a real Android `View`. It provides:
 
@@ -6,10 +6,9 @@
   of each stroke into persistent ink.
 * **Mode C**: a plain MotionEvent + Canvas baseline.
 
-It is used by the native reference app (`../boox-ink-demo`), the Flutter Platform View, and the
-Tauri plugin overlay.
-
-Full design, SDK findings and the device procedure: [docs/boox-integration.md](../../docs/boox-integration.md).
+The app's native ink plugin (`plugins/tauri-plugin-native-ink`, Android side) hosts it as an
+overlay above the WebView; `apps/desktop-mobile/scripts/patch-android.py` wires it into the
+generated Android project. How it fits the app: [docs/platforms/boox.md](../../docs/platforms/boox.md).
 
 ## Host API
 
@@ -44,5 +43,5 @@ cd android && ./gradlew :boox-ink:testDebugUnitTest
 ```
 
 These cover geometry against `fixtures/geometry-golden.json`, stream merging, dedup and gap
-detection, JSON round-trip, and the view transform. Device behaviour has to be tested with the
-demo app.
+detection, JSON round-trip, and the view transform. Device behaviour has to be tested in the
+app on a BOOX device (`tools/boox-check.sh`).

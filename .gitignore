@@ -5,8 +5,6 @@ target/
 build/
 .gradle/
 local.properties
-.dart_tool/
-.flutter-plugins*
 .idea/
 *.iml
 .build/
@@ -29,8 +27,6 @@ apps/desktop-mobile/src-tauri/gen/android/build/
 plugins/tauri-plugin-native-ink/android/.tauri/
 plugins/tauri-plugin-native-ink/ios/.tauri/
 plugins/*/permissions/schemas/
-reference/m00-tauri-app/plugins/*/android/.tauri/
-reference/m00-tauri-app/plugins/*/ios/.tauri/
 plugins/*/.tauri/
 /fuzz/target
 /fuzz/corpus
@@ -38,5 +34,3 @@ plugins/*/.tauri/
 /target/agent-sync
 # Raw benchmark output is machine-specific and stays local; summaries go in docs/benchmarks/
 /benchmarks/
-# Tauri-generated schemas of the frozen prototype
-reference/m00-tauri-app/src-tauri/gen/schemas/

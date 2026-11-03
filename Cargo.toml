@@ -1,7 +1,5 @@
 [workspace]
 resolver = "2"
-# prototype reference apps keep their own standalone Cargo projects
-exclude = ["reference"]
 members = [
   "crates/penroam-core",
   "crates/penroam-storage",

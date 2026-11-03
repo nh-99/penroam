@@ -31,6 +31,8 @@ pub enum CursorError {
     Invalid,
 }
 
+/// Textbook HMAC-SHA256 (RFC 2104) over `sha2`, to avoid another dependency
+/// in test scaffolding.
 fn hmac_sha256(key: &[u8; 32], msg: &[u8]) -> [u8; 32] {
     let mut k = [0u8; 64];
     k[..32].copy_from_slice(key);
@@ -47,6 +49,7 @@ fn hmac_sha256(key: &[u8; 32], msg: &[u8]) -> [u8; 32] {
         .into()
 }
 
+/// `format ‖ protocol major ‖ stream ‖ account (u8 length + bytes) ‖ position`.
 fn encode_payload(p: &CursorPayload) -> Vec<u8> {
     let mut v = Vec::with_capacity(16 + p.account.len());
     v.push(CURSOR_FORMAT);

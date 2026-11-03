@@ -17,7 +17,6 @@ def fmt(v, unit=""):
 def main(dirs):
     files = sorted(f for d in dirs for f in glob.glob(os.path.join(d, "perf-*-workload-d-*.json")))
     by_app = {}
-    summary = {}
     for f in files:
         d = json.load(open(f))
         by_app.setdefault(d["app"], []).append(d)
@@ -36,8 +35,6 @@ def main(dirs):
                 rows.setdefault(r["strokes"], []).append(r)
         mem = lambda r: (r.get("treeRssBytes") or r.get("physFootprintBytes") or r.get("rssBytes") or 0) / 2**20
         if "replayIntervalMedianMs" in sessions[0]["results"][0]:
-            # Matched schema (2026-11-02): identical definitions in Tauri and Flutter.
-            summary[app] = rows
             print("| strokes | trials | generate ms | full redraw ms (GPU-flushed) | replay frame interval median/max ms | memory MB |")
             print("|---:|---:|---:|---:|---:|---:|")
             for n, rs in sorted(rows.items()):
@@ -61,22 +58,6 @@ def main(dirs):
                       f"{fmt(med([(r['rssBytes'] or 0)/2**20 for r in rs]))} |")
         fi = [x["metrics"]["timings"].get("frame_interval_ms") or x["metrics"]["timings"].get("frame_total_span_ms") for x in sessions]
         print(f"\nframe timing per session (median/p95/max ms): {[(fmt(f.get('median')), fmt(f.get('p95')), fmt(f.get('max'))) for f in fi if f]}\n")
-    compare(summary)
-
-def compare(summary):
-    """Side-by-side table when exactly the two framework apps used the matched schema."""
-    if not {"tauri", "flutter"} <= summary.keys():
-        return
-    mem = lambda r: (r.get("treeRssBytes") or r.get("rssBytes") or 0) / 2**20
-    print("### Tauri vs Flutter (matched metrics, medians across all trials)\n")
-    print("| strokes | full redraw ms Tauri / Flutter | replay interval median ms Tauri / Flutter | replay interval max ms Tauri / Flutter | memory MB Tauri / Flutter |")
-    print("|---:|---:|---:|---:|---:|")
-    t, f = summary["tauri"], summary["flutter"]
-    for n in sorted(set(t) & set(f)):
-        cell = lambda k: f"{fmt(med([r[k] for r in t[n]]))} / {fmt(med([r[k] for r in f[n]]))}"
-        print(f"| {n} | {cell('rebuildMs')} | {cell('replayIntervalMedianMs')} | {cell('replayIntervalMaxMs')} | "
-              f"{fmt(med([mem(r) for r in t[n]]))} / {fmt(med([mem(r) for r in f[n]]))} |")
-    print()
 
 if __name__ == "__main__":
     main(sys.argv[1:] or ["benchmarks/results/linux"])

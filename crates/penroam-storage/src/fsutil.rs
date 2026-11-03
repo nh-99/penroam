@@ -1,18 +1,27 @@
 //! Durable file primitives, with crash-injection points.
 //!
-//! With the `fault-injection` feature, [`fault::arm`] makes the N-th
+//! With the `fault-injection` feature, `fault::arm` makes the N-th
 //! injection point fail. From then on every injection point fails, which
 //! models the process dying at that boundary: bytes written before it stay
 //! on disk, nothing after it happens. Appends can also stop half-way
 //! through a record (torn write). Without the feature the points compile to
 //! nothing.
+//!
+//! The names passed to the injection points (`append.write`,
+//! `atomic.rename`, `rename.dirsync`, …) identify the boundary in crash
+//! tests; the storage tests crash at every one of them in turn and check
+//! that nothing acknowledged is lost.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 
+/// Infix of temporary files written by [`write_atomic`]. Leftovers (from a
+/// crash before the rename) are removed when the library opens.
 pub const TMP_MARKER: &str = ".tmp-";
 
+/// Crash and disk-full injection for tests (feature `fault-injection`).
+/// State is thread-local, so parallel tests do not interfere.
 #[cfg(feature = "fault-injection")]
 pub mod fault {
     use std::cell::Cell;
@@ -213,7 +222,9 @@ pub fn remove_durable(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Removes a directory tree (crash-injection aware).
+/// Removes a directory tree (crash-injection aware). Not atomic: a crash
+/// midway can leave part of the tree, which the caller must tolerate (purge
+/// re-runs on replay).
 pub fn remove_dir_all_durable(path: &Path) -> io::Result<()> {
     fp("remove.dir")?;
     match fs::remove_dir_all(path) {
@@ -223,11 +234,14 @@ pub fn remove_dir_all_durable(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Fsyncs a directory so a create/rename/remove inside it is durable.
 #[cfg(unix)]
 pub fn sync_dir(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()
 }
 
+/// Fsyncs a directory so a create/rename/remove inside it is durable
+/// (a no-op on this platform).
 #[cfg(not(unix))]
 pub fn sync_dir(_dir: &Path) -> io::Result<()> {
     // Windows: directory handles cannot be fsynced through std; NTFS
@@ -235,6 +249,8 @@ pub fn sync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Whether an I/O error means "out of space" (ENOSPC = 28 on Linux/Android,
+/// also quota errors), so it can be reported as [`crate::StorageError::StorageFull`].
 pub fn is_storage_full(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::StorageFull
         || e.kind() == io::ErrorKind::QuotaExceeded

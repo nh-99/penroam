@@ -30,24 +30,33 @@ use uuid::Uuid;
 /// of the file format and model schema versions.
 pub const OP_SCHEMA_VERSION: u16 = 1;
 
+/// Globally unique operation id (random UUID), stable across retries.
 pub type OperationId = Uuid;
+/// Id of the device (or sync device) that wrote an operation.
 pub type DeviceId = Uuid;
 
 /// "Device `device_id` up to and including `device_seq`."
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationRef {
+    /// The device.
     pub device_id: DeviceId,
+    /// Its sequence number (inclusive).
     pub device_seq: u64,
 }
 
+/// One journaled change: a typed body plus the identity and causal context
+/// needed to deduplicate, order and merge it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalOperation {
+    /// Stable id (retries reuse it).
     pub id: OperationId,
+    /// The writing device.
     pub device_id: DeviceId,
     /// 1, 2, 3, … per device, persisted; single writer per device.
     pub local_sequence: u64,
+    /// [`OP_SCHEMA_VERSION`] of the body encoding.
     pub schema_version: u16,
     /// Causal frontier when the operation was made: for each device whose
     /// operations had been applied locally, the highest contiguous sequence.
@@ -56,10 +65,12 @@ pub struct LocalOperation {
     /// Wall-clock milliseconds when made. Informational (`updatedAt`,
     /// `deletedAt` values) — never used for ordering or merging.
     pub at: Timestamp,
+    /// What changed.
     pub body: DocumentOperation,
 }
 
 impl LocalOperation {
+    /// This operation as a causal reference (device, sequence).
     pub fn op_ref(&self) -> OperationRef {
         OperationRef {
             device_id: self.device_id,
@@ -77,72 +88,136 @@ pub mod groups {
     pub const CONTENT: u8 = 2;
     /// colour, opacity, widths, tool, font size, alignment.
     pub const STYLE: u8 = 4;
+    /// Every group.
     pub const ALL: u8 = PLACEMENT | CONTENT | STYLE;
 }
 
+/// The typed change carried by a [`LocalOperation`]. JSON-tagged by `type`.
+/// Notebook-level variants change the notebook document; element and
+/// template variants change one page's content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum DocumentOperation {
+    /// Creates the notebook (first operation of every notebook).
     #[serde(rename_all = "camelCase")]
     NotebookCreated {
+        /// Target notebook.
         notebook_id: Uuid,
+        /// New title (trimmed when applied).
         title: String,
+        /// Cover colour `#rrggbb`.
         cover: String,
+        /// Defaults for new pages.
         defaults: PageDefaults,
     },
+    /// Sets the title.
     #[serde(rename_all = "camelCase")]
-    NotebookRenamed { notebook_id: Uuid, title: String },
+    NotebookRenamed {
+        /// Target notebook.
+        notebook_id: Uuid,
+        /// New title (trimmed when applied).
+        title: String,
+    },
+    /// Sets the cover colour.
     #[serde(rename_all = "camelCase")]
-    NotebookCoverChanged { notebook_id: Uuid, cover: String },
+    NotebookCoverChanged {
+        /// Target notebook.
+        notebook_id: Uuid,
+        /// Cover colour `#rrggbb`.
+        cover: String,
+    },
     /// Moves the notebook to the trash (tombstone; nothing is erased).
     #[serde(rename_all = "camelCase")]
-    NotebookDeleted { notebook_id: Uuid },
+    NotebookDeleted {
+        /// Target notebook.
+        notebook_id: Uuid,
+    },
+    /// Takes the notebook out of the trash.
     #[serde(rename_all = "camelCase")]
-    NotebookRestored { notebook_id: Uuid },
+    NotebookRestored {
+        /// Target notebook.
+        notebook_id: Uuid,
+    },
     /// Local physical erasure of a trashed notebook. Local-only: not merged
     /// (hosted deletion/retention is a separate, later policy).
     #[serde(rename_all = "camelCase")]
-    NotebookPurged { notebook_id: Uuid },
+    NotebookPurged {
+        /// Target notebook.
+        notebook_id: Uuid,
+    },
+    /// Adds a page at the position given by its order key.
     #[serde(rename_all = "camelCase")]
     PageCreated {
+        /// Target notebook.
         notebook_id: Uuid,
+        /// Target page.
         page_id: Uuid,
+        /// Fractional order key (see [`crate::order_key`]).
         order_key: String,
+        /// Paper size class.
         paper: Paper,
+        /// Page size in points.
         size: Size,
+        /// Background template.
         template: Template,
+        /// PDF page shown under the content, for imported PDFs.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         background: Option<PdfBackgroundRef>,
     },
     /// Moves a page to the notebook's trash (tombstone).
     #[serde(rename_all = "camelCase")]
-    PageDeleted { notebook_id: Uuid, page_id: Uuid },
+    PageDeleted {
+        /// Target notebook.
+        notebook_id: Uuid,
+        /// Target page.
+        page_id: Uuid,
+    },
+    /// Takes a page out of the trash.
     #[serde(rename_all = "camelCase")]
-    PageRestored { notebook_id: Uuid, page_id: Uuid },
+    PageRestored {
+        /// Target notebook.
+        notebook_id: Uuid,
+        /// Target page.
+        page_id: Uuid,
+    },
+    /// Moves a page by giving it a new order key.
     #[serde(rename_all = "camelCase")]
     PageReordered {
+        /// Target notebook.
         notebook_id: Uuid,
+        /// Target page.
         page_id: Uuid,
+        /// Fractional order key (see [`crate::order_key`]).
         order_key: String,
     },
+    /// Changes a page's background template.
     #[serde(rename_all = "camelCase")]
     PageTemplateSet {
+        /// Target notebook.
         notebook_id: Uuid,
+        /// Target page.
         page_id: Uuid,
+        /// Background template.
         template: Template,
     },
     /// Adds elements; an id that was removed earlier is restored (undo).
     #[serde(rename_all = "camelCase")]
     ElementsAdded {
+        /// Target notebook.
         notebook_id: Uuid,
+        /// Target page.
         page_id: Uuid,
+        /// The elements, in order.
         elements: Vec<Element>,
     },
     /// Removes elements (tombstones in the merge model).
     #[serde(rename_all = "camelCase")]
     ElementsRemoved {
+        /// Target notebook.
         notebook_id: Uuid,
+        /// Target page.
         page_id: Uuid,
+        /// Ids of the elements to remove.
         ids: Vec<Uuid>,
     },
     /// Replaces elements with new versions. `changed[i]` is the
@@ -150,17 +225,27 @@ pub enum DocumentOperation {
     /// merging takes only those field groups from `elements[i]`.
     #[serde(rename_all = "camelCase")]
     ElementsReplaced {
+        /// Target notebook.
         notebook_id: Uuid,
+        /// Target page.
         page_id: Uuid,
+        /// The elements, in order.
         elements: Vec<Element>,
+        /// Per element, the [`groups`] mask that differs from the old version.
         changed: Vec<u8>,
     },
     /// An immutable, hash-addressed attachment became part of the notebook.
     #[serde(rename_all = "camelCase")]
-    AssetReferenced { notebook_id: Uuid, asset: Asset },
+    AssetReferenced {
+        /// Target notebook.
+        notebook_id: Uuid,
+        /// The asset (bytes are stored separately, by hash).
+        asset: Asset,
+    },
 }
 
 impl DocumentOperation {
+    /// The notebook this operation belongs to.
     pub fn notebook_id(&self) -> Uuid {
         use DocumentOperation::*;
         match self {
@@ -247,6 +332,7 @@ impl DocumentOperation {
             .collect()
     }
 
+    /// Mutable access to the ink strokes carried by this operation.
     pub fn ink_strokes_mut(&mut self) -> Vec<&mut InkStroke> {
         use DocumentOperation::*;
         match self {
@@ -261,6 +347,7 @@ impl DocumentOperation {
         }
     }
 
+    /// Elements carried by `elementsAdded` / `elementsReplaced` (empty otherwise).
     pub fn elements(&self) -> &[Element] {
         use DocumentOperation::*;
         match self {
@@ -270,16 +357,25 @@ impl DocumentOperation {
     }
 }
 
+/// Why an operation could not be validated or applied.
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum OpError {
+    /// The body comes from a newer operation schema; keep it, do not apply.
     #[error("operation schema {found} is newer than this build supports ({OP_SCHEMA_VERSION}); upgrade required")]
-    UnsupportedSchema { found: u16 },
+    UnsupportedSchema {
+        /// The schema version found.
+        found: u16,
+    },
+    /// The target notebook does not exist.
     #[error("operation targets notebook {0}, which does not exist")]
     NoNotebook(Uuid),
+    /// The target page does not exist in the notebook.
     #[error("page {0} does not exist in this notebook")]
     NoPage(Uuid),
+    /// A precondition failed (invalid value, wrong target, …).
     #[error("{0}")]
     Precondition(String),
+    /// The page operation itself failed (see [`ApplyError`]).
     #[error(transparent)]
     Apply(#[from] ApplyError),
 }
@@ -385,6 +481,7 @@ pub fn apply_to_page(page: &mut Page, bodies: &[&DocumentOperation]) -> Result<(
 pub enum NotebookEffect {
     /// Already reflected (idempotent replay) — nothing to write.
     Unchanged,
+    /// The notebook changed and its snapshot must be rewritten.
     Changed,
     /// A page must be created on disk with this initial content.
     PageCreated(Box<Page>),

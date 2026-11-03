@@ -2,4 +2,15 @@
 import type { Paper } from "./Paper";
 import type { Template } from "./Template";
 
-export type PageDefaults = { paper: Paper, template: Template, };
+/**
+ * Defaults for pages added to a notebook.
+ */
+export type PageDefaults = { 
+/**
+ * Paper size of new pages.
+ */
+paper: Paper, 
+/**
+ * Background template of new pages.
+ */
+template: Template, };

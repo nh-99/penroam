@@ -9,6 +9,21 @@
 //!   **vector** content in the same document-space transform the editor uses.
 //!   Blank/template pages become new PDF pages. The editable data stays in
 //!   the notebook; the PDF is a one-way rendering.
+//!
+//! # Coordinates
+//!
+//! Penroam pages use *display* coordinates in points: origin at the top-left
+//! of the visible page, y pointing down, after the PDF's `/Rotate` has been
+//! applied. PDF user space has y pointing up and is not rotated. For pages
+//! with a PDF background the visible area is the crop box (clipped to the
+//! media box, as PDF.js shows it), and
+//! [`PdfBackgroundRef::doc_to_pdf_matrix`] maps display coordinates to user
+//! space for each of the four rotations. Template-only pages use a plain
+//! y-flip (`1 0 0 -1 0 height`). Export writes all annotations inside a
+//! single `cm` with that matrix, so ink and text are emitted in display
+//! coordinates and land exactly where the editor drew them.
+
+#![warn(missing_docs)]
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use penroam_core::geometry::{stroke_pieces, Piece};
@@ -19,35 +34,53 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use ts_rs::TS;
 
+/// PDF import/export failures (messages are safe to show to the user).
 #[derive(Debug, thiserror::Error)]
 pub enum PdfError {
+    /// The file is not a readable PDF, or a page has an unsupported size.
     #[error("this PDF could not be read: {0}")]
     Parse(String),
+    /// Encrypted PDFs are refused rather than decrypted.
     #[error("this PDF is password-protected; remove the password and import it again")]
     Encrypted,
+    /// The PDF has no pages (or nothing was given to export).
     #[error("this PDF has no pages")]
     NoPages,
+    /// More than [`MAX_PAGES`] pages.
     #[error("this PDF has too many pages ({0}; the limit is 5000)")]
     TooManyPages(usize),
+    /// Export: a page refers to a PDF asset (or page index) that is not available.
     #[error("the source PDF for a page is missing ({0})")]
     MissingSource(String),
+    /// Export: serializing the output failed.
     #[error("writing the PDF failed: {0}")]
     Write(String),
 }
 
+/// Most pages accepted from one PDF.
 pub const MAX_PAGES: usize = 5000;
 
+/// Geometry of one PDF page, as needed to show it as a page background.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct PdfPageInfo {
+    /// Zero-based page index in the PDF.
     pub index: u32,
+    /// Normalized media box `[x0, y0, x1, y1]` in PDF user space (inherited
+    /// from the page tree if needed; Letter when missing).
     pub media_box: [f64; 4],
+    /// Effective crop box: the declared crop box clipped to the media box
+    /// (the media box if that leaves less than 1 pt).
     pub crop_box: [f64; 4],
+    /// Effective `/Rotate`, normalized to 0, 90, 180 or 270 (anything that
+    /// is not a multiple of 90 counts as 0).
     pub rotation: u32,
 }
 
 impl PdfPageInfo {
+    /// The page background reference to store in a Penroam page for this
+    /// PDF page, given the SHA-256 of the stored PDF asset.
     pub fn background(&self, asset_hash: &str) -> PdfBackgroundRef {
         PdfBackgroundRef {
             asset_hash: asset_hash.to_string(),
@@ -171,16 +204,21 @@ fn page_info(doc: &Document, id: ObjectId, index: u32) -> Result<PdfPageInfo, Pd
 
 // ------------------------------------------------------------------ export --
 
+/// Summary of an annotated-PDF export.
 #[derive(Debug, Clone, Default, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ExportReport {
+    /// Pages written.
     pub pages: u32,
+    /// Ink strokes written as vector paths.
     pub strokes: u32,
+    /// Text blocks written.
     pub text_blocks: u32,
     /// Characters outside the PDF's standard-font character set that were
     /// replaced with "?" (the editable notebook keeps the original text).
     pub replaced_characters: u32,
+    /// Things that could not be exported (e.g. image elements).
     pub warnings: Vec<String>,
 }
 
@@ -188,7 +226,14 @@ fn name(s: &str) -> Object {
     Object::Name(s.as_bytes().to_vec())
 }
 
-/// Builds the annotated PDF. `asset` returns the bytes of a stored asset.
+/// Builds the annotated PDF for `pages`, in the given order. `asset`
+/// returns the bytes of a stored asset by SHA-256 (the PDF backgrounds).
+///
+/// Each source PDF is merged into the output once (its objects renumbered,
+/// inherited page attributes resolved first) and its pages are reused with
+/// their original content wrapped in `q … Q`, followed by one Penroam content
+/// stream. Opacity (highlighter) uses `ExtGState` entries; text uses the
+/// standard Helvetica font with WinAnsi encoding.
 pub fn export_annotated(
     pages: &[Page],
     mut asset: impl FnMut(&str) -> Option<Vec<u8>>,
@@ -207,6 +252,7 @@ pub fn export_annotated(
     let mut kids = Vec::new();
 
     for page in pages {
+        // ExtGState names (one per distinct opacity) used by this page's annotations
         let mut gs: BTreeMap<String, f64> = BTreeMap::new();
         let annot = annotation_content(page, &mut gs, &mut report);
         let annot_id = out
@@ -228,6 +274,7 @@ pub fn export_annotated(
                 let bytes = asset(&bg.asset_hash)
                     .ok_or_else(|| PdfError::MissingSource(bg.asset_hash.clone()))?;
                 let mut src = load(&bytes)?;
+                // move the source's object ids above ours so both can live in one document
                 src.renumber_objects_with(out.max_id + 1);
                 let ids: Vec<ObjectId> = src.get_pages().values().copied().collect();
                 out.max_id = out.max_id.max(src.max_id);
@@ -340,6 +387,8 @@ pub fn export_annotated(
     Ok((buf, report))
 }
 
+/// Adds the Penroam font (`/PRHelv`) and opacity states to a page's
+/// resources without disturbing the source page's own entries.
 fn merge_resources(out: &Document, res: &mut Dictionary, font: ObjectId, ext: Dictionary) {
     let sub = |key: &[u8], res: &Dictionary| -> Dictionary {
         res.get(key)
@@ -432,7 +481,10 @@ fn annotation_content(
     s
 }
 
-/// Page templates; keep in sync with `editor/templates.ts`.
+/// Appends the PDF operators that draw a page template (ruled lines, grid
+/// or dots) in display coordinates (y down; the caller sets up the `cm`).
+/// Keep in sync with the editor's `editor/templates.ts`: ruled lines start
+/// three spacings from the top with a margin line three spacings from the left.
 pub fn template_content(s: &mut String, t: &Template, w: f64, h: f64) {
     let sp = t.spacing;
     match t.kind {
@@ -481,6 +533,9 @@ pub fn template_content(s: &mut String, t: &Template, w: f64, h: f64) {
     }
 }
 
+/// Appends one geometry piece of a stroke as path operators. `mv` starts a
+/// new subpath (`m`); otherwise the piece continues the current one. Dots
+/// are zero-length lines, which round caps turn into discs.
 fn piece_path(s: &mut String, p: &Piece, mv: bool) {
     match *p {
         Piece::Dot { x, y, .. } => {
@@ -504,7 +559,7 @@ fn piece_path(s: &mut String, p: &Piece, mv: bool) {
             if mv {
                 let _ = write!(s, "{} {} m ", f(x0), f(y0));
             }
-            // quadratic -> cubic
+            // PDF has no quadratic curves: raise the degree (exact conversion)
             let (c1x, c1y) = (x0 + 2.0 / 3.0 * (cx - x0), y0 + 2.0 / 3.0 * (cy - y0));
             let (c2x, c2y) = (x1 + 2.0 / 3.0 * (cx - x1), y1 + 2.0 / 3.0 * (cy - y1));
             let _ = write!(
@@ -521,6 +576,11 @@ fn piece_path(s: &mut String, p: &Piece, mv: bool) {
     }
 }
 
+/// Appends one ink stroke using the shared stroke geometry
+/// (`penroam_core::geometry::stroke_pieces`), so the PDF matches the canvas.
+/// Pressure-sensitive pen strokes become one stroked piece per width change;
+/// other strokes are a single path with one width. Translucency (the
+/// highlighter) is set through a named `ExtGState` recorded in `gs`.
 fn ink_content(s: &mut String, st: &InkStroke, gs: &mut BTreeMap<String, f64>) {
     let (r, g, b) = rgb(&st.color);
     s.push_str("q ");
@@ -605,6 +665,9 @@ fn winansi(c: char) -> Option<u8> {
     }
 }
 
+/// Appends a text block laid out with the same metrics and line breaking as
+/// the editor (`penroam_core::text`). Characters Helvetica/WinAnsi cannot
+/// show are written as `?` and counted in the report.
 fn text_content(s: &mut String, t: &TextBlock, report: &mut ExportReport) {
     let m = metrics();
     let (r, g, b) = rgb(&t.color);

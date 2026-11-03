@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   The Onyx SDK AARs declare an application label and a broad set of
-  permissions that raw pen drawing does not need. Strip them here so every
-  host (reference app, Flutter, Tauri) gets a clean merged manifest.
+  permissions that raw pen drawing does not need. Strip them here so the
+  app gets a clean merged manifest.
   If a future firmware/SDK combination turns out to need one of these,
   re-add it explicitly and document why in README.md.
 -->

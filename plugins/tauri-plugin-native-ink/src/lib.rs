@@ -25,9 +25,13 @@ use tauri::{
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_native_ink);
 
+/// Handle to the registered Kotlin/Swift plugin instance.
 #[cfg(mobile)]
 struct Native<R: Runtime>(tauri::plugin::PluginHandle<R>);
 
+/// Forwards `method(args)` to the native plugin and returns its JSON result.
+/// On desktop there is no native surface: every call fails with a message
+/// and the editor keeps using the web canvas.
 #[tauri::command]
 async fn call<R: Runtime>(
     app: AppHandle<R>,
@@ -51,6 +55,8 @@ async fn call<R: Runtime>(
     }
 }
 
+/// The plugin (`native-ink`): registers the `call` command and, on Android and
+/// iOS, the native plugin class.
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("native-ink")
         .invoke_handler(tauri::generate_handler![call])

@@ -1,10 +1,16 @@
 //! Sync transports: the protocol calls the engine needs, with typed errors.
 //!
-//! * [`HttpTransport`] (feature `http`): the HTTP mapping of protocol v1.
-//! * [`InProcessTransport`] (feature `testkit`): calls the public test
+//! * `HttpTransport` (feature `http`): the HTTP mapping of protocol v1.
+//! * `InProcessTransport` (feature `testkit`): calls the public test
 //!   server directly, with the same fault semantics (tests and tools).
 //!
 //! Transports never log tokens or payloads.
+//!
+//! Errors are classified in [`TransportError`] so the engine can decide
+//! between "retry later with backoff" (network, lost response, 429/5xx) and
+//! "needs the user or an update" (auth, revocation, quota, protocol errors).
+//! A lost response is *not* a failure of the operation: every mutating call is
+//! idempotent, so the engine simply retries it.
 
 #[cfg(any(feature = "http", feature = "testkit"))]
 use penroam_sync_protocol::framing::decode_json_batch;
@@ -34,6 +40,7 @@ pub enum TransportError {
 }
 
 impl TransportError {
+    /// The server error code, if the server answered with an error body.
     pub fn code(&self) -> Option<ErrorCode> {
         match self {
             Self::Api(b) => Some(b.code),
@@ -59,35 +66,56 @@ impl TransportError {
     }
 }
 
+/// Result of a transport call.
 pub type TResult<T> = Result<T, TransportError>;
 
 /// One pulled page with ciphertexts.
 #[derive(Debug, Clone)]
 pub struct PulledPage {
+    /// The control document (items, next cursor, has-more).
     pub response: PullOpsResponse,
+    /// One ciphertext per item, same order as `response.items`.
     pub ciphertexts: Vec<Vec<u8>>,
 }
 
 /// The protocol calls used by the engine.
 pub trait SyncTransport: Send {
+    /// `GET /v1/meta`: versions, capabilities, limits (unauthenticated).
     fn meta(&mut self) -> TResult<ServerMeta>;
+    /// `POST /v1/devices`: registers this device's public keys. Registration
+    /// grants no trust; membership comes from the key log.
     fn register_device(
         &mut self,
         req: &DeviceRegistrationRequest,
     ) -> TResult<DeviceRegistrationResponse>;
+    /// `GET /v1/devices`: what the server has registered. Untrusted: used only
+    /// to find a pairing device's keys, which are then checked against its code.
     fn list_devices(&mut self) -> TResult<DeviceListResponse>;
+    /// `DELETE /v1/devices/{id}`: the server stops accepting that device's writes.
     fn revoke_device(&mut self, id: &DeviceId) -> TResult<()>;
-    /// `frame` is a PRSB batch of envelope headers + ciphertexts.
+    /// `POST /v1/ops/batch`. `frame` is a PRSB batch of envelope headers +
+    /// ciphertexts; the response has one ack per envelope, in order.
     fn push(&mut self, frame: Vec<u8>) -> TResult<PushOpsResponse>;
+    /// `GET /v1/ops`: one page of envelopes after `req.cursor`, checked against
+    /// `limits` while decoding.
     fn pull(&mut self, req: &PullOpsRequest, limits: &Limits) -> TResult<PulledPage>;
+    /// `POST /v1/acks`: tells the server how far this device has applied
+    /// (informs retention only).
     fn ack(&mut self, req: &AckRequest) -> TResult<()>;
+    /// `GET /v1/keylog?from=`: key-log entries from index `from`.
     fn keylog_get(&mut self, from: u64) -> TResult<KeyLogPage>;
+    /// `POST /v1/keylog`: appends at `req.index`; `conflict` if someone else
+    /// appended first.
     fn keylog_append(&mut self, req: &KeyLogAppendRequest) -> TResult<KeyLogAppendResponse>;
+    /// `PUT /v1/blobs/{id}`: uploads encrypted asset bytes (idempotent).
     fn blob_put(&mut self, id: &BlobId, sha256_hex: &str, bytes: &[u8])
         -> TResult<BlobPutResponse>;
+    /// `GET /v1/blobs/{id}`: downloads encrypted asset bytes.
     fn blob_get(&mut self, id: &BlobId) -> TResult<Vec<u8>>;
 }
 
+/// Pairs a pull control document with its frame and rejects a frame whose
+/// item headers differ from the document (a server bug or tampering).
 #[cfg(any(feature = "http", feature = "testkit"))]
 fn pulled_from_frame(
     response: PullOpsResponse,
@@ -127,20 +155,27 @@ mod in_process {
 
     /// Calls an [`InMemoryServer`] directly as `(account, device)`.
     pub struct InProcessTransport {
+        /// The shared test server.
         pub server: Arc<InMemoryServer>,
+        /// Account this client acts as.
         pub account: AccountId,
+        /// Device this client acts as (updated by `register_device`).
         pub device: DeviceId,
         /// When set, every call fails with `Network` (airplane mode).
         pub offline: bool,
+        /// Test knob: the next this-many blob downloads fail (network error).
+        pub fail_blob_gets: u32,
     }
 
     impl InProcessTransport {
+        /// A client of `server` acting as `(account, device)`, online.
         pub fn new(server: Arc<InMemoryServer>, account: AccountId, device: DeviceId) -> Self {
             Self {
                 server,
                 account,
                 device,
                 offline: false,
+                fail_blob_gets: 0,
             }
         }
 
@@ -231,6 +266,12 @@ mod in_process {
         }
         fn blob_get(&mut self, id: &BlobId) -> TResult<Vec<u8>> {
             self.up()?;
+            if self.fail_blob_gets > 0 {
+                self.fail_blob_gets -= 1;
+                return Err(TransportError::Network(
+                    "injected blob download failure".into(),
+                ));
+            }
             self.server
                 .blob_get(&self.account, &self.device, id)
                 .map_err(map)
@@ -275,6 +316,9 @@ mod http {
 
     const JSON_LIMIT: u64 = 1 << 20;
 
+    /// Classifies a ureq failure. A connection that dies after the request was
+    /// sent (reset, EOF, garbled response) may have been processed by the
+    /// server, so it is a lost response (safe to retry), not "offline".
     fn net(e: ureq::Error) -> TransportError {
         match e {
             ureq::Error::Io(ref io)
@@ -293,6 +337,7 @@ mod http {
     }
 
     impl HttpTransport {
+        /// A client for `base_url` (a trailing slash is ignored) using a bearer token.
         pub fn new(base_url: &str, token: String) -> Self {
             Self {
                 base: base_url.trim_end_matches('/').to_string(),
@@ -301,6 +346,7 @@ mod http {
             }
         }
 
+        /// Replaces the bearer token (after re-authentication).
         pub fn set_token(&mut self, token: String) {
             self.token = token;
         }

@@ -4,7 +4,15 @@
  * One pen sample. Same fields and units as the stroke document's canonical point plus the
  * optional `twist` and `flags`.
  */
-export type InkPoint = { x: number, y: number, 
+export type InkPoint = { 
+/**
+ * Document x in points.
+ */
+x: number, 
+/**
+ * Document y in points (down).
+ */
+y: number, 
 /**
  * Normalised 0..1 (mouse: 0.5). Raw ranges live in the stroke `input`.
  */
@@ -12,11 +20,19 @@ pressure: number,
 /**
  * Degrees, W3C convention.
  */
-tiltX: number, tiltY: number, 
+tiltX: number, 
+/**
+ * Degrees, W3C convention.
+ */
+tiltY: number, 
 /**
  * Microseconds since the first sample of the stroke.
  */
-timeUs: number, twist?: number, 
+timeUs: number, 
+/**
+ * Barrel rotation in degrees, when the platform reports it.
+ */
+twist?: number, 
 /**
  * Bit flags, see [`point_flags`].
  */

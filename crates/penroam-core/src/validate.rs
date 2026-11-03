@@ -1,20 +1,34 @@
 //! Structural validation for documents received from the UI, the disk or an
-//! imported archive. Validation never "repairs" data silently.
+//! imported archive. Validation never "repairs" data silently: invalid input
+//! is rejected with a message, and callers decide what to do (refuse an
+//! import, keep a damaged file untouched, …).
+//!
+//! The [`limits`] are deliberately generous; they exist so that a hostile or
+//! corrupt file cannot make the app allocate unbounded memory or produce
+//! coordinates that break rendering and PDF export.
 
 use crate::model::*;
 use std::collections::HashSet;
 
 /// Hard limits that protect the app against hostile or corrupt files.
 pub mod limits {
-    pub const MAX_PAGE_SIDE_PT: f64 = 14_400.0; // 200 in, PDF's own user-space limit
+    /// Longest page side: 200 in, PDF's own user-space limit.
+    pub const MAX_PAGE_SIDE_PT: f64 = 14_400.0;
+    /// Largest absolute coordinate anywhere on a page.
     pub const MAX_COORD_PT: f64 = 1.0e6;
+    /// Samples per ink stroke.
     pub const MAX_POINTS_PER_STROKE: usize = 200_000;
+    /// Elements per page.
     pub const MAX_ELEMENTS_PER_PAGE: usize = 500_000;
+    /// UTF-8 bytes per text block.
     pub const MAX_TEXT_BYTES: usize = 1 << 20;
+    /// Characters per notebook title.
     pub const MAX_TITLE_CHARS: usize = 300;
+    /// Pages per notebook (live and trashed).
     pub const MAX_PAGES: usize = 10_000;
 }
 
+/// A human-readable reason why a document is invalid.
 #[derive(Debug, thiserror::Error, PartialEq)]
 #[error("{0}")]
 pub struct ValidationError(pub String);
@@ -30,16 +44,19 @@ fn finite(v: f64, what: &str) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// `#rrggbb` (either case).
 pub fn is_color(s: &str) -> bool {
     s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// 64 lowercase hex digits.
 pub fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64
         && s.chars()
             .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
+/// Non-empty after trimming, at most [`limits::MAX_TITLE_CHARS`], no control characters.
 pub fn validate_title(t: &str) -> Result<(), ValidationError> {
     if t.trim().is_empty() {
         return err("title is empty");
@@ -53,6 +70,7 @@ pub fn validate_title(t: &str) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// Spacing between 4 and 288 pt.
 pub fn validate_template(t: &Template) -> Result<(), ValidationError> {
     if !t.spacing.is_finite() || !(4.0..=288.0).contains(&t.spacing) {
         return err(format!("template spacing out of range: {}", t.spacing));
@@ -60,6 +78,7 @@ pub fn validate_template(t: &Template) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// Each side between 1 pt and [`limits::MAX_PAGE_SIDE_PT`].
 pub fn validate_size(s: &Size) -> Result<(), ValidationError> {
     for v in [s.width, s.height] {
         if !v.is_finite() || !(1.0..=limits::MAX_PAGE_SIDE_PT).contains(&v) {
@@ -69,6 +88,7 @@ pub fn validate_size(s: &Size) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// One element: finite coordinates, sane widths/opacity/colours, bounded sizes.
 pub fn validate_element(e: &Element) -> Result<(), ValidationError> {
     match e {
         Element::Ink(s) => {
@@ -142,6 +162,8 @@ pub fn validate_element(e: &Element) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// A whole page: schema, size, template, background and every element
+/// (unique ids, bounded counts).
 pub fn validate_page(p: &Page) -> Result<(), ValidationError> {
     if p.schema_version != PAGE_SCHEMA_VERSION {
         return err(format!(
@@ -178,6 +200,9 @@ pub fn validate_page(p: &Page) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// A notebook: schema, title, cover, page lists (no duplicates, live and
+/// trashed disjoint), order keys and assets. Missing or inconsistent order
+/// keys are repaired by storage on load, not rejected here.
 pub fn validate_notebook(n: &Notebook) -> Result<(), ValidationError> {
     if n.schema_version != NOTEBOOK_SCHEMA_VERSION {
         return err(format!(

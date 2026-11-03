@@ -171,7 +171,7 @@ export function strokeBounds(s: StrokeLike): Rect {
   return b;
 }
 
-/** Stroke eraser hit test (document units). Same rule as the Kotlin/Dart/TS prototypes. */
+/** Stroke eraser hit test (document units). Same rule as the Kotlin and Swift ink modules. */
 export function hitTest(s: StrokeLike, cx: number, cy: number, r: number): boolean {
   const b = strokeBounds(s);
   if (cx < b[0] - r || cx > b[2] + r || cy < b[1] - r || cy > b[3] + r) return false;

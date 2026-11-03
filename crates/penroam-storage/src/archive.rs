@@ -27,68 +27,99 @@ use std::io::{Read, Seek, Write};
 use ts_rs::TS;
 use uuid::Uuid;
 
+/// Content of the `mimetype` entry (first entry, uncompressed, so the file
+/// type can be sniffed).
 pub const MIMETYPE: &str = "application/vnd.penroam.notebook+zip";
+/// `manifest.json` `format` marker.
 pub const FORMAT: &str = "penroam-notebook";
 /// 1: pages as `pages/<uuid>.json`. 2: pages as binary `pages/<uuid>.prp`
 /// (`penroam_core::binary`). Import reads both.
 pub const FORMAT_VERSION: u32 = 2;
 
-/// Import limits.
+/// Import limits (enforced while decompressing, not trusted from headers).
 pub mod limits {
+    /// Most entries an archive may contain.
     pub const MAX_ENTRIES: usize = 25_000;
+    /// Largest `manifest.json`.
     pub const MAX_MANIFEST: u64 = 32 << 20;
+    /// Largest single page entry.
     pub const MAX_PAGE: u64 = 512 << 20;
+    /// Largest single asset entry.
     pub const MAX_ASSET: u64 = 1 << 30;
+    /// Largest total uncompressed size.
     pub const MAX_TOTAL: u64 = 4 << 30;
     /// Max uncompressed/compressed ratio for entries larger than 1 MiB.
     pub const MAX_RATIO: u64 = 200;
 }
 
+/// `manifest.json`: everything needed to verify and rebuild the notebook.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct Manifest {
+    /// Always [`FORMAT`].
     pub format: String,
+    /// Archive layout version (see [`FORMAT_VERSION`]).
     pub format_version: u32,
+    /// Notebook model schema of `notebook`.
     pub schema_version: u32,
+    /// Free-form producer string (app name and version).
     pub generator: String,
+    /// Export time (ms since the epoch; informational).
     #[ts(type = "number")]
     pub exported_at: Timestamp,
+    /// The notebook metadata (title, cover, page order, assets, …), kept as
+    /// raw JSON so older schemas can be migrated on import.
     #[ts(type = "unknown")]
     pub notebook: serde_json::Value,
+    /// Every page entry with its checksum.
     pub pages: Vec<ManifestPage>,
+    /// Every asset entry with its checksum.
     pub assets: Vec<ManifestAsset>,
 }
 
+/// One page entry of the archive.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ManifestPage {
+    /// Page id.
     pub id: Uuid,
+    /// Entry name (`pages/<id>.prp`, or `.json` in format 1).
     pub path: String,
+    /// SHA-256 of the entry bytes (verified on import).
     pub sha256: String,
+    /// Entry size in bytes.
     #[ts(type = "number")]
     pub bytes: u64,
 }
 
+/// One asset entry of the archive.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ManifestAsset {
+    /// SHA-256 of the asset bytes (also its address).
     pub sha256: String,
+    /// Entry name (`assets/<sha256>`).
     pub path: String,
+    /// MIME type, e.g. `application/pdf`.
     pub media_type: String,
+    /// Size in bytes.
     #[ts(type = "number")]
     pub byte_size: u64,
 }
 
+/// Result of [`Library::import_archive`].
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ImportReport {
+    /// The notebook as it now exists in the library.
     pub notebook: Notebook,
     /// True when the archive's notebook id already existed and a copy was made.
     pub renamed_copy: bool,
+    /// Non-fatal findings (unknown entries ignored, trashed pages skipped, …).
     pub warnings: Vec<String>,
 }
 
@@ -182,6 +213,12 @@ impl Library {
     }
 
     /// Imports a `.penroam` archive as a new notebook.
+    ///
+    /// Everything is verified first (names, sizes, ratios, checksums,
+    /// page/asset cross-references) and written to a staging folder; the
+    /// finished folder is then moved into the library in one rename, so a
+    /// failed or interrupted import leaves nothing behind. If the notebook id
+    /// already exists, the import becomes a copy with a new id.
     pub fn import_archive<R: Read + Seek>(&mut self, input: R) -> Result<ImportReport> {
         let mut zip = zip::ZipArchive::new(input).map_err(zerr)?;
         if zip.len() > limits::MAX_ENTRIES {
@@ -265,6 +302,7 @@ impl Library {
             ));
         }
         // ---- stage
+        // ids of purged notebooks still in the journal count as taken
         let renamed_copy = self.contains_notebook(nb.id);
         let old_id = nb.id;
         if renamed_copy {

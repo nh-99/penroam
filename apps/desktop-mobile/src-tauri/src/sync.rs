@@ -6,6 +6,21 @@
 //! session stub and server URLs are limited to loopback unless
 //! `PENROAM_SYNC_ALLOW_ANY_URL=1` (for alternate server implementations).
 //! Tokens and keys never reach the WebView or logs.
+//!
+//! Lifecycle:
+//! * At launch, [`resume_on_launch`] opens an existing setup and starts the
+//!   worker; the `sync_setup_*` commands create a setup and start it.
+//! * The worker thread owns the [`SyncEngine`] and loops on a channel of
+//!   [`Cmd`]s with a timeout: local edits send `Nudge` (debounced
+//!   [`DEBOUNCE`]), the UI can ask for `SyncNow`, and otherwise it reconciles
+//!   every [`IDLE_INTERVAL`] or at the backoff deadline after a failure.
+//! * After each reconcile it emits `sync://status` and, when merged changes
+//!   were installed, `sync://changed` so the editor can reload pages.
+//! * Commands that need the engine (devices, conflicts, approvals, …) are
+//!   sent to the worker with a reply channel, so the engine is only ever used
+//!   from one thread.
+//! * `sync_disconnect` stops the worker and removes keys and sync metadata;
+//!   notebooks are untouched.
 
 use crate::commands::CmdError;
 use crate::AppState;
@@ -31,6 +46,8 @@ type Reply<T> = Sender<Result<T, String>>;
 const IDLE_INTERVAL: Duration = Duration::from_secs(60);
 const DEBOUNCE: Duration = Duration::from_millis(1500);
 
+/// Messages to the worker thread. Variants with a [`Reply`] are answered on
+/// that channel.
 enum Cmd {
     Nudge,
     SyncNow,
@@ -47,6 +64,7 @@ enum Cmd {
 }
 
 /// The sync slot in [`AppState`].
+/// The sync slot in [`AppState`]: the worker's command channel, if running.
 #[derive(Default)]
 pub struct SyncSlot {
     tx: Mutex<Option<Sender<Cmd>>>,
@@ -88,6 +106,7 @@ fn sync_err(e: SyncError) -> CmdError {
     err(e.to_string())
 }
 
+/// Sends a request to the worker and waits (bounded) for its answer.
 fn ask<T>(slot: &SyncSlot, make: impl FnOnce(Reply<T>) -> Cmd) -> Result<T, CmdError> {
     let (tx, rx) = mpsc::channel();
     slot.send(make(tx))?;
@@ -101,6 +120,7 @@ pub fn available() -> bool {
     cfg!(debug_assertions) || std::env::var("PENROAM_DEV_SYNC").is_ok_and(|v| v == "1")
 }
 
+/// Accepts only loopback server URLs unless `PENROAM_SYNC_ALLOW_ANY_URL=1`.
 fn check_url(url: &str) -> Result<String, CmdError> {
     let u = url.trim().trim_end_matches('/').to_string();
     let any = std::env::var("PENROAM_SYNC_ALLOW_ANY_URL").is_ok_and(|v| v == "1");
@@ -169,6 +189,8 @@ fn secrets(app: &AppHandle, root: &std::path::Path) -> Result<Box<dyn SecretStor
     }
 }
 
+/// Gets a session token from the development test server's sign-in stub:
+/// a device token when the device is registered, else an account token.
 fn token(url: &str, account: &str, device: Option<&str>) -> Result<String, String> {
     if let Some(d) = device {
         if let Ok((t, _)) = HttpTransport::test_session(url, account, Some(d)) {
@@ -197,6 +219,9 @@ fn emit_status(app: &AppHandle, e: &Engine) {
     let _ = app.emit("sync://status", e.status(last));
 }
 
+/// The worker loop (see the module docs). Reconcile errors are not fatal:
+/// the next attempt is scheduled from the engine's backoff policy, and a
+/// rejected token triggers a fresh sign-in.
 fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
     let mut due: Option<Instant> = Some(Instant::now());
     let mut have_token = false;
@@ -352,6 +377,7 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
     }
 }
 
+/// Registers the worker's channel in [`AppState`] and spawns the thread.
 fn start(app: &AppHandle, engine: Engine) {
     let (tx, rx) = mpsc::channel();
     app.state::<AppState>().sync.set(Some(tx));
@@ -391,12 +417,14 @@ pub fn resume_on_launch(app: &AppHandle) {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+/// What the settings screen needs to decide what to show.
 pub struct SyncInfo {
     available: bool,
     configured: bool,
     status: Option<SyncStatus>,
 }
 
+/// Whether sync is available in this build, configured, and its status.
 #[tauri::command]
 pub fn sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<SyncInfo, CmdError> {
     let configured = state.sync.tx.lock().map(|g| g.is_some()).unwrap_or(false);
@@ -413,6 +441,7 @@ pub fn sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<SyncInfo,
     })
 }
 
+/// Setup preconditions: available in this build and not already set up.
 fn guard(state: &State<'_, AppState>) -> Result<(), CmdError> {
     if !available() {
         return Err(err("sync is not available in this build"));
@@ -425,11 +454,14 @@ fn guard(state: &State<'_, AppState>) -> Result<(), CmdError> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Codes to show after a setup step (the recovery code is shown only once).
 pub struct SetupResult {
     recovery_code: Option<String>,
     pairing_code: Option<String>,
 }
 
+/// First device of an account: creates the account keys and returns the
+/// recovery code.
 #[tauri::command(async)]
 pub fn sync_setup_first(
     app: AppHandle,
@@ -460,6 +492,8 @@ pub fn sync_setup_first(
     })
 }
 
+/// New device, pairing: registers this device and returns its pairing code
+/// for a trusted device to approve.
 #[tauri::command(async)]
 pub fn sync_setup_pair(
     app: AppHandle,
@@ -490,6 +524,7 @@ pub fn sync_setup_pair(
     })
 }
 
+/// New device, enrolled with the recovery code (no other device needed).
 #[tauri::command(async)]
 pub fn sync_setup_recovery(
     app: AppHandle,
@@ -519,11 +554,13 @@ pub fn sync_setup_recovery(
     Ok(())
 }
 
+/// While pairing: the comparison code once a trusted device approved us.
 #[tauri::command(async)]
 pub fn sync_poll_pairing(state: State<'_, AppState>) -> Result<Option<String>, CmdError> {
     ask(&state.sync, Cmd::PollPairing)
 }
 
+/// Trusted device: approves the device showing `code`; returns the comparison code.
 #[tauri::command(async)]
 pub fn sync_approve_device(
     state: State<'_, AppState>,
@@ -533,26 +570,31 @@ pub fn sync_approve_device(
     ask(&state.sync, |r| Cmd::Approve(code, label, r))
 }
 
+/// Removes a device (new key epoch, server revocation).
 #[tauri::command(async)]
 pub fn sync_remove_device(state: State<'_, AppState>, device_id: String) -> Result<(), CmdError> {
     ask(&state.sync, |r| Cmd::Remove(device_id, r))
 }
 
+/// Devices from the verified key log.
 #[tauri::command(async)]
 pub fn sync_devices(state: State<'_, AppState>) -> Result<Vec<DeviceView>, CmdError> {
     ask(&state.sync, Cmd::Devices)
 }
 
+/// Reconcile as soon as possible (resets the backoff).
 #[tauri::command]
 pub fn sync_now(state: State<'_, AppState>) -> Result<(), CmdError> {
     state.sync.send(Cmd::SyncNow)
 }
 
+/// Pauses or resumes background sync (local saving is unaffected).
 #[tauri::command]
 pub fn sync_pause(state: State<'_, AppState>, paused: bool) -> Result<(), CmdError> {
     state.sync.send(Cmd::Pause(paused))
 }
 
+/// Unresolved conflicts of a notebook, with every retained version.
 #[tauri::command(async)]
 pub fn sync_conflicts(
     state: State<'_, AppState>,
@@ -561,6 +603,8 @@ pub fn sync_conflicts(
     ask(&state.sync, |r| Cmd::Conflicts(notebook_id, r))
 }
 
+/// Keeps one version of a conflict (an ordinary local edit that supersedes
+/// the others everywhere once synced).
 #[tauri::command(async)]
 pub fn sync_resolve_conflict(
     state: State<'_, AppState>,
@@ -574,11 +618,14 @@ pub fn sync_resolve_conflict(
     })
 }
 
+/// Privacy-safe diagnostics (status and events; no content, keys or tokens).
 #[tauri::command(async)]
 pub fn sync_diagnostics(state: State<'_, AppState>) -> Result<String, CmdError> {
     ask(&state.sync, Cmd::Diagnostics)
 }
 
+/// Forgets the sync setup on this device (keys and sync metadata). Notes stay.
+/// Falls back to removing the files directly when the worker is not running.
 #[tauri::command(async)]
 pub fn sync_disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(), CmdError> {
     match ask(&state.sync, Cmd::Disconnect) {

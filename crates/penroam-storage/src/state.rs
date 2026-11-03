@@ -9,6 +9,10 @@
 //!   checkpoint), so a page can always fall back to its previous snapshot
 //!   (`<page>.prp.prev`) and replay the journal from there.
 //! * `outbox.json` — sync outbox counters, derivable from the journal.
+//!
+//! All of them are small JSON documents replaced with
+//! [`write_atomic`] (temp file, fsync, rename, directory fsync), so a crash
+//! leaves either the old or the new version, never a torn file.
 
 use crate::fsutil::write_atomic;
 use serde::{Deserialize, Serialize};
@@ -18,24 +22,42 @@ use uuid::Uuid;
 /// 1: per-page JSON-lines journals. 2: device operation journal, notebook schema 2.
 pub const LIBRARY_FORMAT_VERSION: u32 = 2;
 
+/// `library.json`: identifies the folder as a Penroam library. Opening a
+/// library whose `version` is newer than [`LIBRARY_FORMAT_VERSION`] fails
+/// instead of risking damage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LibraryMarker {
+    /// Always `"penroam-library"`.
     pub format: String,
+    /// Library layout version (see [`LIBRARY_FORMAT_VERSION`]).
     pub version: u32,
 }
 
+/// `device.json`: the random id of this installation. Every journaled
+/// operation records it, together with a per-device sequence number.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceFile {
+    /// Always `"penroam-device"`.
     pub format: String,
+    /// Stable for the lifetime of the library folder.
     pub device_id: Uuid,
 }
 
+/// `checkpoint.json`: how far the snapshots on disk cover the journal.
+///
+/// Replay after a restart starts after `floor`. Journal segments are only
+/// deleted at or below `min(floor, prev_floor)` (and, with sync on, at or
+/// below the uploaded sequence), so the previous snapshot of a page plus
+/// the retained journal can always rebuild the current one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointManifest {
+    /// Always `"penroam-checkpoint"`.
     pub format: String,
+    /// Manifest layout version (1).
     pub version: u32,
+    /// Device the journal belongs to.
     pub device_id: Uuid,
     /// Highest sequence ever allocated (persisted so it survives journal
     /// truncation; sequences never go backwards).
@@ -52,6 +74,7 @@ pub struct CheckpointManifest {
 }
 
 impl CheckpointManifest {
+    /// An empty manifest (nothing checkpointed yet).
     pub fn new(device_id: Uuid) -> Self {
         Self {
             format: "penroam-checkpoint".into(),
@@ -75,8 +98,12 @@ impl CheckpointManifest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutboxState {
+    /// Always `"penroam-outbox"`.
     pub format: String,
+    /// Layout version (1).
     pub version: u32,
+    /// Device whose operations these counters track; a file for another
+    /// device id is ignored and rebuilt.
     pub device_id: Uuid,
     /// Highest local sequence durably journaled.
     pub enqueued_through: u64,
@@ -92,6 +119,7 @@ pub struct OutboxState {
 }
 
 impl OutboxState {
+    /// Fresh counters (nothing uploaded, sync off).
     pub fn new(device_id: Uuid) -> Self {
         Self {
             format: "penroam-outbox".into(),
@@ -105,12 +133,15 @@ impl OutboxState {
     }
 }
 
+/// Reads and parses a JSON state file; `None` when it is missing or
+/// unreadable (callers then fall back or rebuild).
 pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
     std::fs::read(path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
 }
 
+/// Writes a JSON state file atomically and durably (see [`write_atomic`]).
 pub fn write_json<T: Serialize>(path: &Path, v: &T) -> std::io::Result<()> {
     write_atomic(
         path,
@@ -118,7 +149,10 @@ pub fn write_json<T: Serialize>(path: &Path, v: &T) -> std::io::Result<()> {
     )
 }
 
-/// Reads the manifest, falling back to the previous copy.
+/// Reads the manifest, falling back to the previous copy. The second value
+/// is a recovery warning when the current file was damaged. Falling back is
+/// safe: the previous manifest has a lower or equal floor, which only means
+/// more (idempotent) replay.
 pub fn read_manifest(root: &Path) -> (Option<CheckpointManifest>, Option<String>) {
     let ok = |m: &CheckpointManifest| m.format == "penroam-checkpoint" && m.version == 1;
     if let Some(m) = read_json::<CheckpointManifest>(&root.join("checkpoint.json")).filter(ok) {

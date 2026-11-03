@@ -12,6 +12,13 @@
 //! Every entry names the SHA-256 of the previous entry's bytes, so the
 //! server can withhold the tail of the log but cannot reorder, drop from the
 //! middle, or inject entries. Clients pin the prefix they verified.
+//!
+//! [`make_entry`] builds and signs entries; [`verify_log`] replays a whole log
+//! from genesis, checking every signature, signer authorization, chain link
+//! and grant, and returns the resulting [`Membership`] (who is a member,
+//! which epoch is current, and every wrapped epoch key). The engine
+//! (`crate::engine`) re-verifies the log from scratch on every reconcile;
+//! logs are small. Wire format: `docs/protocol/sync-protocol-v1.md` §14.
 
 use crate::crypto::{self, CryptoError, DeviceKeys, EpochKey};
 use ed25519_dalek::SigningKey;
@@ -19,38 +26,57 @@ use penroam_sync_protocol::base64url;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Signature domain for key-log entries (see [`crypto::sign`]).
 const DOMAIN: &[u8] = b"penroam/keylog/v1\0";
+/// `SignedEntry::signer` value meaning "signed by the account key" (derived
+/// from the recovery secret) rather than by a member device.
 pub const ACCOUNT_SIGNER: &str = "account";
 
+/// Why a key log was rejected. Any of these means the log cannot be trusted;
+/// the engine stops syncing and reports an integrity alert. Indexes are
+/// positions in the log.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum KeyLogError {
+    /// Not valid JSON/base64, wrong version, or an index out of place.
     #[error("key log entry {0} is malformed")]
     Malformed(u64),
+    /// The signature does not verify, or the signer is not an active member.
     #[error("key log entry {0} has an invalid signature or an unauthorized signer")]
     BadSignature(u64),
+    /// `prev` is not the hash of the previous entry (reordered or spliced log).
     #[error("key log entry {0} does not chain to the previous entry")]
     BrokenChain(u64),
+    /// Genesis names a different account key than expected (from the
+    /// recovery code or this device's pin).
     #[error("the key log does not belong to this account (account key mismatch)")]
     WrongAccount,
+    /// The log is shorter than, or differs from, the prefix this device pinned.
     #[error("the server returned a key log that contradicts the one this device verified before")]
     Rewritten,
+    /// Well-formed and signed, but breaks a membership rule (explained).
     #[error("key log entry {0} is not allowed: {1}")]
     Invalid(u64, &'static str),
+    /// Key material inside an entry could not be decoded.
     #[error(transparent)]
     Crypto(#[from] CryptoError),
 }
 
+/// A device certificate: binds a sync device id to its public keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceCert {
+    /// The sync device id (hyphenated UUID).
     pub device_id: String,
+    /// Ed25519 public key, unpadded base64url.
     pub sign_pk: String,
+    /// X25519 public key, unpadded base64url.
     pub dh_pk: String,
     /// User-chosen label (encrypted log, so not visible to the server).
     pub label: String,
 }
 
 impl DeviceCert {
+    /// The certificate for `keys` with a user-chosen label.
     pub fn of(keys: &DeviceKeys, label: &str) -> Self {
         Self {
             device_id: keys.device_id.clone(),
@@ -59,12 +85,15 @@ impl DeviceCert {
             label: label.to_string(),
         }
     }
+    /// Decoded Ed25519 public key.
     pub fn sign_pk(&self) -> Result<[u8; 32], CryptoError> {
         crypto::decode32(&self.sign_pk)
     }
+    /// Decoded X25519 public key.
     pub fn dh_pk(&self) -> Result<[u8; 32], CryptoError> {
         crypto::decode32(&self.dh_pk)
     }
+    /// The fingerprint shown in pairing codes and device lists.
     pub fn fingerprint(&self) -> Result<String, CryptoError> {
         Ok(crypto::fingerprint(&self.sign_pk()?, &self.dh_pk()?))
     }
@@ -76,42 +105,63 @@ impl DeviceCert {
 pub struct KeyGrant {
     /// Device id, or `"recovery"`.
     pub to: String,
+    /// The epoch this key belongs to.
     pub epoch: u32,
+    /// [`crypto::wrap_to`] output for the recipient, unpadded base64url.
     pub wrapped: String,
 }
 
+/// [`KeyGrant::to`] value for the grant wrapped to the recovery key.
 pub const RECOVERY: &str = "recovery";
 
+/// What an entry does. Who may sign each kind is enforced by [`verify_log`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EntryKind {
     #[serde(rename_all = "camelCase")]
+    /// Entry 0 only, signed by the account key: creates the account.
     Genesis {
+        /// Account Ed25519 public key (base64url).
         account_pk: String,
+        /// Recovery X25519 public key (base64url).
         recovery_pk: String,
+        /// The first device.
         device: DeviceCert,
+        /// Epoch 1 wrapped to the first device and to the recovery key.
         grants: Vec<KeyGrant>,
     },
     #[serde(rename_all = "camelCase")]
+    /// Certifies a new device; signed by an active member or the account key.
     AddDevice {
+        /// The new device.
         device: DeviceCert,
+        /// Existing epoch keys wrapped to the new device only.
         grants: Vec<KeyGrant>,
     },
     #[serde(rename_all = "camelCase")]
+    /// Deactivates a device and starts a new epoch; signed by an active
+    /// member or the account key.
     RemoveDevice {
+        /// The device to deactivate.
         device_id: String,
+        /// Must be the current epoch plus one.
         new_epoch: u32,
+        /// The new epoch key wrapped to every remaining device and to recovery.
         grants: Vec<KeyGrant>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// The signed content of an entry.
 pub struct EntryBody {
+    /// Entry format version (1).
     pub v: u32,
+    /// Position in the log; must equal the entry's actual position.
     pub index: u64,
     /// Hex SHA-256 of the previous entry's bytes ("" for genesis).
     pub prev: String,
+    /// What the entry does.
     pub entry: EntryKind,
 }
 
@@ -123,13 +173,17 @@ pub struct SignedEntry {
     pub body: String,
     /// Signing device id or `"account"`.
     pub signer: String,
+    /// Ed25519 signature over `DOMAIN ‖ body`, unpadded base64url.
     pub sig: String,
 }
 
+/// Associated data for wrapping an epoch key: binds the wrapped bytes to the
+/// epoch and recipient, so a grant cannot be replayed as another one.
 pub fn grant_context(epoch: u32, to: &str) -> Vec<u8> {
     format!("penroam/epoch-grant/v1/{epoch}/{to}").into_bytes()
 }
 
+/// Wraps an epoch key to a recipient's X25519 public key.
 pub fn grant(
     epoch: u32,
     key: &EpochKey,
@@ -167,38 +221,51 @@ pub fn make_entry(
     .expect("entry serializes")
 }
 
+/// A device as recorded in the verified log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Member {
+    /// Its certificate.
     pub cert: DeviceCert,
+    /// False once a `removeDevice` entry deactivated it.
     pub active: bool,
+    /// Index of the entry that added it.
     pub added_at: u64,
+    /// Who signed that entry (device id or [`ACCOUNT_SIGNER`]).
     pub added_by: String,
 }
 
 /// The verified state of a key log.
 #[derive(Debug, Clone, Default)]
 pub struct Membership {
+    /// Account Ed25519 public key from genesis.
     pub account_pk: [u8; 32],
+    /// Recovery X25519 public key from genesis.
     pub recovery_pk: [u8; 32],
+    /// Every device ever added, by id (removed ones have `active == false`).
     pub devices: BTreeMap<String, Member>,
+    /// The epoch new writes use.
     pub current_epoch: u32,
     /// All grants, by epoch.
     pub grants: BTreeMap<u32, Vec<KeyGrant>>,
-    /// Number of verified entries and hash of the last one.
+    /// Number of verified entries.
     pub len: u64,
+    /// Hex SHA-256 of the last verified entry (what a [`Pin`] records).
     pub head: String,
 }
 
 impl Membership {
+    /// Whether `device` is a current member.
     pub fn is_active(&self, device: &str) -> bool {
         self.devices.get(device).is_some_and(|m| m.active)
     }
 
+    /// Current members.
     pub fn active_devices(&self) -> impl Iterator<Item = &Member> {
         self.devices.values().filter(|m| m.active)
     }
 
-    /// Every epoch key granted to `keys`' device.
+    /// Every epoch key granted to `keys`' device. Grants that fail to unwrap
+    /// are skipped; a missing current epoch is reported by the engine.
     pub fn epoch_keys_for(&self, keys: &DeviceKeys) -> BTreeMap<u32, EpochKey> {
         let mut out = BTreeMap::new();
         for (epoch, gs) in &self.grants {
@@ -242,14 +309,25 @@ impl Membership {
 /// A previously verified prefix (index count + last hash) to pin against.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+///
+/// Stored in the sync state after each successful verification. A later log
+/// must contain this prefix unchanged ([`KeyLogError::Rewritten`] otherwise),
+/// which stops a server from rolling membership back or swapping history.
 pub struct Pin {
+    /// Account public key, base64url.
     pub account_pk: String,
+    /// Number of entries verified.
     pub len: u64,
+    /// Hash of the last verified entry.
     pub head: String,
 }
 
 /// Verifies a complete key log (entries 0..n as stored bytes).
 /// `expected_account` (from the recovery code or a pin) must match genesis.
+///
+/// With neither `expected_account` nor `pin` (a new device that is pairing),
+/// the account key is trusted on first use; the pairing comparison code is
+/// what detects a substituted log in that case.
 pub fn verify_log(
     entries: &[Vec<u8>],
     expected_account: Option<&[u8; 32]>,
@@ -270,7 +348,10 @@ pub fn verify_log(
         if body.prev != prev {
             return Err(KeyLogError::BrokenChain(i));
         }
-        // signer authorization
+        // signer authorization: only genesis is self-certifying (it introduces
+        // the account key); every later entry must be signed by the account key
+        // or by a device that is active *at this point* in the log, so a removed
+        // device can never sign again
         let signer_pk = if se.signer == ACCOUNT_SIGNER {
             match (&body.entry, i) {
                 (EntryKind::Genesis { account_pk, .. }, 0) => crypto::decode32(account_pk)?,
@@ -373,6 +454,7 @@ pub fn verify_log(
                 m.grants.entry(new_epoch).or_default().extend(grants);
             }
         }
+        // the next entry must name the hash of this entry's exact stored bytes
         prev = crypto::sha256_hex(raw);
         m.len = i + 1;
         m.head = prev.clone();
@@ -393,6 +475,8 @@ pub fn verify_log(
     Ok(m)
 }
 
+/// Grants of a new epoch: only to `allowed` recipients, for `epoch`, and always
+/// including the recovery key, so no epoch can become unrecoverable.
 fn check_grants(
     i: u64,
     grants: &[KeyGrant],

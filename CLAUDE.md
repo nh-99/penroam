@@ -35,6 +35,21 @@ When a user-visible feature lands or changes, update the README's usage section 
 change. If the UI changed, also regenerate the screenshots with `tools/screenshots/capture.sh`.
 Never describe features that do not exist yet as available.
 
+## Code documentation
+
+The crates are free software, and outside readers should be able to understand them from the
+source. When writing or changing code:
+
+* Give every module a `//!` header. Say what the module is for, how it works, the invariants
+  that matter (durability ordering, security properties, merge rules), and link the relevant
+  doc in `docs/`.
+* Give every public item a `///` comment: what it does, when to use it, what its errors mean.
+  Library crates enable `#![warn(missing_docs)]`.
+* Add inline comments where the reasoning isn't obvious from the code. Explain *why*, not
+  *what*.
+* Keep it concise and accurate; never document behaviour that doesn't exist.
+* `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` must pass.
+
 ## Commits
 
 Use the repository's configured git identity. Add no `Co-Authored-By` or other attribution

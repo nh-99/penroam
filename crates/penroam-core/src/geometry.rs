@@ -1,35 +1,61 @@
 //! Rust port of the shared brush geometry (reference implementation:
 //! `tests/fixtures/generate-fixtures.mjs`, golden: `geometry-golden.json`).
 //! Used by the annotated-PDF exporter so exported ink matches on-screen ink.
+//! The TypeScript renderer, the Kotlin and Swift native modules implement the
+//! same rules and are tested against the same golden file.
 
 use crate::model::InkPoint;
 
+/// One drawable segment of a stroke. A stroke of n ≥ 3 points becomes a line
+/// from the first point to the first midpoint, quadratic curves through each
+/// inner point (between neighbouring midpoints), and a line from the last
+/// midpoint to the last point; 1 point is a dot, 2 points a line. Each piece
+/// has one width, from the pressure of its controlling point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Piece {
+    /// A round dot (single-sample stroke).
     Dot {
+        /// Centre x.
         x: f64,
+        /// Centre y.
         y: f64,
+        /// Diameter.
         width: f64,
     },
+    /// A straight segment with round caps.
     Line {
+        /// Start x.
         x0: f64,
+        /// Start y.
         y0: f64,
+        /// End x.
         x1: f64,
+        /// End y.
         y1: f64,
+        /// Stroke width.
         width: f64,
     },
+    /// A quadratic Bézier segment with round caps.
     Quad {
+        /// Start x (midpoint before the control point).
         x0: f64,
+        /// Start y.
         y0: f64,
+        /// Control point x (the sample).
         cx: f64,
+        /// Control point y.
         cy: f64,
+        /// End x (midpoint after the control point).
         x1: f64,
+        /// End y.
         y1: f64,
+        /// Stroke width.
         width: f64,
     },
 }
 
 impl Piece {
+    /// The piece's stroke width.
     pub fn width(&self) -> f64 {
         match *self {
             Piece::Dot { width, .. } | Piece::Line { width, .. } | Piece::Quad { width, .. } => {
@@ -48,6 +74,7 @@ pub fn width_for(base: f64, pressure: f64, pressure_enabled: bool) -> f64 {
     (base * (0.4 + 1.2 * p)).max(0.5)
 }
 
+/// Number of pieces for a stroke of `n` points.
 pub fn piece_count(n: usize) -> usize {
     match n {
         0 => 0,
@@ -56,6 +83,8 @@ pub fn piece_count(n: usize) -> usize {
     }
 }
 
+/// Piece `k` of the stroke `pts` (see [`Piece`]); `base` is the nominal
+/// width and `pe` whether pressure modulates it.
 pub fn piece(pts: &[InkPoint], k: usize, base: f64, pe: bool) -> Piece {
     let n = pts.len();
     let w = |p: &InkPoint| width_for(base, p.pressure, pe);
@@ -107,6 +136,7 @@ pub fn piece(pts: &[InkPoint], k: usize, base: f64, pe: bool) -> Piece {
     }
 }
 
+/// Every piece of a stroke, in order.
 pub fn stroke_pieces(pts: &[InkPoint], base: f64, pe: bool) -> Vec<Piece> {
     (0..piece_count(pts.len()))
         .map(|k| piece(pts, k, base, pe))

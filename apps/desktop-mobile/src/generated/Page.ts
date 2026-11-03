@@ -5,12 +5,52 @@ import type { PdfBackgroundRef } from "./PdfBackgroundRef";
 import type { Size } from "./Size";
 import type { Template } from "./Template";
 
-export type Page = { schemaVersion: number, id: string, paper: Paper, 
+/**
+ * One page: size, background and elements (ink, text, images) in z order.
+ * Stored as a binary `.prp` file (see [`crate::binary`]).
+ */
+export type Page = { 
+/**
+ * [`PAGE_SCHEMA_VERSION`] when written by this build.
+ */
+schemaVersion: number, 
+/**
+ * Stable random id.
+ */
+id: string, 
+/**
+ * Size class (the actual size is [`Page::size`]).
+ */
+paper: Paper, 
 /**
  * Displayed page size in points (for PDF pages: the rotated crop box).
  */
-size: Size, template: Template, background?: PdfBackgroundRef, 
+size: Size, 
+/**
+ * Background pattern.
+ */
+template: Template, 
+/**
+ * PDF page rendered under the elements, for imported PDFs.
+ */
+background?: PdfBackgroundRef, 
 /**
  * Incremented once per applied operation batch.
  */
-revision: number, createdAt: number, updatedAt: number, elements: Array<Element>, metadata?: Record<string, unknown>, };
+revision: number, 
+/**
+ * Creation time (informational).
+ */
+createdAt: number, 
+/**
+ * Last change (informational).
+ */
+updatedAt: number, 
+/**
+ * Ink strokes, text blocks and images. Drawn in order of (`z`, id).
+ */
+elements: Array<Element>, 
+/**
+ * Application metadata (free-form, preserved).
+ */
+metadata?: Record<string, unknown>, };

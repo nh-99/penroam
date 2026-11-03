@@ -41,6 +41,8 @@ impl Writer {
         self.u32(u32::try_from(s.len()).unwrap_or(u32::MAX));
         self.0.extend_from_slice(s.as_bytes());
     }
+    /// Dependencies in canonical order (by device id bytes, then sequence),
+    /// so the same set always encodes the same bytes whatever the wire order.
     fn deps(&mut self, h: &EnvelopeHeader) {
         let deps = h.sorted_depends_on();
         self.u32(u32::try_from(deps.len()).unwrap_or(u32::MAX));

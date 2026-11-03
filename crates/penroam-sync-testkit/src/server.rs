@@ -119,6 +119,7 @@ struct Account {
 }
 
 impl Account {
+    /// Recomputes the dedup indexes from the log (after loading from disk).
     fn rebuild_indexes(&mut self) {
         self.by_op.clear();
         self.by_device_seq.clear();
@@ -314,6 +315,8 @@ impl InMemoryServer {
         }
     }
 
+    /// Locks the state, recovering from poisoning (a panicking test thread
+    /// must not wedge every later request).
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -549,6 +552,11 @@ impl InMemoryServer {
         })
     }
 
+    /// Validates and stores one pushed envelope under the account lock, in
+    /// this order: header validation, the header names the authenticated
+    /// device, ciphertext length/hash, dedup by op id (identical → duplicate,
+    /// different → `op_id_conflict`), reused (device, sequence), quota; then it
+    /// assigns the next gap-free `server_seq`.
     fn accept(
         acct: &mut Account,
         device: &DeviceId,
@@ -603,6 +611,7 @@ impl InMemoryServer {
         Ok(AckResult::Accepted { server_seq: seq })
     }
 
+    /// A cursor for "after `position`" in this account's op stream.
     fn mint(&self, account: &AccountId, position: u64) -> Cursor {
         cursor::mint(
             &self.secret,
@@ -615,6 +624,8 @@ impl InMemoryServer {
         )
     }
 
+    /// Verifies a client cursor (MAC, account/stream/version binding, bounds,
+    /// retention floor) and returns its position.
     fn open_cursor(
         &self,
         account: &AccountId,

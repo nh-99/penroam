@@ -238,6 +238,8 @@ fn body_limit(ctx: &Ctx, method: &str, path: &str) -> u64 {
     }
 }
 
+/// Serves one connection: read one request, route it, apply any injected
+/// delay, then write the response (or close silently for a dropped one).
 fn handle(ctx: &Ctx, stream: TcpStream, peer: SocketAddr) {
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
@@ -294,6 +296,9 @@ fn http_err(code: ErrorCode, msg: &str, request_id: &str) -> Box<Response> {
     Box::new(Response::error(ErrorBody::new(code, msg, request_id)))
 }
 
+/// Parses the request line and headers, then reads a `Content-Length` body
+/// after checking it against the route's size limit (so oversized bodies are
+/// refused before they are read).
 fn read_request(ctx: &Ctx, stream: &TcpStream, rid: &str) -> Result<Request, Box<Response>> {
     let mut reader = BufReader::new(stream);
     let mut head = Vec::new();
@@ -395,6 +400,8 @@ fn parse_json<T: DeserializeOwned>(req: &Request, rid: &str) -> Result<T, Box<Re
     })
 }
 
+/// Maps an [`InMemoryServer`] result to HTTP: errors become `ErrorBody`
+/// responses, and a simulated lost response closes the connection.
 fn api<T>(r: Result<T, RequestError>, ok: impl FnOnce(T) -> Response) -> Outcome {
     match r {
         Ok(v) => Outcome::Respond(ok(v)),
@@ -453,6 +460,8 @@ fn route(ctx: &Ctx, req: Request, peer: SocketAddr, rid: &str) -> Outcome {
     }
 }
 
+/// Dispatches by method and path; checks auth (account vs device tokens) and
+/// restricts `/_test/*` to loopback peers.
 fn route_inner(
     ctx: &Ctx,
     req: &Request,

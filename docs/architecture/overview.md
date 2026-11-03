@@ -25,11 +25,11 @@ crates/penroam-sync-protocol    public sync wire contract: versions, ids, limits
 crates/penroam-sync-testkit     development test server (in memory / persisted, HTTP, fault injection) + fixture generator
 crates/penroam-sync             sync client: crypto, key log, operation log, transports, reconcile engine, dev CLI
 plugins/tauri-plugin-native-ink NativeInkSurface: Rust bridge, android/ (Kotlin), ios/ (Swift/UIKit)
-android/  ios/                  native ink modules: BooxInkView (Kotlin), InkKit (Swift), BenchHost (iPad test harness)
+android/  ios/                  native ink modules used by the plugin: BooxInkView (Kotlin, Gradle root for its tests), InkKit (Swift)
 tests/fixtures/                 shared fixtures (strokes, geometry and text-layout goldens, scenes, PDF, .prp golden, legacy libraries)
 fuzz/                           cargo-fuzz targets (page decoder, journal open, sync batch frame)
 tools/linux-e2e/                XTest input driver + session runner for real-app E2E on Linux
-reference/  docs/          (benchmarks/ = local, git-ignored benchmark output)
+tools/  docs/                   dev tools, documentation (benchmarks/ = local, git-ignored benchmark output)
 ```
 
 ## 2. Data ownership

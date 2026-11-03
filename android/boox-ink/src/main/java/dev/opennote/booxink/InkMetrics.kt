@@ -7,8 +7,7 @@ import org.json.JSONObject
 
 /**
  * Benchmark instrumentation for the native module. Event names follow
- * docs/benchmarks/protocol.md sections 11.1/11.2 so results can be merged with the
- * Flutter and Tauri recorders.
+ * docs/benchmarks/protocol.md so results can be merged with the web recorder.
  *
  * All internal timing uses SystemClock.elapsedRealtimeNanos() (monotonic).
  * Onyx TouchPoint.timestamp uses a firmware-dependent epoch; it is only used

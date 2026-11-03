@@ -1,5 +1,21 @@
-//! Cryptographic building blocks. **Not independently reviewed**
-//! (`security_review_pending`): see `docs/security/threat-model.md`.
+//! Cryptographic building blocks for sync. **Not independently reviewed**
+//! (`security_review_pending`): see `docs/security/threat-model.md`. The exact
+//! constructions are specified in `docs/protocol/sync-protocol-v1.md` §13–§15,
+//! and `tests/vectors.rs` pins their output byte for byte.
+//!
+//! Key hierarchy, from the top:
+//!
+//! * [`RootSecret`] — 32 random bytes shown to the user once as the recovery
+//!   code. It derives the *account signing key* (signs the key-log genesis and
+//!   recovery enrollments) and the *recovery key-agreement key* (every epoch
+//!   key is also wrapped to it). Devices never store it.
+//! * [`EpochKey`] — a random content key per epoch, shared with member devices
+//!   through the key log ([`crate::keylog`]). Per-notebook payload keys, blob
+//!   keys, routing aliases and blob ids are derived from it with HKDF/HMAC, so
+//!   the server never learns notebook ids.
+//! * [`DeviceKeys`] — each sync device's Ed25519 signing key and X25519
+//!   key-agreement key, kept only in the platform secret store
+//!   ([`crate::secrets`]).
 //!
 //! Primitives (all from audited RustCrypto / dalek crates):
 //! * Ed25519 signatures (`ed25519-dalek`) for device envelopes and key-log entries.
@@ -23,38 +39,55 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+/// Length of every symmetric key and of the root secret, in bytes.
 pub const KEY_LEN: usize = 32;
+/// XChaCha20-Poly1305 nonce length (prefixed to every ciphertext).
 pub const NONCE_LEN: usize = 24;
+/// Poly1305 authentication tag length (suffixed to every ciphertext).
 pub const TAG_LEN: usize = 16;
 
+/// Failures of the primitives in this module. Messages are safe to show to the
+/// user; they never contain key material.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CryptoError {
+    /// The recovery code has a wrong prefix, length, character or checksum.
     #[error("the recovery code is not valid (check for typos)")]
     BadRecoveryCode,
+    /// AEAD decryption failed: the ciphertext or its associated data was
+    /// altered, or the key is wrong. Never distinguish the two to callers.
     #[error("authentication failed: the data was altered or the key is wrong")]
     Decrypt,
+    /// An Ed25519 signature did not verify (or was not 64 bytes).
     #[error("signature verification failed")]
     BadSignature,
+    /// Key material could not be decoded (wrong length or encoding).
     #[error("malformed key material: {0}")]
     Malformed(&'static str),
+    /// The OS random number generator returned an error. Nothing is
+    /// generated from a weaker source.
     #[error("the operating system random generator failed")]
     Random,
 }
 
+/// `N` bytes from the operating system CSPRNG (`getrandom`).
 pub fn random_bytes<const N: usize>() -> Result<[u8; N], CryptoError> {
     let mut b = [0u8; N];
     getrandom::getrandom(&mut b).map_err(|_| CryptoError::Random)?;
     Ok(b)
 }
 
+/// SHA-256 digest.
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 
+/// SHA-256 digest as 64 lowercase hex characters (the protocol's hash format).
 pub fn sha256_hex(data: &[u8]) -> String {
     penroam_sync_protocol::hex::encode(&sha256(data))
 }
 
+/// HKDF-SHA256 expanded to 32 bytes. Every caller uses a distinct `info`
+/// label so derived keys for different purposes are independent.
 fn hkdf32(ikm: &[u8], salt: &[u8], info: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     Hkdf::<Sha256>::new(Some(salt), ikm)
@@ -63,6 +96,8 @@ fn hkdf32(ikm: &[u8], salt: &[u8], info: &[u8]) -> [u8; 32] {
     out
 }
 
+/// HMAC-SHA256 over length-prefixed parts. The `u64` length prefix keeps the
+/// encoding unambiguous: `("ab", "c")` and `("a", "bc")` give different MACs.
 fn hmac32(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut m = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("any key length");
     for p in parts {
@@ -84,10 +119,12 @@ const B32: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const CODE_PREFIX: &str = "PRK1";
 
 impl RootSecret {
+    /// A new random root secret (account creation).
     pub fn generate() -> Result<Self, CryptoError> {
         Ok(Self(random_bytes()?))
     }
 
+    /// Wraps existing bytes (tests and vectors; real code parses a recovery code).
     pub fn from_bytes(b: [u8; KEY_LEN]) -> Self {
         Self(b)
     }
@@ -179,13 +216,21 @@ impl RootSecret {
 // ----------------------------------------------------------- device keys --
 
 /// A sync device's long-term keys. Stored only in the platform secret store.
+///
+/// The sync device is created at enrollment and is distinct from the local
+/// library's device id; its id appears in envelope headers and key-log
+/// certificates.
 pub struct DeviceKeys {
+    /// Hyphenated lowercase UUID identifying this sync device.
     pub device_id: String,
+    /// Signs envelopes and this device's key-log entries.
     pub signing: SigningKey,
+    /// Receives epoch keys wrapped to this device.
     pub dh: x25519_dalek::StaticSecret,
 }
 
 impl DeviceKeys {
+    /// Fresh random keys for a new sync device.
     pub fn generate(device_id: String) -> Result<Self, CryptoError> {
         Ok(Self {
             device_id,
@@ -194,10 +239,12 @@ impl DeviceKeys {
         })
     }
 
+    /// Ed25519 public key (what other devices verify signatures with).
     pub fn sign_pk(&self) -> [u8; 32] {
         self.signing.verifying_key().to_bytes()
     }
 
+    /// X25519 public key (what epoch keys are wrapped to).
     pub fn dh_pk(&self) -> [u8; 32] {
         x25519_dalek::PublicKey::from(&self.dh).to_bytes()
     }
@@ -212,6 +259,7 @@ impl DeviceKeys {
         )
     }
 
+    /// Parses [`DeviceKeys::to_secret_string`] output.
     pub fn from_secret_string(s: &str) -> Result<Self, CryptoError> {
         let mut it = s.lines();
         let id = it
@@ -233,6 +281,7 @@ impl DeviceKeys {
     }
 }
 
+/// Decodes unpadded base64url that must be exactly 32 bytes (public keys).
 pub fn decode32(s: &str) -> Result<[u8; 32], CryptoError> {
     base64url::decode(s)
         .ok()
@@ -269,10 +318,15 @@ pub fn short_auth_string(account_pk: &[u8; 32], device_fp: &str) -> String {
     format!("{:03} {:03}", n / 1000, n % 1000)
 }
 
+/// Ed25519 signature over `domain ‖ msg`. The domain prefix keeps a signature
+/// made for one purpose (key-log entry) from being valid for another
+/// (envelope); envelopes pass an empty domain because their canonical bytes
+/// already start with their own domain string.
 pub fn sign(key: &SigningKey, domain: &[u8], msg: &[u8]) -> [u8; 64] {
     key.sign(&[domain, msg].concat()).to_bytes()
 }
 
+/// Verifies a [`sign`] signature; [`CryptoError::BadSignature`] on any mismatch.
 pub fn verify(pk: &[u8; 32], domain: &[u8], msg: &[u8], sig: &[u8]) -> Result<(), CryptoError> {
     let vk = VerifyingKey::from_bytes(pk).map_err(|_| CryptoError::Malformed("public key"))?;
     let sig = ed25519_dalek::Signature::from_slice(sig).map_err(|_| CryptoError::BadSignature)?;
@@ -283,10 +337,15 @@ pub fn verify(pk: &[u8; 32], domain: &[u8], msg: &[u8], sig: &[u8]) -> Result<()
 // ------------------------------------------------------------ content keys --
 
 /// A content epoch key (random, shared with member devices through the key log).
+///
+/// A new epoch starts whenever a device is removed, so the removed device
+/// cannot read *new* writes. Old epochs stay readable to every device that
+/// had them.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct EpochKey(pub [u8; KEY_LEN]);
 
 impl EpochKey {
+    /// A new random epoch key.
     pub fn generate() -> Result<Self, CryptoError> {
         Ok(Self(random_bytes()?))
     }
@@ -348,6 +407,8 @@ pub fn seal(key: &[u8; KEY_LEN], nonce_context: &[u8], aad: &[u8], plaintext: &[
     out
 }
 
+/// Decrypts [`seal`] output. Returns [`CryptoError::Decrypt`] if the data,
+/// the associated data or the key do not match; nothing partial is returned.
 pub fn open(key: &[u8; KEY_LEN], aad: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     if data.len() < NONCE_LEN + TAG_LEN {
         return Err(CryptoError::Decrypt);
@@ -386,6 +447,8 @@ pub fn wrap_to(
     Ok([eph_pk.as_slice(), &nonce, &ct].concat())
 }
 
+/// Reverses [`wrap_to`] with the recipient's X25519 secret. The `context` must
+/// be the same bytes used when wrapping (it is bound as associated data).
 pub fn unwrap_with(
     dh: &x25519_dalek::StaticSecret,
     context: &[u8],

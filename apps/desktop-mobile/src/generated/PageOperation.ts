@@ -2,4 +2,27 @@
 import type { Element } from "./Element";
 import type { Template } from "./Template";
 
-export type PageOperation = { opId: string, } & ({ "op": "addElements", elements: Array<Element>, } | { "op": "removeElements", ids: Array<string>, } | { "op": "replaceElements", elements: Array<Element>, } | { "op": "setTemplate", template: Template, });
+/**
+ * One operation inside a batch.
+ */
+export type PageOperation = { 
+/**
+ * Stable id (becomes the journaled operation's id).
+ */
+opId: string, } & ({ "op": "addElements", 
+/**
+ * Elements to append.
+ */
+elements: Array<Element>, } | { "op": "removeElements", 
+/**
+ * Ids to remove.
+ */
+ids: Array<string>, } | { "op": "replaceElements", 
+/**
+ * New versions; each id must exist.
+ */
+elements: Array<Element>, } | { "op": "setTemplate", 
+/**
+ * The new template.
+ */
+template: Template, });

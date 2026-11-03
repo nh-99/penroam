@@ -6,11 +6,27 @@ import type { InkTool } from "./InkTool";
  * One handwritten stroke. `points` are the original input samples (after the
  * CSS px → document pt mapping); smoothing is derived at render time.
  */
-export type InkStroke = { id: string, z: number, tool: InkTool, 
+export type InkStroke = { 
+/**
+ * Stable id.
+ */
+id: string, 
+/**
+ * Stacking position.
+ */
+z: number, 
+/**
+ * Pen or highlighter.
+ */
+tool: InkTool, 
 /**
  * `#rrggbb`.
  */
-color: string, opacity: number, 
+color: string, 
+/**
+ * 0..1; highlighters are translucent.
+ */
+opacity: number, 
 /**
  * Nominal width in points (stroke document `brush.width`).
  */

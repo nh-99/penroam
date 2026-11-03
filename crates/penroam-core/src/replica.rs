@@ -66,11 +66,15 @@ impl<T: Clone> Register<T> {
     fn new(w: Write<T>) -> Self {
         Self { heads: vec![w] }
     }
+    /// Adds a write: every head the writer had seen is superseded (dropped);
+    /// heads it had not seen are concurrent and stay as alternates.
     fn write(&mut self, w: Write<T>) {
         self.heads.retain(|h| !dominated(h.key, w.key, &w.frontier));
         let at = self.heads.partition_point(|h| h.id < w.id);
         self.heads.insert(at, w);
     }
+    /// The visible value: the concurrent head with the highest operation id
+    /// (an arbitrary but identical choice on every replica).
     fn winner(&self) -> &Write<T> {
         self.heads.last().expect("a register always has a write")
     }
@@ -96,6 +100,8 @@ struct ElementState {
 }
 
 impl ElementState {
+    /// The element as shown: content from the content winner, overlaid with
+    /// the placement and style winners (field groups merge independently).
     fn materialize(&self) -> Element {
         let mut e = (*self.content.winner().value).clone();
         take_group(&mut e, &self.placement.winner().value, groups::PLACEMENT);
@@ -132,38 +138,55 @@ struct NotebookState {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConflictTarget {
+    /// Concurrent renames.
     NotebookTitle,
+    /// Concurrent cover changes.
     NotebookCover,
+    /// Concurrent trash and restore of the notebook.
     NotebookTrash,
+    /// Concurrent moves of one page.
     #[serde(rename_all = "camelCase")]
     PageOrder {
+        /// The page.
         page_id: Uuid,
     },
+    /// Concurrent template changes of one page.
     #[serde(rename_all = "camelCase")]
     PageTemplate {
+        /// The page.
         page_id: Uuid,
     },
+    /// Concurrent trash and restore of one page.
     #[serde(rename_all = "camelCase")]
     PageTrash {
+        /// The page.
         page_id: Uuid,
     },
     /// Concurrent writes of one field group (see [`groups`]).
     #[serde(rename_all = "camelCase")]
     Element {
+        /// The page.
         page_id: Uuid,
+        /// The element.
         element_id: Uuid,
+        /// The [`groups`] bit in conflict.
         group: u8,
     },
+    /// Concurrent delete and restore of one element.
     #[serde(rename_all = "camelCase")]
     ElementTrash {
+        /// The page.
         page_id: Uuid,
+        /// The element.
         element_id: Uuid,
     },
     /// The element is deleted, but an edit the deleting device had not
     /// seen exists; the alternate holds the edited element.
     #[serde(rename_all = "camelCase")]
     EditedWhileDeleted {
+        /// The page.
         page_id: Uuid,
+        /// The element.
         element_id: Uuid,
     },
 }
@@ -172,38 +195,57 @@ pub enum ConflictTarget {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Conflict {
+    /// What is in conflict.
     pub target: ConflictTarget,
+    /// Operation whose value is shown (highest id, or add-wins for trash state).
     pub winner: OperationId,
+    /// Every other concurrent value, kept until a later write supersedes them.
     pub alternates: Vec<Alternate>,
 }
 
+/// One retained value of a conflict.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Alternate {
+    /// The operation that wrote it.
     pub op_id: OperationId,
+    /// The value (title string, template, element JSON, `true`/`false` for trash state).
     pub value: serde_json::Value,
 }
 
+/// Result of applying an operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Applied {
+    /// The operation was new and is now part of the replica.
     New,
     /// Same id and identical body seen before (retry): nothing changed.
     Duplicate,
 }
 
+/// Why an operation was not merged (the replica is unchanged).
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum MergeError {
+    /// Invalid body, failed precondition or newer schema.
     #[error(transparent)]
     Op(#[from] OpError),
+    /// The id was already applied with a different body (corruption or a bug).
     #[error("operation id {0} was already used for a different operation")]
     OpIdReuse(OperationId),
+    /// Another operation already used this (device, sequence).
     #[error("device {device} sequence {seq} was already used by another operation")]
-    SequenceReuse { device: DeviceId, seq: u64 },
+    SequenceReuse {
+        /// The device.
+        device: DeviceId,
+        /// The reused sequence.
+        seq: u64,
+    },
     /// Not applicable yet: something it depends on is missing (keep it).
     #[error("waiting for {0:?}")]
     MissingDependency(OperationRef),
+    /// The operation belongs to another notebook.
     #[error("operation is for notebook {0}, not this replica")]
     WrongNotebook(Uuid),
+    /// The operation is device-local by design (e.g. `notebookPurged`).
     #[error("{0} is local-only and is not merged")]
     LocalOnly(&'static str),
 }
@@ -212,21 +254,31 @@ pub enum MergeError {
 #[derive(Debug, Clone)]
 pub struct Replica {
     notebook_id: Uuid,
+    /// Highest applied sequence per device.
     frontier: Frontier,
+    /// Applied ids → (device, sequence) and content fingerprint (dedup).
     applied: HashMap<OperationId, (OpKey, u32, usize)>,
+    /// (device, sequence) → id, to reject sequence reuse.
     by_key: HashMap<OpKey, OperationId>,
+    /// `None` until `notebookCreated` is applied.
     notebook: Option<NotebookState>,
+    /// Referenced assets (a grow-only set; references are never removed).
     assets: BTreeMap<String, Asset>,
+    /// Every page ever created (trashed pages stay, with `alive = false`).
     pages: BTreeMap<Uuid, PageState>,
+    /// Latest `at` of any applied operation (informational).
     updated_at: Timestamp,
 }
 
+/// Cheap identity of an operation's full content, kept per applied id so a
+/// retry (same id, same content) is recognised without storing every body.
 fn fingerprint(op: &LocalOperation) -> (u32, usize) {
     let bytes = serde_json::to_vec(op).expect("operation serialises");
     (crc32fast::hash(&bytes), bytes.len())
 }
 
 impl Replica {
+    /// An empty replica; the notebook exists once its `notebookCreated` is applied.
     pub fn new(notebook_id: Uuid) -> Self {
         Self {
             notebook_id,
@@ -240,8 +292,10 @@ impl Replica {
         }
     }
 
-    /// Highest contiguous sequence applied per device (the frontier a new
-    /// local operation would depend on).
+    /// Highest applied sequence per device (the frontier a new local operation
+    /// would depend on). With [`Replica::apply`] it is contiguous; with
+    /// [`Replica::apply_delivered`] a device's sequences may have gaps here
+    /// (they belong to other notebooks).
     pub fn frontier(&self) -> Vec<OperationRef> {
         self.frontier
             .iter()
@@ -252,6 +306,7 @@ impl Replica {
             .collect()
     }
 
+    /// Whether an operation id has been applied.
     pub fn contains(&self, id: OperationId) -> bool {
         self.applied.contains_key(&id)
     }

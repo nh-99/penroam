@@ -11,13 +11,12 @@ Design: [`architecture/overview.md`](architecture/overview.md).
 apps/desktop-mobile/   Tauri app (Vue frontend in src/, Rust shell in src-tauri/)
 crates/                penroam-core · penroam-storage · penroam-pdf · penroam-sync-protocol · penroam-sync-testkit · penroam-sync
 plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters)
-android/               BooxInkView (Onyx Pen SDK module) + native reference app
-ios/                   InkKit (Swift ink core, Pencil surface) + BenchHost (iPad test harness)
+android/               BooxInkView (Onyx Pen SDK module used by the native ink plugin)
+ios/                   InkKit (Swift ink core and Pencil surface used by the native ink plugin)
 tests/fixtures/        geometry/text goldens, benchmark scenes, PDF fixture, .prp golden, legacy libraries
 fuzz/                  cargo-fuzz targets
 benchmarks/            raw benchmark output (local only, git-ignored)
-tools/                 Linux E2E driver, BOOX check script, .penroam comparison
-reference/             framework-evaluation prototypes kept as regression baselines
+tools/                 Linux E2E driver, BOOX check script, .penroam comparison, screenshots, font metrics
 docs/                  architecture, formats, protocol, platforms, development, README images
 ```
 

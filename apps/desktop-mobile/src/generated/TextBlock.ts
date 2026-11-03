@@ -6,4 +6,44 @@ import type { TextAlign } from "./TextAlign";
  * [`crate::text`]. `height` is kept in sync with the laid-out content by the
  * editor; renderers grow it if needed and never clip text.
  */
-export type TextBlock = { id: string, z: number, x: number, y: number, width: number, height: number, text: string, fontSize: number, color: string, align: TextAlign, };
+export type TextBlock = { 
+/**
+ * Stable id.
+ */
+id: string, 
+/**
+ * Stacking position.
+ */
+z: number, 
+/**
+ * Left edge in points.
+ */
+x: number, 
+/**
+ * Top edge in points.
+ */
+y: number, 
+/**
+ * Wrapping width in points.
+ */
+width: number, 
+/**
+ * Box height in points (see the type docs).
+ */
+height: number, 
+/**
+ * Plain text; `\n` starts a new line.
+ */
+text: string, 
+/**
+ * Font size in points.
+ */
+fontSize: number, 
+/**
+ * `#rrggbb`.
+ */
+color: string, 
+/**
+ * Line alignment.
+ */
+align: TextAlign, };

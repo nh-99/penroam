@@ -69,7 +69,9 @@ pub struct EnvelopeHeader {
     /// Exact ciphertext length in bytes.
     pub ciphertext_length: u64,
     /// Device signature over [`crate::canonical_signing_bytes`], unpadded
-    /// base64url. Not verified yet (device signatures are not implemented).
+    /// base64url (Ed25519 in the Penroam client). Servers do not verify it —
+    /// they do not hold the account's membership log; receiving clients verify
+    /// it before decrypting (see the `penroam-sync` crate).
     pub signature: String,
 }
 
@@ -327,7 +329,8 @@ pub fn sha256_hex(data: &[u8]) -> String {
 
 /// Verify `ciphertext` against the header's declared length and SHA-256.
 /// This is integrity only (transport corruption, buggy clients); it is not
-/// authentication — that is the device signature (not implemented yet).
+/// authentication: authenticity comes from the device signature, which
+/// receiving clients check.
 pub fn verify_ciphertext(header: &EnvelopeHeader, ciphertext: &[u8]) -> Result<(), IntegrityError> {
     let actual = ciphertext.len() as u64;
     if actual != header.ciphertext_length {

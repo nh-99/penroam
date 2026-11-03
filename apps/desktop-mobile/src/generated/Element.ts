@@ -3,4 +3,7 @@ import type { ImageElement } from "./ImageElement";
 import type { InkStroke } from "./InkStroke";
 import type { TextBlock } from "./TextBlock";
 
+/**
+ * Something drawn on a page. JSON-tagged by `type`.
+ */
 export type Element = { "type": "ink" } & InkStroke | { "type": "text" } & TextBlock | { "type": "image" } & ImageElement;
