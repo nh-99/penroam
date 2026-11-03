@@ -6,6 +6,21 @@
 //! content URI that the user chose in a system file dialog (passed through
 //! `tauri-plugin-fs`, which also handles Android `content://` URIs).
 
+// Release builds must not contain DEBUG/TRACE `log` records: the sync HTTP client logs raw
+// requests (bearer tokens included) at TRACE. The cap comes from the `log` feature
+// `release_max_level_info` in Cargo.toml; this fails the build if it is ever lost.
+#[cfg(not(debug_assertions))]
+const _: () = assert!(
+    matches!(
+        log::STATIC_MAX_LEVEL,
+        log::LevelFilter::Off
+            | log::LevelFilter::Error
+            | log::LevelFilter::Warn
+            | log::LevelFilter::Info
+    ),
+    "release builds must compile out DEBUG/TRACE logging"
+);
+
 mod bench;
 mod commands;
 mod sync;

@@ -134,9 +134,21 @@ cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a login https://syn
 cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a create https://sync.example -
 ```
 
-The CLI keeps its sessions in `<profile>/sessions.json` (mode 0600). Never enable TRACE logging
-for `ureq`/`ureq_proto` in a program that uses this crate: that HTTP library hex-dumps requests,
-bearer tokens included, at TRACE level.
+The CLI keeps its sessions in `<profile>/sessions.json` (mode 0600).
+
+**Logging and credentials.** The HTTP library the client uses (`ureq`) hex-dumps raw requests,
+bearer tokens included, at TRACE level. Programs that use `penroam-sync` and install a logger
+must:
+
+* cap every target in `penroam_sync_protocol::redact::HTTP_CLIENT_LOG_TARGETS` at INFO in code
+  (`is_http_client_target`), so no `RUST_LOG` value can lift it;
+* pass each formatted line through `redact::scrub_line` as a backstop: it redacts `Bearer`
+  values, JWTs, recovery codes and prefixed tokens, and drops byte-dump lines (a token split
+  across a dump cannot be recognised piece by piece).
+
+The app compiles DEBUG/TRACE `log` records out of release builds (`release_max_level_info` on
+`log` in `apps/desktop-mobile/src-tauri/Cargo.toml`); a compile-time assertion in `lib.rs`
+fails the release build if that cap is lost. The app installs no logger today.
 
 Tests: `cargo test -p penroam-sync` runs the convergence and fault-injection scenarios
 (`tests/sync.rs`), the randomized three-device convergence test (`tests/random.rs`, slow in

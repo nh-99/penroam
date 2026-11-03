@@ -15,6 +15,8 @@
 //! * request/response DTOs and the HTTP routes, media types and headers
 //!   ([`dto`], [`routes`]),
 //! * sign-in and session DTOs for servers with real accounts ([`auth`]),
+//! * keeping credentials out of logs: HTTP-library log targets to cap and a
+//!   line scrubber ([`redact`]),
 //! * normalized error codes and a deterministic retry policy ([`error`]),
 //! * the contract manifest and fixture helpers ([`contract`]).
 //!
@@ -37,6 +39,7 @@ pub mod framing;
 pub mod hex;
 pub mod ids;
 pub mod limits;
+pub mod redact;
 pub mod routes;
 pub mod version;
 

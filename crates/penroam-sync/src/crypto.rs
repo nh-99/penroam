@@ -487,6 +487,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generated_recovery_codes_are_fully_redacted_by_the_log_scrubber() {
+        use penroam_sync_protocol::redact::{scrub_line, Scrubbed};
+        for _ in 0..50 {
+            let code = RootSecret::generate().unwrap().recovery_code();
+            let line = format!("user typed {code} into the box");
+            let Scrubbed::Redacted(out) = scrub_line(&line, &[]) else {
+                panic!("not redacted: {line}");
+            };
+            assert_eq!(out, "user typed PRK1-[redacted] into the box");
+            // also when typed lower-case with spaces
+            let typed = code.to_lowercase().replace('-', " ");
+            assert!(
+                matches!(scrub_line(&typed, &[]), Scrubbed::Redacted(o) if !o.contains(&typed[5..15]))
+            );
+        }
+    }
+
+    #[test]
     fn recovery_code_round_trip_and_typos() {
         let r = RootSecret::from_bytes([7; 32]);
         let code = r.recovery_code();

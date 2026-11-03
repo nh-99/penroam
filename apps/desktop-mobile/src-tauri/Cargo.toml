@@ -14,6 +14,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
+# Not used directly: this compiles every DEBUG/TRACE `log` record out of release builds, in all
+# crates. The HTTP client used for sync (ureq) dumps raw requests, bearer tokens included, at
+# TRACE; with this cap no logger or RUST_LOG setting can bring that back in a shipped app.
+log = { version = "0.4", features = ["release_max_level_info"] }
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
