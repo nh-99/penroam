@@ -369,3 +369,98 @@ fn corrupt_persistent_blob_is_detected() {
     std::fs::write(path, b"tampered").unwrap();
     assert!(InMemoryServer::open_persistent(dir.path()).is_err());
 }
+
+#[test]
+fn checkpoint_records_are_validated_and_never_move_backwards() {
+    use penroam_sync_protocol::CheckpointRecord;
+    let s = InMemoryServer::new();
+    let a = acct("acct-cp");
+    s.create_account(&a);
+    s.register_device_keys(&a, &reg(Some("dev-a"), 1)).unwrap();
+    let d = dev("dev-a");
+    assert_eq!(code(s.checkpoint_latest(&a, &d)), ErrorCode::NotFound);
+    s.push(&a, &d, &batch(&[op(1, "dev-a"), op(2, "dev-a")]))
+        .unwrap();
+    let page = s
+        .pull(
+            &a,
+            &d,
+            &PullOpsRequest {
+                cursor: None,
+                limit: 10,
+            },
+        )
+        .unwrap();
+    let cursor = page.response.next_cursor.clone();
+    let bytes = vec![7u8; 64];
+    let rec = CheckpointRecord {
+        covers_cursor: cursor.clone(),
+        covers_server_seq: 2,
+        blob_id: blob("b-checkpoint"),
+        blob_sha256: sha256_hex(&bytes),
+        blob_length: 64,
+        key_epoch: 1,
+        created_by: d.clone(),
+        signature: base64url::encode(&[0u8; 64]),
+    };
+    // the blob must exist first, with the declared hash and length
+    assert_eq!(code(s.checkpoint_put(&a, &d, &rec)), ErrorCode::NotFound);
+    s.blob_put(&a, &d, &rec.blob_id, &rec.blob_sha256, &bytes)
+        .unwrap();
+    let mut wrong = rec.clone();
+    wrong.blob_length = 63;
+    assert_eq!(
+        code(s.checkpoint_put(&a, &d, &wrong)),
+        ErrorCode::IntegrityMismatch
+    );
+    // the cursor must match covers_server_seq; the creator must be the caller
+    let mut wrong = rec.clone();
+    wrong.covers_server_seq = 1;
+    assert_eq!(
+        code(s.checkpoint_put(&a, &d, &wrong)),
+        ErrorCode::ValidationFailed
+    );
+    let mut wrong = rec.clone();
+    wrong.created_by = dev("dev-b");
+    assert_eq!(code(s.checkpoint_put(&a, &d, &wrong)), ErrorCode::Forbidden);
+    s.checkpoint_put(&a, &d, &rec).unwrap();
+    assert_eq!(s.checkpoint_latest(&a, &d).unwrap(), rec);
+    // an older checkpoint cannot replace a newer one
+    let first = s
+        .pull(
+            &a,
+            &d,
+            &PullOpsRequest {
+                cursor: None,
+                limit: 1,
+            },
+        )
+        .unwrap();
+    let mut older = rec.clone();
+    older.covers_cursor = first.response.next_cursor.clone();
+    older.covers_server_seq = 1;
+    assert_eq!(code(s.checkpoint_put(&a, &d, &older)), ErrorCode::Conflict);
+    // compaction to the checkpoint expires older cursors
+    assert_eq!(s.compact_to_latest_checkpoint(&a), 2);
+    assert_eq!(
+        code(s.pull(
+            &a,
+            &d,
+            &PullOpsRequest {
+                cursor: Some(first.response.next_cursor),
+                limit: 10
+            }
+        )),
+        ErrorCode::CursorExpired
+    );
+    assert!(s
+        .pull(
+            &a,
+            &d,
+            &PullOpsRequest {
+                cursor: Some(cursor),
+                limit: 10
+            }
+        )
+        .is_ok());
+}

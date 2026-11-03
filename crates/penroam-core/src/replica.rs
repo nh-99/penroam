@@ -112,6 +112,9 @@ impl ElementState {
 
 #[derive(Debug, Clone)]
 struct PageState {
+    /// Create operation whose immutable fields (`created_at`, `paper`,
+    /// `size`, `background`) are used: the highest id among the creates.
+    creator: OperationId,
     created_at: Timestamp,
     paper: Paper,
     size: Size,
@@ -126,6 +129,9 @@ struct PageState {
 
 #[derive(Debug, Clone)]
 struct NotebookState {
+    /// Create operation whose `created_at`/`defaults` are used: the highest id
+    /// among the creates.
+    creator: OperationId,
     created_at: Timestamp,
     defaults: PageDefaults,
     title: Register<String>,
@@ -199,6 +205,9 @@ pub struct Conflict {
     pub target: ConflictTarget,
     /// Operation whose value is shown (highest id, or add-wins for trash state).
     pub winner: OperationId,
+    /// The value that is shown (same JSON shapes as [`Alternate::value`]), so
+    /// a resolution UI can present both sides without reading the page.
+    pub winner_value: serde_json::Value,
     /// Every other concurrent value, kept until a later write supersedes them.
     pub alternates: Vec<Alternate>,
 }
@@ -413,21 +422,14 @@ impl Replica {
         use DocumentOperation::*;
         let pre = |m: String| Err(OpError::Precondition(m));
         match body {
-            NotebookCreated { .. } => {
-                if self.notebook.is_some() {
-                    return pre("notebook was already created".into());
-                }
-                return Ok(());
-            }
+            // A second create of the same id (a re-joining device seeding its
+            // copy, or one archive imported on two devices) is merged, not
+            // rejected: rejecting would make the result depend on which create
+            // a replica happened to apply first.
+            NotebookCreated { .. } => return Ok(()),
             _ if self.notebook.is_none() => return Err(OpError::NoNotebook(self.notebook_id)),
-            PageCreated {
-                page_id,
-                background,
-                ..
-            } => {
-                if self.pages.contains_key(page_id) {
-                    return pre(format!("page {page_id} was already created"));
-                }
+            PageCreated { background, .. } => {
+                // a repeated create merges (see NotebookCreated above)
                 if let Some(bg) = background {
                     if !self.assets.contains_key(&bg.asset_hash) {
                         return pre(format!("asset {} is not referenced", bg.asset_hash));
@@ -496,7 +498,22 @@ impl Replica {
                 defaults,
                 ..
             } => {
+                if let Some(nb) = self.notebook.as_mut() {
+                    // repeated create: its values are concurrent register writes
+                    // (identical values produce no conflict); immutable fields
+                    // come from the highest create id, whatever the order
+                    nb.title.write(w.of(title.trim().to_string()));
+                    nb.cover.write(w.of(cover.to_lowercase()));
+                    nb.alive.write(w.of(true));
+                    if w.id > nb.creator {
+                        nb.creator = w.id;
+                        nb.created_at = at;
+                        nb.defaults = defaults.clone();
+                    }
+                    return;
+                }
                 self.notebook = Some(NotebookState {
+                    creator: w.id,
                     created_at: at,
                     defaults: defaults.clone(),
                     title: Register::new(w.of(title.trim().to_string())),
@@ -532,9 +549,25 @@ impl Replica {
                 background,
                 ..
             } => {
+                if let Some(p) = self.pages.get_mut(page_id) {
+                    // repeated create: merge like NotebookCreated
+                    p.key.write(w.of(order_key.clone()));
+                    p.template.write(w.of(template.clone()));
+                    p.alive.write(w.of(true));
+                    if w.id > p.creator {
+                        p.creator = w.id;
+                        p.created_at = at;
+                        p.paper = *paper;
+                        p.size = *size;
+                        p.background = background.clone();
+                    }
+                    p.updated_at = p.updated_at.max(at);
+                    return;
+                }
                 self.pages.insert(
                     *page_id,
                     PageState {
+                        creator: w.id,
                         created_at: at,
                         paper: *paper,
                         size: *size,
@@ -701,12 +734,20 @@ impl Replica {
     pub fn conflicts(&self) -> Vec<Conflict> {
         let mut out = Vec::new();
         if let Some(s) = &self.notebook {
-            reg_conflict(&mut out, ConflictTarget::NotebookTitle, &s.title, |v| {
-                serde_json::json!(v)
-            });
-            reg_conflict(&mut out, ConflictTarget::NotebookCover, &s.cover, |v| {
-                serde_json::json!(v)
-            });
+            reg_conflict(
+                &mut out,
+                ConflictTarget::NotebookTitle,
+                &s.title,
+                |v| serde_json::json!(v),
+                |a, b| a == b,
+            );
+            reg_conflict(
+                &mut out,
+                ConflictTarget::NotebookCover,
+                &s.cover,
+                |v| serde_json::json!(v),
+                |a, b| a == b,
+            );
             alive_conflict(&mut out, ConflictTarget::NotebookTrash, &s.alive);
         }
         for (pid, p) in &self.pages {
@@ -715,12 +756,14 @@ impl Replica {
                 ConflictTarget::PageOrder { page_id: *pid },
                 &p.key,
                 |v| serde_json::json!(v),
+                |a, b| a == b,
             );
             reg_conflict(
                 &mut out,
                 ConflictTarget::PageTemplate { page_id: *pid },
                 &p.template,
                 |v| serde_json::to_value(v).expect("json"),
+                |a, b| a == b,
             );
             alive_conflict(
                 &mut out,
@@ -742,6 +785,9 @@ impl Replica {
                         },
                         r,
                         |v| serde_json::to_value(&**v).expect("json"),
+                        // e.g. two writes of the same position are not a
+                        // position conflict even if their text differs
+                        |a, b| changed_groups(a, b) & g == 0,
                     );
                 }
                 alive_conflict(
@@ -772,6 +818,8 @@ impl Replica {
                                 element_id: *eid,
                             },
                             winner: alive.id,
+                            // the element is shown as deleted
+                            winner_value: serde_json::json!(false),
                             alternates: vec![Alternate {
                                 op_id: *latest,
                                 value: serde_json::to_value(e.materialize()).expect("json"),
@@ -803,23 +851,30 @@ impl WriteCtx {
     }
 }
 
+/// Reports a register's concurrent heads as a conflict. `same` decides
+/// whether two values are equal *for this register*: element field-group
+/// registers hold whole elements but only their group's fields matter.
 fn reg_conflict<T: Clone>(
     out: &mut Vec<Conflict>,
     target: ConflictTarget,
     r: &Register<T>,
     json: impl Fn(&T) -> serde_json::Value,
+    same: impl Fn(&T, &T) -> bool,
 ) {
-    if r.heads.len() < 2 {
+    // concurrent writes of the same value are not a conflict (for example a
+    // re-seeded copy of content every device already has)
+    if r.heads.len() < 2 || r.heads.iter().all(|h| same(&h.value, &r.winner().value)) {
         return;
     }
     let w = r.winner();
     out.push(Conflict {
         target,
         winner: w.id,
+        winner_value: json(&w.value),
         alternates: r
             .heads
             .iter()
-            .filter(|h| h.id != w.id)
+            .filter(|h| h.id != w.id && !same(&h.value, &w.value))
             .map(|h| Alternate {
                 op_id: h.id,
                 value: json(&h.value),
@@ -836,6 +891,7 @@ fn alive_conflict(out: &mut Vec<Conflict>, target: ConflictTarget, r: &Register<
     out.push(Conflict {
         target,
         winner: w.id,
+        winner_value: serde_json::json!(w.value),
         alternates: r
             .heads
             .iter()

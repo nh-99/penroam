@@ -658,3 +658,224 @@ fn asset_download_that_failed_is_retried_after_a_restart() {
         b"%PDF-1.4 tiny"
     );
 }
+
+#[test]
+fn same_archive_imported_on_two_devices_converges_without_conflicts() {
+    let s = server();
+    let acct = account(&s, "acct-18");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let mut lib = penroam_storage::Library::open(other.path()).unwrap();
+    let (nb, p) = lib
+        .create_notebook("Shared archive", PageDefaults::default(), None)
+        .unwrap();
+    add(
+        &mut lib,
+        nb.id,
+        p.id,
+        (0..3).map(|i| stroke(i, 4.0, "#111111")).collect(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    lib.export_archive(nb.id, &mut bytes, "test").unwrap();
+    for c in [&mut a, &mut b] {
+        let mut copy = std::io::Cursor::new(bytes.get_ref().clone());
+        copy.set_position(0);
+        c.lib.import_archive(copy).unwrap();
+    }
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert_eq!(
+        a.lib.notebook_ids().len(),
+        1,
+        "same id on both devices: one notebook"
+    );
+    assert_eq!(ink_count(&mut a.lib, nb.id), 3);
+    assert!(a.engine.conflicts(nb.id).unwrap().is_empty());
+    assert!(b.engine.conflicts(nb.id).unwrap().is_empty());
+}
+
+#[test]
+fn removed_device_can_rejoin_with_its_old_copy() {
+    let s = server();
+    let acct = account(&s, "acct-19");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Rejoin", PageDefaults::default(), None)
+        .unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    a.engine.remove_device(b.engine.device_id()).unwrap();
+    // B keeps writing locally, then disconnects and pairs again as a new device
+    add(&mut b.lib, nb.id, p.id, vec![stroke(2, 2.0, "#b91c1c")]);
+    let Client {
+        lib,
+        engine,
+        root,
+        server,
+        account,
+        _dir,
+    } = b;
+    engine.disconnect(&root).unwrap();
+    drop(lib);
+    let mut b = common::Client::pair_existing(&server, &account, "b-again", root, _dir, &mut a);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert_eq!(
+        ink_count(&mut a.lib, nb.id),
+        2,
+        "the offline stroke made it after re-joining"
+    );
+    assert!(a.engine.conflicts(nb.id).unwrap().is_empty());
+    let bc = b.engine.conflicts(nb.id).unwrap();
+    assert!(bc.is_empty(), "{bc:#?}");
+}
+
+#[test]
+fn writes_from_a_removed_device_are_refused_even_if_the_server_delivers_them() {
+    use penroam_sync_protocol::framing::encode_json_batch;
+    let s = server();
+    let acct = account(&s, "acct-20");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Team", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut c = Client::paired(&s, &acct, "c", &mut a);
+    b.sync().unwrap();
+    c.sync().unwrap();
+    // C goes offline; B writes before its removal (must still reach C later)
+    c.offline(true);
+    add(&mut b.lib, nb.id, p.id, vec![stroke(1, 1.0, "#15803d")]);
+    b.sync().unwrap();
+    a.engine.remove_device(b.engine.device_id()).unwrap();
+    // after removal B writes again; a misbehaving server stores and relays it
+    add(&mut b.lib, nb.id, p.id, vec![stroke(2, 2.0, "#b91c1c")]);
+    b.engine.prepare(&mut b.lib).unwrap();
+    let sealed = b.engine.seal_pending_for_tests().unwrap();
+    assert_eq!(sealed.len(), 1);
+    let b_dev = penroam_sync_protocol::DeviceId::new(b.engine.device_id().to_string()).unwrap();
+    // an honest server refuses it ...
+    assert!(s
+        .push(
+            &acct,
+            &b_dev,
+            &encode_json_batch(&sealed, &s.limits()).unwrap()
+        )
+        .is_err());
+    // ... a malicious one does not
+    let r = s
+        .push_ignoring_revocation(
+            &acct,
+            &b_dev,
+            &encode_json_batch(&sealed, &s.limits()).unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        r.acks[0].result,
+        penroam_sync_protocol::AckResult::Accepted { .. }
+    ));
+    c.offline(false);
+    c.sync().unwrap();
+    a.sync().unwrap();
+    for d in [&mut a, &mut c] {
+        assert_eq!(
+            ink_count(&mut d.lib, nb.id),
+            1,
+            "pre-removal stroke applied, post-removal refused"
+        );
+        assert_eq!(d.status().quarantined, 1);
+        assert_eq!(d.status().phase, Phase::IntegrityAlert);
+    }
+    assert_eq!(view(&mut a.lib), view(&mut c.lib));
+    assert_eq!(
+        ink_count(&mut b.lib, nb.id),
+        2,
+        "B keeps its own note locally"
+    );
+}
+
+#[test]
+fn long_offline_device_recovers_from_a_checkpoint_after_compaction() {
+    let s = server();
+    let acct = account(&s, "acct-21");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Old", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    // B is away for a long time and keeps writing
+    b.offline(true);
+    add(&mut b.lib, nb.id, p.id, vec![stroke(77, 7.0, "#b91c1c")]);
+    for i in 0..5 {
+        add(&mut a.lib, nb.id, p.id, vec![stroke(i, 1.0, "#111111")]);
+    }
+    a.lib.rename_notebook(nb.id, "Old, renamed").unwrap();
+    a.sync().unwrap();
+    let rec = a.engine.create_checkpoint().unwrap().expect("published");
+    assert!(rec.covers_server_seq > 0);
+    assert!(
+        s.compact_to_latest_checkpoint(&acct) > 0,
+        "history before the checkpoint is gone"
+    );
+    b.offline(false);
+    b.sync().unwrap();
+    assert_ne!(b.status().phase, Phase::RebaseRequired);
+    assert_eq!(b.lib.notebook(nb.id).unwrap().title, "Old, renamed");
+    a.sync().unwrap();
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert_eq!(
+        ink_count(&mut a.lib, nb.id),
+        6,
+        "B's unsent stroke survived and arrived"
+    );
+    assert!(b.status().up_to_date, "{:?}", b.status());
+    // a later change still flows normally after the rebase
+    add(&mut a.lib, nb.id, p.id, vec![stroke(9, 9.0, "#111111")]);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut b.lib, nb.id), 7);
+}
+
+#[test]
+fn checkpoint_from_a_removed_device_is_not_trusted() {
+    let s = server();
+    let acct = account(&s, "acct-22");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Team", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut c = Client::paired(&s, &acct, "c", &mut a);
+    b.sync().unwrap();
+    c.sync().unwrap();
+    c.offline(true);
+    add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    a.sync().unwrap();
+    b.sync().unwrap();
+    b.engine
+        .create_checkpoint()
+        .unwrap()
+        .expect("B publishes a checkpoint");
+    a.engine.remove_device(b.engine.device_id()).unwrap();
+    s.compact_to_latest_checkpoint(&acct);
+    c.offline(false);
+    assert!(c.sync().is_err());
+    assert_eq!(c.status().phase, Phase::IntegrityAlert, "{:?}", c.status());
+    assert_eq!(
+        ink_count(&mut c.lib, nb.id),
+        0,
+        "nothing imported from the untrusted checkpoint"
+    );
+}

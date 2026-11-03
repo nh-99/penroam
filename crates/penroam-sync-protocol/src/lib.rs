@@ -38,11 +38,11 @@ pub mod limits;
 pub mod routes;
 pub mod version;
 
-pub use canonical::{canonical_aad_bytes, canonical_signing_bytes};
+pub use canonical::{canonical_aad_bytes, canonical_checkpoint_bytes, canonical_signing_bytes};
 pub use contract::ContractManifest;
 pub use dto::{
-    AckRequest, AckResult, BlobPutResponse, Cursor, DeviceInfo, DeviceListResponse,
-    DeviceRegistrationRequest, DeviceRegistrationResponse, KeyLogAppendRequest,
+    AckRequest, AckResult, BlobPutResponse, CheckpointRecord, Cursor, DeviceInfo,
+    DeviceListResponse, DeviceRegistrationRequest, DeviceRegistrationResponse, KeyLogAppendRequest,
     KeyLogAppendResponse, KeyLogEntry, KeyLogPage, OpAck, PullOpsRequest, PullOpsResponse,
     PulledOp, PushOpsResponse, ServerMeta, UsageResponse,
 };

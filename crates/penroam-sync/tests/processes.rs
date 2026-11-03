@@ -99,6 +99,17 @@ fn two_processes_pair_and_converge_through_the_http_test_server() {
     assert_eq!(status["upToDate"], true, "{status}");
     assert_eq!(status["securityReviewPending"], true);
 
+    // B falls behind, A publishes a checkpoint, the server compacts, and B
+    // recovers from the checkpoint over HTTP
+    run(&a, &["draw", &nb, "5", "400"]);
+    run(&a, &["sync"]);
+    assert!(run(&a, &["checkpoint"]).starts_with("checkpoint covers"));
+    post(&base, "/_test/compact", r#"{"account":"acct-proc"}"#);
+    run(&b, &["sync"]);
+    let da = run(&a, &["dump"]);
+    assert_eq!(strokes(&da), 55);
+    assert_eq!(run(&b, &["dump"]), da, "recovered from the checkpoint");
+
     // a third process joins with the recovery code alone
     let c = dirs.path().join("device-c");
     run(&c, &["recover", &base, "acct-proc", &code]);

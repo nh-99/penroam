@@ -20,7 +20,7 @@ pub struct Client {
     pub root: PathBuf,
     pub server: Arc<InMemoryServer>,
     pub account: AccountId,
-    _dir: Option<tempfile::TempDir>,
+    pub _dir: Option<tempfile::TempDir>,
 }
 
 pub fn account(server: &InMemoryServer, name: &str) -> AccountId {
@@ -110,6 +110,34 @@ impl Client {
             server: server.clone(),
             account: account.clone(),
             _dir: Some(dir),
+        }
+    }
+
+    /// Pairs an existing library folder (for example after a disconnect).
+    pub fn pair_existing(
+        server: &Arc<InMemoryServer>,
+        account: &AccountId,
+        label: &str,
+        root: PathBuf,
+        dir: Option<tempfile::TempDir>,
+        trusted: &mut Client,
+    ) -> Client {
+        let lib = Library::open(&root).unwrap();
+        let (mut engine, code) = Engine::begin_pairing(
+            setup(&root, account, label),
+            transport(server, account, "pending"),
+            secrets(&root),
+        )
+        .unwrap();
+        trusted.engine.approve_device(&code, label).unwrap();
+        engine.poll_enrollment().unwrap().expect("approved");
+        Client {
+            lib,
+            engine,
+            root,
+            server: server.clone(),
+            account: account.clone(),
+            _dir: dir,
         }
     }
 

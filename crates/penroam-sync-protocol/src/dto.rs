@@ -27,6 +27,9 @@ pub mod capabilities {
     pub const KEYLOG_V1: &str = "keylog.v1";
     /// Encrypted immutable blobs (`PUT`/`GET /v1/blobs/{id}`).
     pub const BLOBS_V1: &str = "blobs.v1";
+    /// Signed checkpoint records (`POST /v1/checkpoints`,
+    /// `GET /v1/checkpoints/latest`).
+    pub const CHECKPOINTS_V1: &str = "checkpoints.v1";
 }
 
 /// `GET /v1/meta` response.
@@ -315,6 +318,36 @@ pub struct KeyLogPage {
     pub entries: Vec<KeyLogEntry>,
     /// Current log length (index the next append must use).
     pub next_index: u64,
+}
+
+/// A checkpoint: an encrypted copy of a device's whole operation history
+/// (stored as a blob), covering the account log up to `covers_cursor`. A
+/// device whose cursor expired after server compaction imports it and
+/// continues pulling from `covers_cursor`.
+///
+/// The server stores only the latest record per account and only accepts a
+/// record whose `covers_server_seq` is not lower than the current one. It
+/// never sees the content. Clients verify `signature` (Ed25519 by
+/// `created_by` over [`crate::canonical::canonical_checkpoint_bytes`]) against
+/// their verified key log before using a checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckpointRecord {
+    /// Server cursor the checkpoint covers (everything before it is included).
+    pub covers_cursor: Cursor,
+    /// Account sequence of the last envelope covered.
+    pub covers_server_seq: u64,
+    /// Blob holding the encrypted checkpoint.
+    pub blob_id: crate::ids::BlobId,
+    /// Lowercase hex SHA-256 of the blob ciphertext.
+    pub blob_sha256: String,
+    /// Length of the blob ciphertext in bytes.
+    pub blob_length: u64,
+    /// Content key epoch the blob is encrypted with.
+    pub key_epoch: u32,
+    /// Device that created and signed the checkpoint.
+    pub created_by: DeviceId,
+    /// Unpadded base64url Ed25519 signature.
+    pub signature: String,
 }
 
 /// `PUT /v1/blobs/{id}` response. Blobs are immutable: the same id with the

@@ -93,6 +93,13 @@ pub struct SyncState {
     /// Blob ids the server confirmed, so assets are uploaded once.
     #[serde(default)]
     pub uploaded_blobs: BTreeSet<String>,
+    /// Highest account sequence of a pulled envelope (what a checkpoint
+    /// created now would cover).
+    #[serde(default)]
+    pub last_server_seq: u64,
+    /// Operation-log length when this device last published a checkpoint.
+    #[serde(default)]
+    pub checkpointed_len: u64,
     /// User paused sync; reconciles do nothing until resumed.
     #[serde(default)]
     pub paused: bool,
@@ -124,6 +131,8 @@ impl SyncState {
             dirty_pages: BTreeSet::new(),
             dirty: BTreeSet::new(),
             uploaded_blobs: BTreeSet::new(),
+            last_server_seq: 0,
+            checkpointed_len: 0,
             paused: false,
             last_success_ms: None,
         }

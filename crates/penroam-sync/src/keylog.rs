@@ -148,6 +148,13 @@ pub enum EntryKind {
         new_epoch: u32,
         /// The new epoch key wrapped to every remaining device and to recovery.
         grants: Vec<KeyGrant>,
+        /// Highest sequence of the removed device the remover had received
+        /// when it removed it. Clients refuse that device's operations above
+        /// it, so a misbehaving server cannot deliver writes it made after
+        /// removal. Absent in entries written before this rule existed (then
+        /// no cutoff is enforced).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_seq: Option<u64>,
     },
 }
 
@@ -232,6 +239,18 @@ pub struct Member {
     pub added_at: u64,
     /// Who signed that entry (device id or [`ACCOUNT_SIGNER`]).
     pub added_by: String,
+    /// For a removed device: its last accepted sequence (see
+    /// [`EntryKind::RemoveDevice`]); operations above it are refused.
+    pub removed_after: Option<u64>,
+}
+
+impl Member {
+    /// Whether an operation with `device_seq` from this device may be applied:
+    /// always for active devices; for removed ones only up to the recorded
+    /// cutoff (or, for old entries without a cutoff, always).
+    pub fn may_write(&self, device_seq: u64) -> bool {
+        self.active || self.removed_after.is_none_or(|last| device_seq <= last)
+    }
 }
 
 /// The verified state of a key log.
@@ -401,6 +420,7 @@ pub fn verify_log(
                         active: true,
                         added_at: 0,
                         added_by: ACCOUNT_SIGNER.into(),
+                        removed_after: None,
                     },
                 );
             }
@@ -428,6 +448,7 @@ pub fn verify_log(
                         active: true,
                         added_at: i,
                         added_by: se.signer.clone(),
+                        removed_after: None,
                     },
                 );
             }
@@ -435,6 +456,7 @@ pub fn verify_log(
                 device_id,
                 new_epoch,
                 grants,
+                last_seq,
             } => {
                 if !m.is_active(&device_id) {
                     return Err(KeyLogError::Invalid(i, "device is not an active member"));
@@ -442,7 +464,9 @@ pub fn verify_log(
                 if new_epoch != m.current_epoch + 1 {
                     return Err(KeyLogError::Invalid(i, "epoch must increase by one"));
                 }
-                m.devices.get_mut(&device_id).unwrap().active = false;
+                let removed = m.devices.get_mut(&device_id).unwrap();
+                removed.active = false;
+                removed.removed_after = last_seq;
                 let remaining: Vec<String> = m
                     .active_devices()
                     .map(|d| d.cert.device_id.clone())
@@ -552,6 +576,7 @@ mod tests {
                     grant(2, &k2, "dev-a", &a.dh_pk()).unwrap(),
                     grant(2, &k2, RECOVERY, &rec_pk).unwrap(),
                 ],
+                last_seq: Some(7),
             },
             "dev-a",
             &a.signing,

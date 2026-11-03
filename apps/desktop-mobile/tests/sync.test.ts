@@ -67,12 +67,15 @@ describe("sync status wording", () => {
   });
 
   it("describes conflicts", () => {
-    const title = { target: { kind: "notebookTitle" as const }, winner: "w", alternates: [{ opId: "o", value: "Other title" }] };
+    const title = { target: { kind: "notebookTitle" as const }, winner: "w", winnerValue: "Shown title", alternates: [{ opId: "o", value: "Other title" }] };
     expect(conflictTitle(title)).toBe("Notebook title");
     expect(conflictValuePreview(title, "Other title")).toBe("Other title");
     expect(resolvable(title)).toBe(true);
-    const el = { target: { kind: "element" as const, pageId: "p", elementId: "e", group: 2 }, winner: "w", alternates: [] };
-    expect(conflictTitle(el)).toMatch(/content/);
+    expect(conflictValuePreview(title, title.winnerValue)).toBe("Shown title");
+    const el = { target: { kind: "element" as const, pageId: "p", elementId: "e", group: 2 }, winner: "w", winnerValue: { type: "text", text: "shown" } as unknown, alternates: [] };
+    expect(conflictTitle(el)).toBe("Text changed on two devices");
+    expect(conflictValuePreview(el, el.winnerValue)).toBe("shown");
+    expect(conflictTitle({ ...el, winnerValue: { type: "ink", points: [] } })).toBe("Handwriting content changed on two devices");
     expect(conflictValuePreview(el, { type: "text", text: "hello" })).toBe("hello");
     expect(resolvable({ ...el, target: { kind: "pageOrder" } })).toBe(false);
   });

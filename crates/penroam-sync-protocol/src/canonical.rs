@@ -25,6 +25,8 @@ use crate::envelope::EnvelopeHeader;
 pub const SIGNING_DOMAIN: &[u8] = b"penroam/envelope/v1\0";
 /// Domain-separation prefix of the AEAD associated-data layout (16 bytes).
 pub const AAD_DOMAIN: &[u8] = b"penroam/aead/v1\0";
+/// Domain prefix of [`canonical_checkpoint_bytes`].
+pub const CHECKPOINT_DOMAIN: &[u8] = b"penroam/checkpoint/v1\0";
 
 struct Writer(Vec<u8>);
 
@@ -120,6 +122,23 @@ pub fn canonical_aad_bytes(h: &EnvelopeHeader) -> Vec<u8> {
     w.str(h.notebook_id.as_str());
     w.u64(h.ciphertext_length);
     w.deps(h);
+    w.0
+}
+
+/// Bytes a device signs for a [`crate::dto::CheckpointRecord`]: the domain
+/// prefix, then every field except `signature` in declaration order, with the
+/// same integer (u64 LE) and string (u32 LE length + UTF-8) encoding as the
+/// envelope layouts.
+pub fn canonical_checkpoint_bytes(r: &crate::dto::CheckpointRecord) -> Vec<u8> {
+    let mut w = Writer(Vec::with_capacity(256));
+    w.0.extend_from_slice(CHECKPOINT_DOMAIN);
+    w.str(r.covers_cursor.as_str());
+    w.u64(r.covers_server_seq);
+    w.str(r.blob_id.as_str());
+    w.str(&r.blob_sha256);
+    w.u64(r.blob_length);
+    w.u64(r.key_epoch.into());
+    w.str(r.created_by.as_str());
     w.0
 }
 

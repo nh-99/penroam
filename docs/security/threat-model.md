@@ -85,12 +85,12 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
 * **Not reviewed** (see status). Constructions are standard but their combination is custom.
 * **Removed devices** keep everything they downloaded and every key of earlier epochs. Removal
   protects only *new* writes (new epoch). Re-encrypting history is not implemented.
-* **Writes by a removed device** after its removal are refused by an honest server. Clients do
-  not refuse them on their own: they accept envelopes signed by any device that was ever a
-  member, because envelopes carry no trustworthy time. A malicious server colluding with a
-  removed device could therefore still deliver that device's new writes (in old epochs) to
-  others. Fixing this needs removal-aware envelope rules (for example, rejecting operations
-  whose causal dependencies include the removal).
+* **Writes by a removed device:** the removal entry records the removed device's last sequence
+  the remover had received (it pulls first), and clients refuse anything above it, so a
+  misbehaving server cannot deliver writes made after removal
+  (`writes_from_a_removed_device_are_refused_even_if_the_server_delivers_them`). The cost: an
+  operation the device uploaded just before removal, but which the remover had not pulled yet,
+  is refused too. The removed device keeps it locally.
 * **Key-log freeze:** the server can withhold new key-log entries (for example, hide a
   removal) from some devices. Detection needs out-of-band comparison or future gossip.
 * **First pairing trust:** a new device learns the account key from the server; the comparison
@@ -119,8 +119,13 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
   identical operation re-sealed under the same key gives identical ciphertext (needed for
   idempotent retries). This reveals equality of retried operations only.
 * **Metadata:** see "What the server sees".
-* **Checkpoints/compaction** are not implemented; a device whose cursor expired stops pulling
-  (`rebaseRequired`) but keeps its data and keeps uploading.
+* **Checkpoints** are vouched for by the member that signed them. A recovering device checks the
+  signer is a current member, plus each operation's sequence and removal cutoff. It cannot
+  check the original author's signature on each operation, because checkpoints carry
+  plaintext records, not the original envelopes. A malicious *current member* could therefore
+  insert forged operations into a checkpoint; member devices are trusted not to. Without any
+  usable checkpoint, a device whose cursor expired stops pulling (`rebaseRequired`) but keeps
+  its data and keeps uploading.
 
 ## Before calling it end-to-end encrypted
 

@@ -16,9 +16,10 @@
 use penroam_sync_protocol::framing::decode_json_batch;
 use penroam_sync_protocol::framing::FrameItem;
 use penroam_sync_protocol::{
-    AckRequest, BlobId, BlobPutResponse, DeviceId, DeviceListResponse, DeviceRegistrationRequest,
-    DeviceRegistrationResponse, ErrorBody, ErrorCode, KeyLogAppendRequest, KeyLogAppendResponse,
-    KeyLogPage, Limits, PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse, ServerMeta,
+    AckRequest, BlobId, BlobPutResponse, CheckpointRecord, DeviceId, DeviceListResponse,
+    DeviceRegistrationRequest, DeviceRegistrationResponse, ErrorBody, ErrorCode,
+    KeyLogAppendRequest, KeyLogAppendResponse, KeyLogPage, Limits, PullOpsRequest, PullOpsResponse,
+    PulledOp, PushOpsResponse, ServerMeta,
 };
 
 /// A transport failure, classified for the retry policy.
@@ -112,6 +113,11 @@ pub trait SyncTransport: Send {
         -> TResult<BlobPutResponse>;
     /// `GET /v1/blobs/{id}`: downloads encrypted asset bytes.
     fn blob_get(&mut self, id: &BlobId) -> TResult<Vec<u8>>;
+    /// `POST /v1/checkpoints`: publish a signed checkpoint record (its blob
+    /// must already be uploaded).
+    fn checkpoint_put(&mut self, rec: &CheckpointRecord) -> TResult<()>;
+    /// `GET /v1/checkpoints/latest`; `None` when the account has none yet.
+    fn checkpoint_latest(&mut self) -> TResult<Option<CheckpointRecord>>;
 }
 
 /// Pairs a pull control document with its frame and rejects a frame whose
@@ -275,6 +281,20 @@ mod in_process {
             self.server
                 .blob_get(&self.account, &self.device, id)
                 .map_err(map)
+        }
+        fn checkpoint_put(&mut self, rec: &CheckpointRecord) -> TResult<()> {
+            self.up()?;
+            self.server
+                .checkpoint_put(&self.account, &self.device, rec)
+                .map_err(map)
+        }
+        fn checkpoint_latest(&mut self) -> TResult<Option<CheckpointRecord>> {
+            self.up()?;
+            match self.server.checkpoint_latest(&self.account, &self.device) {
+                Ok(r) => Ok(Some(r)),
+                Err(RequestError::Api(b)) if b.code == ErrorCode::NotFound => Ok(None),
+                Err(e) => Err(map(e)),
+            }
         }
     }
 }
@@ -555,6 +575,17 @@ mod http {
                 .call()
                 .map_err(net)?;
             Ok(Self::finish(r, 1 << 30)?.2)
+        }
+        fn checkpoint_put(&mut self, rec: &CheckpointRecord) -> TResult<()> {
+            self.post_json::<_, serde_json::Value>(routes::CHECKPOINTS, rec)
+                .map(|_| ())
+        }
+        fn checkpoint_latest(&mut self) -> TResult<Option<CheckpointRecord>> {
+            match self.get_json(routes::CHECKPOINT_LATEST) {
+                Ok(r) => Ok(Some(r)),
+                Err(TransportError::Api(b)) if b.code == ErrorCode::NotFound => Ok(None),
+                Err(e) => Err(e),
+            }
         }
     }
 }

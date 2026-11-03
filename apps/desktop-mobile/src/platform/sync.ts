@@ -71,6 +71,8 @@ export interface ConflictTarget {
 export interface SyncConflict {
   target: ConflictTarget;
   winner: string;
+  /** The value currently shown (same shapes as the alternates' values). */
+  winnerValue: unknown;
   alternates: { opId: string; value: unknown }[];
 }
 

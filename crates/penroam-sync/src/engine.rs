@@ -73,9 +73,10 @@ use penroam_storage::{Library, StorageError};
 use penroam_sync_protocol::framing::{encode_batch, FrameItem};
 use penroam_sync_protocol::version::{negotiate, ProtocolRange, ENVELOPE_VERSION};
 use penroam_sync_protocol::{
-    base64url, canonical_aad_bytes, canonical_signing_bytes, verify_ciphertext, AckRequest,
-    AckResult, BlobId, Cursor, DeviceId, DeviceRegistrationRequest, EnvelopeHeader, ErrorCode,
-    KeyLogAppendRequest, Limits, NotebookRoutingId, OpId, OpRef, PullOpsRequest, RetryPolicy,
+    base64url, canonical_aad_bytes, canonical_checkpoint_bytes, canonical_signing_bytes,
+    verify_ciphertext, AckRequest, AckResult, BlobId, CheckpointRecord, Cursor, DeviceId,
+    DeviceRegistrationRequest, EnvelopeHeader, ErrorCode, KeyLogAppendRequest, Limits,
+    NotebookRoutingId, OpId, OpRef, PullOpsRequest, RetryPolicy,
 };
 use serde::Serialize;
 use uuid::Uuid;
@@ -90,6 +91,10 @@ use crate::transport::{SyncTransport, TransportError};
 
 const DEVICE_SECRET: &str = "sync-device-keys";
 const PULL_PAGE: u32 = 200;
+/// Publish a checkpoint after the operation log grew by this many entries.
+const CHECKPOINT_EVERY: u64 = 500;
+/// Associated data of checkpoint blobs.
+const CHECKPOINT_AAD: &[u8] = b"penroam/checkpoint-blob/v1";
 /// Payload size above which ink operations are split (well below the
 /// default 1 MiB per-op limit after encryption overhead).
 const SPLIT_ABOVE: usize = 512 * 1024;
@@ -697,6 +702,15 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// (It keeps whatever it already downloaded.)
     pub fn remove_device(&mut self, device_id: &str) -> Result<()> {
         self.require_member()?;
+        // Pull first, so the cutoff recorded below covers everything the
+        // device managed to upload before its removal (best effort: if this
+        // fails, the key-log append below fails too or the cutoff is lower).
+        let mut pulled = ReconcileReport::default();
+        if let Err(e) = self.pull(&mut pulled) {
+            self.event(format!("pull before removal failed: {}", short_error(&e)));
+        }
+        let last_seq =
+            parse_uuid(device_id).map(|u| self.store.oplog.frontier.get(&u).copied().unwrap_or(0));
         for attempt in 0..3 {
             self.refresh_keylog()?;
             let m = self.membership.clone().expect("refreshed");
@@ -721,6 +735,7 @@ impl<T: SyncTransport> SyncEngine<T> {
                     device_id: device_id.to_string(),
                     new_epoch,
                     grants,
+                    last_seq,
                 },
                 &self.keys.device_id.clone(),
                 &self.keys.signing,
@@ -1312,6 +1327,27 @@ impl<T: SyncTransport> SyncEngine<T> {
         flush(self, &mut batch, &mut seqs, report)
     }
 
+    /// Test hook: seals every unacknowledged local operation without pushing
+    /// it (to simulate what a removed device would upload).
+    #[doc(hidden)]
+    pub fn seal_pending_for_tests(&mut self) -> Result<Vec<(EnvelopeHeader, Vec<u8>)>> {
+        let mut out = Vec::new();
+        for idx in 0..self.store.oplog.len() {
+            let m = self.store.oplog.entry(idx).meta.clone();
+            if m.origin != Origin::Local || self.store.state.is_acked(m.seq) {
+                continue;
+            }
+            let epoch = m.epoch.unwrap_or(1);
+            let key = self
+                .epoch_keys
+                .get(&epoch)
+                .cloned()
+                .ok_or_else(|| SyncError::Integrity("no key for that epoch".into()))?;
+            out.push(self.seal_local(idx, epoch, &key)?);
+        }
+        Ok(out)
+    }
+
     /// Test hook: only the push step of an exchange.
     #[doc(hidden)]
     pub fn push_for_tests(&mut self, report: &mut ReconcileReport) -> Result<()> {
@@ -1408,17 +1444,30 @@ impl<T: SyncTransport> SyncEngine<T> {
         }
         // the signer must be certified by the verified key log; keys the
         // server returns from /v1/devices are never used for verification.
-        // Removed devices are still accepted here (envelopes carry no
-        // trustworthy time); see the threat model.
         let m = self.membership.as_ref().ok_or(SyncError::NotEnrolled)?;
         let Some(member) = m.devices.get(h.device_id.as_str()) else {
             return Ok(Some("unknown-device"));
         };
         let pk = member.cert.sign_pk()?;
+        let allowed = member.may_write(h.device_seq);
         let sig = base64url::decode(&h.signature).unwrap_or_default();
         if crypto::verify(&pk, b"", &canonical_signing_bytes(h), &sig).is_err() {
             self.phase = Phase::IntegrityAlert;
             self.quarantine(server_seq, h, ct, "bad signature", report)?;
+            return Ok(None);
+        }
+        // a removed device's operations past the cutoff recorded at removal
+        // were written after it was removed: only a misbehaving server would
+        // deliver them, so they are refused regardless of the signature
+        if !allowed {
+            self.phase = Phase::IntegrityAlert;
+            self.quarantine(
+                server_seq,
+                h,
+                ct,
+                "written by a device after it was removed",
+                report,
+            )?;
             return Ok(None);
         }
         if !self.epoch_keys.contains_key(&h.key_epoch) {
@@ -1534,24 +1583,31 @@ impl<T: SyncTransport> SyncEngine<T> {
             },
             &record,
         )?;
-        self.store.state.dirty.insert(nb);
-        if let Some(p) = op.body.content_page() {
-            self.store.state.dirty_pages.insert(format!("{nb}/{p}"));
-        }
-        if let DocumentOperation::PageCreated { page_id, .. } = &op.body {
-            self.store
-                .state
-                .dirty_pages
-                .insert(format!("{nb}/{page_id}"));
-        }
-        if let DocumentOperation::AssetReferenced { asset, .. } = &op.body {
-            self.missing_blobs.insert((nb, asset.sha256.clone()));
-        }
+        self.note_delivered(nb, &op.body);
         report.delivered += 1;
         Ok(true)
     }
 
     /// Parks an envelope under `kind` with a reason (see [`Parked`]).
+    /// Marks what a newly delivered remote operation changes, for `apply`:
+    /// its notebook, the page whose content it edits or creates, and any
+    /// asset whose bytes must be downloaded.
+    fn note_delivered(&mut self, nb: Uuid, body: &DocumentOperation) {
+        self.store.state.dirty.insert(nb);
+        if let Some(p) = body.content_page() {
+            self.store.state.dirty_pages.insert(format!("{nb}/{p}"));
+        }
+        if let DocumentOperation::PageCreated { page_id, .. } = body {
+            self.store
+                .state
+                .dirty_pages
+                .insert(format!("{nb}/{page_id}"));
+        }
+        if let DocumentOperation::AssetReferenced { asset, .. } = body {
+            self.missing_blobs.insert((nb, asset.sha256.clone()));
+        }
+    }
+
     fn park_kind(
         &mut self,
         kind: &str,
@@ -1660,9 +1716,20 @@ impl<T: SyncTransport> SyncEngine<T> {
             return Ok(Some("unknown-device"));
         };
         let pk = member.cert.sign_pk()?;
+        let allowed = member.may_write(p.header.device_seq);
         let sig = base64url::decode(&p.header.signature).unwrap_or_default();
         if crypto::verify(&pk, b"", &canonical_signing_bytes(&p.header), &sig).is_err() {
             self.quarantine(p.server_seq, &p.header, ct, "bad signature", report)?;
+            return Ok(None);
+        }
+        if !allowed {
+            self.quarantine(
+                p.server_seq,
+                &p.header,
+                ct,
+                "written by a device after it was removed",
+                report,
+            )?;
             return Ok(None);
         }
         if !self.epoch_keys.contains_key(&p.header.key_epoch) {
@@ -1676,6 +1743,7 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// all of its envelopes are durable.
     fn pull(&mut self, report: &mut ReconcileReport) -> Result<()> {
         self.pull_done = false;
+        let mut tried_checkpoint = false;
         loop {
             let cursor = match &self.store.state.cursor {
                 Some(c) => {
@@ -1697,6 +1765,15 @@ impl<T: SyncTransport> SyncEngine<T> {
                         ErrorCode::CursorExpired | ErrorCode::CheckpointRequired
                     ) =>
                 {
+                    // The server compacted the history this device still
+                    // needs: recover from the latest checkpoint once, then
+                    // continue from the position it covers.
+                    if !tried_checkpoint {
+                        tried_checkpoint = true;
+                        if self.rebase_from_checkpoint(report)? {
+                            continue;
+                        }
+                    }
                     self.phase = Phase::RebaseRequired;
                     return Err(SyncError::Transport(TransportError::Api(b)));
                 }
@@ -1705,6 +1782,8 @@ impl<T: SyncTransport> SyncEngine<T> {
             let mut unknown_device = false;
             for (item, ct) in page.response.items.iter().zip(page.ciphertexts.iter()) {
                 report.pulled += 1;
+                self.store.state.last_server_seq =
+                    self.store.state.last_server_seq.max(item.server_seq);
                 match self.admit(item.server_seq, &item.header, ct, report)? {
                     None => {}
                     Some("deps") if self.deliverable(&item.header) => {
@@ -1826,7 +1905,203 @@ impl<T: SyncTransport> SyncEngine<T> {
         self.push(report)?;
         self.pull(report)?;
         self.fetch_blobs();
+        // publish a checkpoint now and then so devices that fall far behind
+        // can recover after the server compacts (best effort)
+        let grown = self.store.oplog.len() as u64
+            - self
+                .store
+                .state
+                .checkpointed_len
+                .min(self.store.oplog.len() as u64);
+        if grown >= CHECKPOINT_EVERY
+            && meta.has_capability(penroam_sync_protocol::dto::capabilities::CHECKPOINTS_V1)
+        {
+            if let Err(e) = self.create_checkpoint() {
+                self.event(format!("checkpoint not published: {}", short_error(&e)));
+            }
+        }
         Ok(())
+    }
+
+    /// Publishes a checkpoint: this device's whole operation log (every
+    /// local and remote operation it holds), encrypted with the current
+    /// epoch's checkpoint key, uploaded as a blob, and announced with a
+    /// signed [`CheckpointRecord`] covering the cursor this device has
+    /// durably staged. Returns `None` (nothing published) while envelopes
+    /// are still parked, because the checkpoint would not cover them.
+    ///
+    /// Other devices trust a checkpoint only if a current member signed it;
+    /// the operations inside are vouched for by that signer (see the threat
+    /// model).
+    pub fn create_checkpoint(&mut self) -> Result<Option<CheckpointRecord>> {
+        self.require_member()?;
+        if self.store.parked_count("pending") > 0 {
+            return Ok(None);
+        }
+        let Some(cursor) = self.store.state.cursor.clone() else {
+            return Ok(None);
+        };
+        let cursor = Cursor::new(cursor).map_err(|e| SyncError::Integrity(e.to_string()))?;
+        let (epoch, ek) = self.epoch_for_local()?;
+        // PRCP v1: count, then (u32 meta-json length, meta json, u32 record
+        // length, record) per operation, in log order (which is causal order)
+        let mut plain = b"PRCP".to_vec();
+        plain.extend_from_slice(&1u16.to_le_bytes());
+        plain.extend_from_slice(&(self.store.oplog.len() as u32).to_le_bytes());
+        for idx in 0..self.store.oplog.len() {
+            let mut meta = self.store.oplog.entry(idx).meta.clone();
+            if meta.origin == Origin::Local {
+                // the hash its envelope has (or will have): sealing is deterministic
+                let e = meta.epoch.unwrap_or(epoch);
+                let key = self
+                    .epoch_keys
+                    .get(&e)
+                    .cloned()
+                    .unwrap_or_else(|| ek.clone());
+                let (_, ct) = self.seal_local(idx, e, &key)?;
+                meta.ct = Some(crypto::sha256_hex(&ct));
+            }
+            meta.lib = None;
+            let m = serde_json::to_vec(&meta).expect("meta serializes");
+            let rec = self.store.oplog.record(idx)?;
+            plain.extend_from_slice(&(m.len() as u32).to_le_bytes());
+            plain.extend_from_slice(&m);
+            plain.extend_from_slice(&(rec.len() as u32).to_le_bytes());
+            plain.extend_from_slice(&rec);
+        }
+        let ct = crypto::seal(&ek.checkpoint_key(), b"checkpoint", CHECKPOINT_AAD, &plain);
+        let sha = crypto::sha256_hex(&ct);
+        let blob_id = BlobId::new(ek.blob_id("checkpoint", &crypto::sha256_hex(&plain)))
+            .map_err(|e| SyncError::Invalid(e.to_string()))?;
+        self.transport.blob_put(&blob_id, &sha, &ct)?;
+        let mut rec = CheckpointRecord {
+            covers_cursor: cursor,
+            covers_server_seq: self.store.state.last_server_seq,
+            blob_id,
+            blob_sha256: sha,
+            blob_length: ct.len() as u64,
+            key_epoch: epoch,
+            created_by: did(&self.keys.device_id)?,
+            signature: String::new(),
+        };
+        rec.signature = base64url::encode(&crypto::sign(
+            &self.keys.signing,
+            b"",
+            &canonical_checkpoint_bytes(&rec),
+        ));
+        self.transport.checkpoint_put(&rec)?;
+        self.store.state.checkpointed_len = self.store.oplog.len() as u64;
+        self.store.save()?;
+        self.event(format!(
+            "published a checkpoint of {} operations",
+            self.store.oplog.len()
+        ));
+        Ok(Some(rec))
+    }
+
+    /// Recovers after the server compacted history this device had not
+    /// pulled: verifies the latest checkpoint (signed by a current member,
+    /// blob hash, AEAD), imports every operation it does not have yet in log
+    /// order (each must come from a device allowed to write it and continue
+    /// that device's sequence), then moves the cursor to the position the
+    /// checkpoint covers. Local operations are untouched (and were pushed
+    /// before pulling). Returns false when the account has no checkpoint.
+    fn rebase_from_checkpoint(&mut self, report: &mut ReconcileReport) -> Result<bool> {
+        let Some(rec) = self.transport.checkpoint_latest()? else {
+            return Ok(false);
+        };
+        let m = self.membership.as_ref().ok_or(SyncError::NotEnrolled)?;
+        let signer = m
+            .devices
+            .get(rec.created_by.as_str())
+            .filter(|d| d.active)
+            .ok_or_else(|| {
+                SyncError::Integrity(
+                    "checkpoint signed by a device that is not a current member".into(),
+                )
+            })?;
+        let pk = signer.cert.sign_pk()?;
+        let sig = base64url::decode(&rec.signature).unwrap_or_default();
+        crypto::verify(&pk, b"", &canonical_checkpoint_bytes(&rec), &sig)
+            .map_err(|_| SyncError::Integrity("checkpoint signature does not verify".into()))?;
+        let ek = self
+            .epoch_keys
+            .get(&rec.key_epoch)
+            .cloned()
+            .ok_or_else(|| SyncError::Integrity("no key for the checkpoint's epoch".into()))?;
+        let ct = self.transport.blob_get(&rec.blob_id)?;
+        if ct.len() as u64 != rec.blob_length || crypto::sha256_hex(&ct) != rec.blob_sha256 {
+            return Err(SyncError::Integrity(
+                "checkpoint blob does not match its record".into(),
+            ));
+        }
+        let plain = crypto::open(&ek.checkpoint_key(), CHECKPOINT_AAD, &ct)
+            .map_err(|_| SyncError::Integrity("checkpoint does not decrypt".into()))?;
+        let items = parse_checkpoint(&plain)
+            .ok_or_else(|| SyncError::Integrity("checkpoint is malformed".into()))?;
+        let mut imported = 0usize;
+        for (meta, record) in items {
+            if self.store.oplog.contains(&meta.op) {
+                continue;
+            }
+            let txn = decode_txn(&record)
+                .map_err(|e| SyncError::Integrity(format!("checkpoint operation: {e}")))?;
+            let [op] = txn.ops.as_slice() else {
+                return Err(SyncError::Integrity(
+                    "checkpoint record with several operations".into(),
+                ));
+            };
+            let dev = op.device_id.hyphenated().to_string();
+            let allowed = self
+                .membership
+                .as_ref()
+                .and_then(|m| m.devices.get(&dev))
+                .is_some_and(|d| d.may_write(op.local_sequence));
+            let have = self
+                .store
+                .oplog
+                .frontier
+                .get(&op.device_id)
+                .copied()
+                .unwrap_or(0);
+            if op.id != meta.op
+                || op.device_id != meta.dev
+                || op.local_sequence != meta.seq
+                || !allowed
+                || have + 1 != op.local_sequence
+            {
+                return Err(SyncError::Integrity(
+                    "checkpoint operation fails validation".into(),
+                ));
+            }
+            let nb = op.body.notebook_id();
+            let body = op.body.clone();
+            self.store.oplog.append_buffered(
+                OpMeta {
+                    origin: Origin::Remote,
+                    nb,
+                    op: op.id,
+                    dev: op.device_id,
+                    seq: op.local_sequence,
+                    ct: meta.ct.clone(),
+                    lib: None,
+                    epoch: meta.epoch,
+                },
+                &record,
+            )?;
+            self.note_delivered(nb, &body);
+            imported += 1;
+        }
+        report.delivered += imported;
+        self.store.state.cursor = Some(rec.covers_cursor.as_str().to_string());
+        self.store.state.last_server_seq =
+            self.store.state.last_server_seq.max(rec.covers_server_seq);
+        self.store.save()?;
+        self.drain_pending(report)?;
+        self.event(format!(
+            "recovered from a checkpoint: imported {imported} operations"
+        ));
+        Ok(true)
     }
 
     // ------------------------------------------------------------ apply --
@@ -2300,6 +2575,29 @@ fn split_body(body: DocumentOperation) -> Vec<DocumentOperation> {
         other => return vec![other],
     };
     halves.into_iter().flat_map(split_body).collect()
+}
+
+/// Parses a decrypted checkpoint (`PRCP` v1) into (metadata, record) pairs.
+fn parse_checkpoint(b: &[u8]) -> Option<Vec<(OpMeta, Vec<u8>)>> {
+    let rd_u32 = |b: &[u8], i: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?))
+    };
+    if b.get(..4)? != b"PRCP" || u16::from_le_bytes(b.get(4..6)?.try_into().ok()?) != 1 {
+        return None;
+    }
+    let n = rd_u32(b, 6)? as usize;
+    let mut i = 10;
+    let mut out = Vec::with_capacity(n.min(1 << 16));
+    for _ in 0..n {
+        let ml = rd_u32(b, i)? as usize;
+        let meta: OpMeta = serde_json::from_slice(b.get(i + 4..i + 4 + ml)?).ok()?;
+        i += 4 + ml;
+        let rl = rd_u32(b, i)? as usize;
+        let rec = b.get(i + 4..i + 4 + rl)?.to_vec();
+        i += 4 + rl;
+        out.push((meta, rec));
+    }
+    (i == b.len()).then_some(out)
 }
 
 #[cfg(test)]

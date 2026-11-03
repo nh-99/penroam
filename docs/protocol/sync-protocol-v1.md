@@ -207,7 +207,8 @@ Routes are defined in `penroam_sync_protocol::routes` and frozen for protocol 1.
 | `GET /v1/ops?cursor=..&limit=..` | `PullOpsRequest { cursor?, limit }` | `PullOpsResponse { items: [{server_seq, header}], next_cursor, has_more }` plus a PRSB frame of `PulledOp`s (§8.1) |
 | `POST /v1/acks` | `AckRequest { applied_cursor }` | — |
 | `GET /v1/usage` | — | `UsageResponse` |
-| `/v1/blobs/uploads`, `/v1/blobs/{id}`, `/v1/checkpoints` | constants only | not implemented |
+| `POST /v1/checkpoints`, `GET /v1/checkpoints/latest` | `CheckpointRecord` | 204 / `CheckpointRecord` (§15a) |
+| `/v1/blobs/uploads` | constant only | not implemented (blobs use `PUT /v1/blobs/{id}`) |
 
 The `result` of each op is tagged:
 
@@ -235,7 +236,7 @@ The JSON control document carries the headers. The ciphertexts travel in a PRSB 
 | `conflict` | 409 | no | State conflict. Refresh and decide. |
 | `op_id_conflict` | 409 | no | The op_id or device_seq was reused with different content. This is a local bug or corruption. Do not overwrite. |
 | `recovery_required` | 409 | no | Run the recovery/rebase flow. Preserve unsent ops. |
-| `cursor_expired` | 410 | no | Fetch a checkpoint, then the tail. Checkpoints are not implemented yet: the client stops pulling (`rebaseRequired`) and keeps uploading its own operations. |
+| `cursor_expired` | 410 | no | Fetch the latest checkpoint, import it, then continue from the cursor it covers (§15a). Without a usable checkpoint the client stops pulling (`rebaseRequired`) and keeps uploading its own operations. |
 | `checkpoint_required` | 410 | no | Same as `cursor_expired` |
 | `payload_too_large` | 413 | no | Split the batch or respect the limits. |
 | `invalid_envelope` | 422 | no | The header failed validation. |
@@ -326,6 +327,8 @@ Changing a committed fixture is a wire-visible change. It needs an explicit vers
 | `POST /v1/keylog` | account | `KeyLogAppendRequest` | `KeyLogAppendResponse`; 409 `conflict` when `index` is not the current length |
 | `PUT /v1/blobs/{id}` | device | raw bytes, `Penroam-Content-Sha256: <hex>` | `BlobPutResponse` |
 | `GET /v1/blobs/{id}` | device | — | raw bytes |
+| `POST /v1/checkpoints` | device | `CheckpointRecord` (blob uploaded first) | 204; 409 `conflict` if older than the stored one |
+| `GET /v1/checkpoints/latest` | device | — | `CheckpointRecord`, or 404 `not_found` |
 
 * "Account" tokens identify an account; "device" tokens identify a registered device of it.
   How tokens are obtained is not part of this protocol (the development test server has a
@@ -333,7 +336,7 @@ Changing a committed fixture is a wire-visible change. It needs an explicit vers
 * Every response carries `Penroam-Request-Id`. Errors are an `ErrorBody` with the status of
   §9 and, when `retry_after_ms` is set, `Retry-After` in whole seconds (rounded up).
 * Bodies need `Content-Length`; servers check size limits before reading the body.
-* New capabilities in 1.0: `keylog.v1`, `blobs.v1`. Clients use these routes only when the
+* New capabilities in 1.0: `keylog.v1`, `blobs.v1`, `checkpoints.v1`. Clients use these routes only when the
   capability is listed.
 
 ## 13. Payloads, encryption and signatures (client rules)
@@ -383,7 +386,7 @@ signed over `"penroam/keylog/v1\0" ‖ body_json`. The body is
 |---|---|---|
 | `genesis` (index 0 only) | account key | account public key, recovery public key, first device certificate, epoch 1 key wrapped to that device and to the recovery key |
 | `addDevice` | an active member, or the account key | device certificate (id, Ed25519 and X25519 public keys, label), every epoch key wrapped to it |
-| `removeDevice` | an active member, or the account key | device id, `new_epoch = current + 1`, the new key wrapped to every remaining device and to the recovery key |
+| `removeDevice` | an active member, or the account key | device id, `new_epoch = current + 1`, the new key wrapped to every remaining device and to the recovery key, and `lastSeq`: the removed device's highest sequence the remover had received (it pulls first). Clients refuse that device's operations above `lastSeq`, so a misbehaving server cannot deliver writes it made after removal. Entries without `lastSeq` impose no cutoff |
 
 * The **recovery code** encodes a 32-byte root secret (`PRK1-` + Crockford base32 with a
   2-byte checksum). It derives the account signing key and the recovery X25519 key. Devices do
@@ -407,10 +410,36 @@ Assets are uploaded **before** any operation that references them, encrypted wit
 are idempotent (same id and bytes → `duplicate`). Receivers download, decrypt, verify the
 asset's SHA-256, write it atomically, and only then make it visible.
 
+## 15a. Checkpoints
+
+A checkpoint lets a device that fell behind recover after the server compacted history
+(capability `checkpoints.v1`).
+
+* **Content:** the creator's whole operation log in log order (which is causal order), encoded
+  as `"PRCP" ‖ u16 version (1) ‖ u32 count ‖ (u32 meta-json length ‖ meta json ‖ u32 record
+  length ‖ record)*`. The meta names the operation id, device, sequence, notebook, epoch and the
+  SHA-256 its envelope ciphertext has; the record is the §13 payload.
+* **Encryption:** XChaCha20-Poly1305 with `HKDF(epoch, info = "penroam/checkpoint/v1")`, nonce
+  derived as in §13, associated data `"penroam/checkpoint-blob/v1"`, uploaded as a blob.
+* **Record:** `CheckpointRecord { covers_cursor, covers_server_seq, blob_id, blob_sha256,
+  blob_length, key_epoch, created_by, signature }`, signed with Ed25519 over
+  `canonical_checkpoint_bytes` (domain `"penroam/checkpoint/v1\0"`, then every field except the
+  signature, same integer/string encoding as §5). The server keeps the latest record per
+  account, checks that the blob exists with that hash and length, that the cursor matches
+  `covers_server_seq`, and that records never move backwards. It should compact only up to the
+  latest checkpoint.
+* **Recovery:** on `cursor_expired`/`checkpoint_required` the client fetches the latest record,
+  requires its signer to be a *current* member, verifies the signature, the blob hash and the
+  AEAD, then imports each operation it lacks in order. Each must continue its device's sequence
+  and pass the removal cutoff (§14). The cursor then moves to `covers_cursor`. Local operations
+  are untouched; they were pushed before pulling.
+* **Creation:** clients publish a checkpoint after their log grew by 500 operations (and on
+  demand), but not while envelopes are parked, since those would not be covered.
+
 ## 16. Not implemented yet
 
-* **Checkpoints/snapshots:** `covers_server_seq`, the checkpoint + tail recovery path, and real
-  compaction/retention. The testkit only *simulates* expiry; clients report `rebaseRequired`.
+* **Server retention policy:** real compaction and retention windows belong to the hosted
+  server. The testkit only *simulates* compaction (`/_test/compact`, `/_test/expire-cursors`).
 * **Production server and sign-in:** the private hosted server, real authentication, rate
   limiting and an OpenAPI document. Only the development test server exists.
 * **Independent security review** of §13–§14 and published cross-language `crypto-vectors.json`

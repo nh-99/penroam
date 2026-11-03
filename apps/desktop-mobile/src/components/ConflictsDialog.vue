@@ -52,7 +52,7 @@ async function keep(c: SyncConflict, choose: string) {
           <div class="flex items-start gap-2 rounded-lg bg-surface-2 p-2 epaper:border">
             <div class="min-w-0 flex-1">
               <p class="text-[11px] font-semibold uppercase tracking-wide text-muted">Shown now</p>
-              <p class="whitespace-pre-wrap break-words text-sm">{{ c.target.kind === "notebookTitle" ? currentTitle : "The version currently on the page" }}</p>
+              <p class="whitespace-pre-wrap break-words text-sm">{{ conflictValuePreview(c, c.winnerValue) }}</p>
             </div>
             <Btn v-if="resolvable(c)" variant="outline" @click="keep(c, c.winner)">Keep this version</Btn>
           </div>

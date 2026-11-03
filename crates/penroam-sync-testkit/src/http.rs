@@ -40,6 +40,7 @@
 //! `POST /_test/fail-next {"n", "code"}`, `/_test/drop-next {"n"}`,
 //! `/_test/delay-next {"n", "ms"}`, `/_test/revoke {"account", "device_id"}`,
 //! `/_test/expire-cursors {"account", "server_seq"}`,
+//! `/_test/compact {"account"}` (expire cursors before the latest checkpoint),
 //! `/_test/quota {"account", "quota_bytes": n|null}`.
 
 use std::collections::HashMap;
@@ -55,8 +56,8 @@ use penroam_sync_protocol::routes::{
     MEDIA_JSON, MEDIA_OCTETS,
 };
 use penroam_sync_protocol::{
-    AccountId, AckRequest, BlobId, Cursor, DeviceId, DeviceRegistrationRequest, ErrorBody,
-    ErrorCode, KeyLogAppendRequest, PullOpsRequest,
+    AccountId, AckRequest, BlobId, CheckpointRecord, Cursor, DeviceId, DeviceRegistrationRequest,
+    ErrorBody, ErrorCode, KeyLogAppendRequest, PullOpsRequest,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -528,6 +529,14 @@ fn route_inner(
                 let r: Expire = parse_json(req, rid)?;
                 s.expire_cursors_before(&r.account, r.server_seq);
             }
+            "compact" => {
+                #[derive(serde::Deserialize)]
+                struct Compact {
+                    account: AccountId,
+                }
+                let r: Compact = parse_json(req, rid)?;
+                s.compact_to_latest_checkpoint(&r.account);
+            }
             "quota" => {
                 let r: Quota = parse_json(req, rid)?;
                 s.set_quota(&r.account, r.quota_bytes);
@@ -644,6 +653,17 @@ fn route_inner(
                 None => 0,
             };
             api(s.keylog_get(&account, from), |v| Response::json(200, &v))
+        }
+        ("POST", "/v1/checkpoints") => {
+            let d = need_device()?;
+            let r: CheckpointRecord = parse_json(req, rid)?;
+            api(s.checkpoint_put(&account, &d, &r), |_| Response::empty())
+        }
+        ("GET", "/v1/checkpoints/latest") => {
+            let d = need_device()?;
+            api(s.checkpoint_latest(&account, &d), |v| {
+                Response::json(200, &v)
+            })
         }
         ("POST", "/v1/keylog") => {
             let r: KeyLogAppendRequest = parse_json(req, rid)?;

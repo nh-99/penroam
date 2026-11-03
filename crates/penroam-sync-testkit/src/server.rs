@@ -14,11 +14,11 @@ use penroam_sync_protocol::framing::{decode_json_batch, encode_json_batch};
 use penroam_sync_protocol::hex;
 use penroam_sync_protocol::version::PROTOCOL_MAJOR;
 use penroam_sync_protocol::{
-    verify_ciphertext, AccountId, AckRequest, AckResult, BlobId, BlobPutResponse, Cursor, DeviceId,
-    DeviceInfo, DeviceListResponse, DeviceRegistrationRequest, DeviceRegistrationResponse,
-    EnvelopeHeader, ErrorBody, ErrorCode, KeyLogAppendRequest, KeyLogAppendResponse, KeyLogEntry,
-    KeyLogPage, Limits, OpAck, OpId, ProtocolRange, PullOpsRequest, PullOpsResponse, PulledOp,
-    PushOpsResponse, ServerMeta, UsageResponse,
+    verify_ciphertext, AccountId, AckRequest, AckResult, BlobId, BlobPutResponse, CheckpointRecord,
+    Cursor, DeviceId, DeviceInfo, DeviceListResponse, DeviceRegistrationRequest,
+    DeviceRegistrationResponse, EnvelopeHeader, ErrorBody, ErrorCode, KeyLogAppendRequest,
+    KeyLogAppendResponse, KeyLogEntry, KeyLogPage, Limits, OpAck, OpId, ProtocolRange,
+    PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse, ServerMeta, UsageResponse,
 };
 
 use crate::cursor::{self, CursorError, CursorPayload, STREAM_OPS};
@@ -116,6 +116,9 @@ struct Account {
     blob_data: HashMap<BlobId, Vec<u8>>,
     #[serde(default)]
     blob_bytes: u64,
+    /// Latest checkpoint record (content is an opaque blob).
+    #[serde(default)]
+    checkpoint: Option<CheckpointRecord>,
 }
 
 impl Account {
@@ -370,6 +373,23 @@ impl InMemoryServer {
         }
     }
 
+    /// Simulates compaction up to the latest checkpoint: cursors before the
+    /// position it covers expire (`cursor_expired`), so lagging devices must
+    /// recover from the checkpoint. Returns the new floor (0 = no checkpoint).
+    pub fn compact_to_latest_checkpoint(&self, account: &AccountId) -> u64 {
+        let floor = {
+            let s = self.lock();
+            s.accounts
+                .get(account)
+                .and_then(|a| a.checkpoint.as_ref().map(|c| c.covers_server_seq))
+                .unwrap_or(0)
+        };
+        if floor > 0 {
+            self.expire_cursors_before(account, floor);
+        }
+        floor
+    }
+
     /// Simulate compaction: cursors positioned before `server_seq` now fail
     /// with `cursor_expired`, and a pull without a cursor fails with
     /// `checkpoint_required`.
@@ -451,6 +471,7 @@ impl InMemoryServer {
                 if self.extended {
                     c.push(capabilities::KEYLOG_V1.into());
                     c.push(capabilities::BLOBS_V1.into());
+                    c.push(capabilities::CHECKPOINTS_V1.into());
                 }
                 c
             },
@@ -550,6 +571,43 @@ impl InMemoryServer {
                 .collect();
             Ok(PushOpsResponse { acks })
         })
+    }
+
+    /// **Test only.** Stores envelopes the way a misbehaving server would:
+    /// without checking that the pushing device is still allowed to write
+    /// (revocation is ignored; all other validation still applies). Used to
+    /// show that clients reject writes from removed devices on their own. Not
+    /// persisted and not reachable over HTTP.
+    #[doc(hidden)]
+    pub fn push_ignoring_revocation(
+        &self,
+        account: &AccountId,
+        device: &DeviceId,
+        body: &[u8],
+    ) -> Result<PushOpsResponse, RequestError> {
+        let limits = self.limits;
+        let api = |code: ErrorCode, m: String| RequestError::Api(ErrorBody::new(code, m, "test"));
+        let items: Vec<(EnvelopeHeader, Vec<u8>)> =
+            decode_json_batch(body, &limits).map_err(|e| api(e.error_code(), e.to_string()))?;
+        let mut st = self.lock();
+        let acct = st
+            .accounts
+            .get_mut(account)
+            .ok_or_else(|| api(ErrorCode::NotFound, "no such account".into()))?;
+        let acks = items
+            .into_iter()
+            .map(|(header, ciphertext)| {
+                let op_id = header.op_id.clone();
+                let result = match Self::accept(acct, device, header, ciphertext, &limits) {
+                    Ok(r) => r,
+                    Err((code, message)) => AckResult::Rejected {
+                        error: ErrorBody::new(code, message, "test"),
+                    },
+                };
+                OpAck { op_id, result }
+            })
+            .collect();
+        Ok(PushOpsResponse { acks })
     }
 
     /// Validates and stores one pushed envelope under the account lock, in
@@ -861,6 +919,73 @@ impl InMemoryServer {
                 entries,
                 next_index: acct.keylog.len() as u64,
             })
+        })
+    }
+
+    /// `POST /v1/checkpoints`: stores a checkpoint record after checking that
+    /// it names the authenticated device, that its blob exists with the
+    /// declared hash and length, that its cursor is valid for this account
+    /// and matches `covers_server_seq`, and that it does not move backwards.
+    /// The signature is for clients; the server cannot verify it.
+    pub fn checkpoint_put(
+        &self,
+        account: &AccountId,
+        device: &DeviceId,
+        rec: &CheckpointRecord,
+    ) -> Result<(), RequestError> {
+        self.request(account, Some(device), true, |acct, err| {
+            if &rec.created_by != device {
+                return Err(err(
+                    ErrorCode::Forbidden,
+                    "checkpoint must be created by the authenticated device".into(),
+                ));
+            }
+            match acct.blobs.get(&rec.blob_id) {
+                Some(b) if b.sha256 == rec.blob_sha256 && b.len == rec.blob_length => {}
+                Some(_) => {
+                    return Err(err(
+                        ErrorCode::IntegrityMismatch,
+                        "checkpoint blob hash or length differs".into(),
+                    ))
+                }
+                None => {
+                    return Err(err(
+                        ErrorCode::NotFound,
+                        "upload the checkpoint blob first".into(),
+                    ))
+                }
+            }
+            let pos = self
+                .open_cursor(account, acct, &rec.covers_cursor)
+                .map_err(|(code, m)| err(code, m.into()))?;
+            if pos != rec.covers_server_seq {
+                return Err(err(
+                    ErrorCode::ValidationFailed,
+                    "covers_server_seq does not match covers_cursor".into(),
+                ));
+            }
+            if acct
+                .checkpoint
+                .as_ref()
+                .is_some_and(|c| c.covers_server_seq > rec.covers_server_seq)
+            {
+                return Err(err(ErrorCode::Conflict, "a newer checkpoint exists".into()));
+            }
+            acct.checkpoint = Some(rec.clone());
+            Ok(())
+        })
+    }
+
+    /// `GET /v1/checkpoints/latest`: the latest record, or `not_found`.
+    pub fn checkpoint_latest(
+        &self,
+        account: &AccountId,
+        device: &DeviceId,
+    ) -> Result<CheckpointRecord, RequestError> {
+        self.request(account, Some(device), false, |acct, err| {
+            acct.checkpoint
+                .clone()
+                .ok_or_else(|| err(ErrorCode::NotFound, "no checkpoint yet".into()))
         })
     }
 

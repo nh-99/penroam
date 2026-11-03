@@ -13,6 +13,7 @@
 //! penroam-sync-cli <profile> new-notebook <title>                 # prints the notebook id
 //! penroam-sync-cli <profile> draw <notebook> <count> <x>          # strokes on the first page
 //! penroam-sync-cli <profile> sync                                 # prints the status JSON
+//! penroam-sync-cli <profile> checkpoint                           # publishes a checkpoint
 //! penroam-sync-cli <profile> dump                                 # canonical JSON of the library
 //! ```
 
@@ -219,6 +220,14 @@ fn main() {
             println!("{}", serde_json::to_string(&st).unwrap());
             if let Err(err) = r {
                 die(err);
+            }
+        }
+        "checkpoint" => {
+            let (mut lib, mut e) = open(&p);
+            e.reconcile_owned(&mut lib).unwrap_or_else(|e| die(e));
+            match e.create_checkpoint().unwrap_or_else(|e| die(e)) {
+                Some(r) => println!("checkpoint covers server_seq {}", r.covers_server_seq),
+                None => println!("not published (envelopes still parked)"),
             }
         }
         "dump" => {

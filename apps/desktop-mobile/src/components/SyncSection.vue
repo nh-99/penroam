@@ -172,7 +172,10 @@ async function confirmDisconnect() {
         <div v-if="sync.awaiting && sync.step === 'none'" class="mt-2">
           <Btn variant="outline" @click="sync.step = 'pairing'; sync.pollPairing()">Check for approval</Btn>
         </div>
-        <div class="mt-2 flex flex-wrap gap-2">
+        <p v-if="sync.status?.phase === 'revoked'" class="mt-2 text-xs text-muted">
+          Disconnect below to stop syncing on this device. Your notes stay here; you can set up sync again later.
+        </p>
+        <div v-else class="mt-2 flex flex-wrap gap-2">
           <Btn variant="outline" :disabled="sync.busy" @click="sync.syncNow()"><RefreshCw :size="16" />Sync now</Btn>
           <Btn v-if="sync.status?.phase === 'paused'" variant="outline" @click="sync.pause(false)"><Play :size="16" />Resume</Btn>
           <Btn v-else variant="outline" @click="sync.pause(true)"><Pause :size="16" />Pause</Btn>
@@ -197,14 +200,14 @@ async function confirmDisconnect() {
               <p class="truncate text-sm">{{ d.label || "Unnamed device" }}<span v-if="d.thisDevice" class="text-muted"> (this device)</span><span v-if="!d.active" class="text-muted"> · removed</span></p>
               <p class="font-mono text-[11px] text-muted">{{ d.fingerprint }}</p>
             </div>
-            <button v-if="d.active && !d.thisDevice" class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" :aria-label="`Remove ${d.label}`" @click="removing = d">
+            <button v-if="d.active && !d.thisDevice && sync.status?.phase !== 'revoked'" class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" :aria-label="`Remove ${d.label}`" @click="removing = d">
               <Trash2 :size="16" />
             </button>
           </li>
         </ul>
       </div>
 
-      <div class="space-y-2 rounded-xl border border-line p-3">
+      <div v-if="sync.status?.phase !== 'revoked'" class="space-y-2 rounded-xl border border-line p-3">
         <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">Approve a device</h4>
         <p class="text-xs text-muted">Enter the pairing code shown on the new device.</p>
         <input v-model="approveCode" class="w-full rounded-lg border border-line bg-surface px-2 py-1.5 font-mono text-sm uppercase" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" aria-label="Pairing code" />

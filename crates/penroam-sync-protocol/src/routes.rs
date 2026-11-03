@@ -20,8 +20,11 @@ pub const BLOB_UPLOADS: &str = "/v1/blobs/uploads";
 /// `PUT` upload / `GET` download an encrypted immutable blob (raw bytes;
 /// `PUT` carries [`HEADER_CONTENT_SHA256`]).
 pub const BLOB: &str = "/v1/blobs/{id}";
-/// `POST` advertise / `GET` fetch encrypted checkpoints (not implemented).
+/// `POST` a signed [`crate::dto::CheckpointRecord`] (the encrypted content is
+/// uploaded as a blob first).
 pub const CHECKPOINTS: &str = "/v1/checkpoints";
+/// `GET` the account's latest checkpoint record (404 `not_found` if none).
+pub const CHECKPOINT_LATEST: &str = "/v1/checkpoints/latest";
 /// `POST` per-device applied-cursor acknowledgement ([`crate::AckRequest`]).
 pub const ACKS: &str = "/v1/acks";
 /// `GET` usage counters ([`crate::UsageResponse`]).
@@ -48,7 +51,7 @@ pub const HEADER_HAS_MORE: &str = "Penroam-Has-More";
 pub const HEADER_PROTOCOL: &str = "Penroam-Protocol";
 
 /// Every route, for documentation/compat tests.
-pub const ALL: [&str; 11] = [
+pub const ALL: [&str; 12] = [
     META,
     DEVICES,
     DEVICE,
@@ -60,6 +63,7 @@ pub const ALL: [&str; 11] = [
     ACKS,
     USAGE,
     KEYLOG,
+    CHECKPOINT_LATEST,
 ];
 
 #[cfg(test)]

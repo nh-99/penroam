@@ -17,8 +17,12 @@ export function conflictTitle(c: SyncConflict): string {
       return "Page template";
     case "pageTrash":
       return "Page deleted on one device and restored on another";
-    case "element":
-      return `Element ${GROUPS[c.target.group ?? 0] ?? "properties"} changed on two devices`;
+    case "element": {
+      const v = c.winnerValue as Record<string, unknown> | null;
+      const what = v?.type === "text" ? "Text" : v?.type === "ink" ? "Handwriting" : v?.type === "image" ? "Image" : "Element";
+      if (what === "Text" && c.target.group === 2) return "Text changed on two devices";
+      return `${what} ${GROUPS[c.target.group ?? 0] ?? "properties"} changed on two devices`;
+    }
     case "elementTrash":
       return "Element deleted on one device and restored on another";
     case "editedWhileDeleted":

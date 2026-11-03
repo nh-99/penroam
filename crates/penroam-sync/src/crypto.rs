@@ -366,6 +366,11 @@ impl EpochKey {
         )
     }
 
+    /// Key for checkpoint blobs (a device's whole operation history).
+    pub fn checkpoint_key(&self) -> [u8; KEY_LEN] {
+        hkdf32(&self.0, b"penroam", b"penroam/checkpoint/v1")
+    }
+
     /// Key for encrypted blobs (assets) of a notebook.
     pub fn blob_key(&self, routing_id: &str) -> [u8; KEY_LEN] {
         hkdf32(&self.0, routing_id.as_bytes(), b"penroam/blob/v1")
