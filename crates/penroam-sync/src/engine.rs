@@ -783,6 +783,27 @@ impl<T: SyncTransport> SyncEngine<T> {
         &self.keys.device_id
     }
 
+    /// Obtains a device session from a server with `auth.v1`
+    /// ([`crate::auth::device_session`]): signs the server's challenge with this device's key,
+    /// which never leaves the engine. `access_token` is an account (or older device) session of
+    /// this engine's account. Does not install the new token; call
+    /// `transport_mut().set_token(..)` with it.
+    #[cfg(feature = "http")]
+    pub fn device_session(
+        &mut self,
+        server_url: &str,
+        access_token: &str,
+    ) -> std::result::Result<penroam_sync_protocol::SessionTokens, crate::auth::AuthError> {
+        let instance = self.transport.meta()?.server_instance_id;
+        let account: penroam_sync_protocol::AccountId = self
+            .store
+            .state
+            .account_id
+            .parse()
+            .map_err(|_| crate::auth::AuthError::Provider("invalid account id".into()))?;
+        crate::auth::device_session(server_url, access_token, &account, &self.keys, &instance)
+    }
+
     /// The transport (to refresh a token, or to simulate faults in tests).
     pub fn transport_mut(&mut self) -> &mut T {
         &mut self.transport

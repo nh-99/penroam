@@ -7,7 +7,7 @@
 | `crates/penroam-sync-protocol` | Versions, ids, limits, envelope header and validation, canonical bytes, batch framing, DTOs, error codes, retry policy, contract manifest | `serde`, `serde_json`, `thiserror`, `sha2` only. No `penroam-core`, storage, Tauri, UI or device SDKs |
 | `crates/penroam-sync-testkit` | `InMemoryServer` fake server (test scaffolding, not production), deterministic fixture generator `penroam-sync-fixtures` | the protocol crate, `serde`, `serde_json`, `thiserror`, `sha2`, `uuid` |
 
-There is no network server, authentication or cryptography yet. Signatures and AEAD are not implemented; this document fixes only the bytes they will cover.
+The protocol crate itself contains no cryptography and no network code. It fixes the bytes that signatures and AEAD cover; the client crate implements them (§13).
 
 ## 1. Version numbers
 
@@ -15,7 +15,7 @@ Each number is independent. None is derived from another.
 
 | Constant | Value | Describes |
 |---|---|---|
-| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 0 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
+| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 1 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
 | `ENVELOPE_VERSION` | 1 | Opaque remote container: envelope header, canonical bytes, framing |
 | `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 1 (1) | Encrypted semantic operation payload |
 | `FILE_FORMAT_VERSION` | 1 | Local `.prp` page file |
@@ -27,7 +27,7 @@ Each number is independent. None is derived from another.
 The local-format numbers are copied into the protocol crate on purpose, because it must not depend on storage. They are advertised in `contract-manifest.json`:
 
 ```json
-{ "protocol": {"major": 1, "minor": 0}, "envelope_version": 1,
+{ "protocol": {"major": 1, "minor": 1}, "envelope_version": 1,
   "op_schema": {"min": 1, "max": 1},
   "formats": {"file_format": 1, "journal_format": 1, "archive_format": 2, "notebook_schema": 2, "page_schema": 1},
   "git_sha": null }
@@ -44,7 +44,8 @@ The local-format numbers are copied into the protocol crate on purpose, because 
   * `MalformedRange`: an advertised range has min > max.
 
   Every `Incompatible` maps to `upgrade_required`. The client stops syncing, keeps its outbox and local data, and shows an actionable state. It never "tries anyway".
-* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1`. Clients ignore unknown capabilities.
+* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a). Clients ignore unknown capabilities.
+* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens.
 * Clients must call `Limits::validate()` on advertised limits. They refuse values that are 0 or above the hard maxima.
 * Op schema: servers relay payloads whose `op_schema_version` is newer than they know, because the payload is opaque to them. A client that cannot apply a newer schema calls `EnvelopeHeader::check_op_schema_supported()`. On failure it pauses with `upgrade_required` and keeps the ciphertext. It never drops the operation.
 * Unknown `ErrorCode` strings deserialize to `unknown`, which is treated as not retryable.
@@ -102,7 +103,7 @@ The client generates op ids (for example a hyphenated UUIDv4/v7) and keeps each 
 
 ## 5. Canonical bytes
 
-These are the bytes a device will sign, and the bytes that will be AEAD associated data. **No crypto is implemented yet.** The rules:
+These are the bytes a device signs and the bytes used as AEAD associated data (the signing and encryption are done by the client, §13). The rules:
 
 * A fixed ASCII domain prefix that ends in `\0`. The prefix has no length prefix.
 * Fields always appear in the same fixed order.
@@ -339,6 +340,49 @@ Changing a committed fixture is a wire-visible change. It needs an explicit vers
 * New capabilities in 1.0: `keylog.v1`, `blobs.v1`, `checkpoints.v1`. Clients use these routes only when the
   capability is listed.
 
+## 12a. Sign-in and sessions (`auth.v1`, protocol 1.1)
+
+Servers with real accounts list `auth.v1`. Types are in `penroam_sync_protocol::auth`; the
+client side is `penroam_sync::auth`.
+
+| Route | Token | Request | Response |
+|---|---|---|---|
+| `GET /v1/auth/config` | none | — | `AuthConfig { issuer, client_id, scopes, redirect: "loopback" }` |
+| `POST /v1/auth/session` | none | `SessionRequest { id_token }` | `SessionTokens` (account session) |
+| `POST /v1/auth/refresh` | none | `RefreshRequest { refresh_token }` | `SessionTokens` (same scope) |
+| `POST /v1/auth/logout` | account or device | — | 204 |
+| `POST /v1/auth/device-challenge` | account or device | `DeviceChallengeRequest { device_id }` | `DeviceChallenge { challenge, expires_in_s }` |
+| `POST /v1/auth/device-session` | account or device | `DeviceSessionRequest { device_id, challenge, signature }` | `SessionTokens` (device session) |
+
+`SessionTokens { account_id, device_id?, access_token, expires_in_s, refresh_token }`. Tokens are
+opaque; clients store them in the keychain and never log them.
+
+1. **Provider sign-in (client).** Fetch `{issuer}/.well-known/openid-configuration`; its
+   `issuer` must equal `AuthConfig.issuer`. Run the authorization-code flow with PKCE `S256`
+   (RFC 7636) in the **system browser**, never an embedded web view, with a loopback redirect
+   `http://127.0.0.1:{port}/callback` on a port chosen per attempt (RFC 8252 §7.3). Check
+   `state` on the callback and the ID token's `nonce` after the code exchange.
+2. **Session exchange (server).** The server verifies the ID token's signature against the
+   issuer's JWKS, `iss`, `aud` (= `client_id`), `exp` and `iat`, maps `(iss, sub)` to an
+   account and returns an **account session**. An account session may use `/v1/devices`
+   (register, list), `/v1/keylog`, `/v1/usage` and `/v1/auth/*`. Every other protected route
+   answers 403 `forbidden`.
+3. **Device session.** The device asks for a challenge, signs
+   `canonical_device_auth_bytes(account_id, device_id, challenge, server_instance_id)` with its
+   Ed25519 key, and sends the signature. Layout: domain `"penroam/device-auth/v1\0"`, then the
+   four strings, each as u32 LE length + UTF-8 bytes. The server issues a **device session** only
+   if the challenge is unused and unexpired, the signature verifies against the device's
+   registered signing key, and the device is an **active member of the key log with that same
+   key** (§14). So a stolen account session cannot read or write notes on its own. Fixture:
+   `auth-device-session.signing-bytes.hex`.
+4. **Refresh and revocation.** Access tokens are short-lived. Each refresh token works once and
+   is replaced by the one in the response; presenting a used refresh token revokes the whole
+   session. A device session stops working (refresh included) when the device is revoked or
+   removed from the key log. `unauthenticated` (401) means sign in again; local notes and the
+   outbox are kept.
+
+The development test server does not list `auth.v1`; it keeps its `/_test/session` stub.
+
 ## 13. Payloads, encryption and signatures (client rules)
 
 These rules are implemented in `penroam-sync` (`crypto.rs`, `engine.rs`). **Not independently
@@ -440,8 +484,9 @@ A checkpoint lets a device that fell behind recover after the server compacted h
 
 * **Server retention policy:** real compaction and retention windows belong to the hosted
   server. The testkit only *simulates* compaction (`/_test/compact`, `/_test/expire-cursors`).
-* **Production server and sign-in:** the private hosted server, real authentication, rate
-  limiting and an OpenAPI document. Only the development test server exists.
+* **Production server:** the hosted server is private and not part of this repository. The
+  public side of its sign-in is §12a; the OpenAPI description is
+  [`openapi.yaml`](openapi.yaml) (hand-written; a test checks that it lists every route).
 * **Independent security review** of §13–§14 and published cross-language `crypto-vectors.json`
   (the Rust crate pins its own vectors in tests).
 * **Release tooling:** filling `git_sha` in the contract manifest, and the cross-check test of

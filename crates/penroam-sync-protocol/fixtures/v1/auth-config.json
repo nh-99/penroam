@@ -1,0 +1,10 @@
+{
+  "issuer": "https://login.example.invalid/dex",
+  "client_id": "penroam-app",
+  "scopes": [
+    "openid",
+    "email",
+    "offline_access"
+  ],
+  "redirect": "loopback"
+}

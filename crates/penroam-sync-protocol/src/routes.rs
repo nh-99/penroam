@@ -33,6 +33,20 @@ pub const USAGE: &str = "/v1/usage";
 /// ([`crate::dto::KeyLogPage`], [`crate::dto::KeyLogAppendRequest`]).
 pub const KEYLOG: &str = "/v1/keylog";
 
+/// `GET` sign-in configuration ([`crate::auth::AuthConfig`]). Unauthenticated. Capability
+/// `auth.v1`.
+pub const AUTH_CONFIG: &str = "/v1/auth/config";
+/// `POST` exchange an ID token for an account session. Unauthenticated. Capability `auth.v1`.
+pub const AUTH_SESSION: &str = "/v1/auth/session";
+/// `POST` rotate a refresh token. Unauthenticated (the refresh token is the credential).
+pub const AUTH_REFRESH: &str = "/v1/auth/refresh";
+/// `POST` revoke the caller's session.
+pub const AUTH_LOGOUT: &str = "/v1/auth/logout";
+/// `POST` one-time challenge for a device session.
+pub const AUTH_DEVICE_CHALLENGE: &str = "/v1/auth/device-challenge";
+/// `POST` signed challenge in, device session out.
+pub const AUTH_DEVICE_SESSION: &str = "/v1/auth/device-session";
+
 /// JSON control documents.
 pub const MEDIA_JSON: &str = "application/json";
 /// Framed batches (push bodies, framed pull bodies).
@@ -51,7 +65,7 @@ pub const HEADER_HAS_MORE: &str = "Penroam-Has-More";
 pub const HEADER_PROTOCOL: &str = "Penroam-Protocol";
 
 /// Every route, for documentation/compat tests.
-pub const ALL: [&str; 12] = [
+pub const ALL: [&str; 18] = [
     META,
     DEVICES,
     DEVICE,
@@ -64,6 +78,12 @@ pub const ALL: [&str; 12] = [
     USAGE,
     KEYLOG,
     CHECKPOINT_LATEST,
+    AUTH_CONFIG,
+    AUTH_SESSION,
+    AUTH_REFRESH,
+    AUTH_LOGOUT,
+    AUTH_DEVICE_CHALLENGE,
+    AUTH_DEVICE_SESSION,
 ];
 
 #[cfg(test)]

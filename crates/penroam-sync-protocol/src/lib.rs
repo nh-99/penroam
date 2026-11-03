@@ -14,6 +14,7 @@
 //! * binary batch framing for push/pull bodies ([`framing`]),
 //! * request/response DTOs and the HTTP routes, media types and headers
 //!   ([`dto`], [`routes`]),
+//! * sign-in and session DTOs for servers with real accounts ([`auth`]),
 //! * normalized error codes and a deterministic retry policy ([`error`]),
 //! * the contract manifest and fixture helpers ([`contract`]).
 //!
@@ -25,6 +26,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod auth;
 pub mod base64url;
 pub mod canonical;
 pub mod contract;
@@ -38,6 +40,10 @@ pub mod limits;
 pub mod routes;
 pub mod version;
 
+pub use auth::{
+    canonical_device_auth_bytes, AuthConfig, DeviceChallenge, DeviceChallengeRequest,
+    DeviceSessionRequest, RefreshRequest, SessionRequest, SessionTokens,
+};
 pub use canonical::{canonical_aad_bytes, canonical_checkpoint_bytes, canonical_signing_bytes};
 pub use contract::ContractManifest;
 pub use dto::{

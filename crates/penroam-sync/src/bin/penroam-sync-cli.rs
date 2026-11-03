@@ -1,10 +1,16 @@
 //! Developer tool: one sync profile (library + keys) per directory, driven
 //! from the command line against a sync server over HTTP. Used to run
-//! independent client processes in tests; it talks to the development test
-//! server's `/_test/session` stub for sign-in, so it is not a production
-//! client.
+//! independent client processes in tests. It is not a production client.
+//!
+//! Sign-in: against a server that advertises `auth.v1`, run `login` first
+//! (system browser with PKCE, or `--id-token-file` for automated tests); the
+//! sessions are kept in `<profile>/sessions.json` (mode 0600, refreshed on
+//! every run) and `-` may be given as the account to use the signed-in one.
+//! Against the development test server, its `/_test/session` stub is used.
 //!
 //! ```text
+//! penroam-sync-cli <profile> login <server-url> [--id-token-file <file>]
+//! penroam-sync-cli <profile> logout
 //! penroam-sync-cli <profile> create <server-url> <account>        # prints the recovery code
 //! penroam-sync-cli <profile> pair-begin <server-url> <account>    # prints the pairing code
 //! penroam-sync-cli <profile> pair-approve <code> [label]          # prints the comparison code
@@ -19,8 +25,11 @@
 
 use penroam_core::*;
 use penroam_storage::Library;
+use penroam_sync::auth;
 use penroam_sync::transport::HttpTransport;
-use penroam_sync::{FileSecretStore, Setup, SyncEngine};
+use penroam_sync::{FileSecretStore, Setup, SyncEngine, SyncTransport};
+use penroam_sync_protocol::dto::capabilities;
+use penroam_sync_protocol::SessionTokens;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use uuid::Uuid;
@@ -51,7 +60,67 @@ fn setup(p: &Path, server: &str, account: &str) -> Setup {
     }
 }
 
-fn account_transport(server: &str, account: &str) -> HttpTransport {
+/// Sessions from `login` (servers with `auth.v1`). Tokens are secrets: the
+/// file is created with mode 0600 and never printed.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Sessions {
+    server_url: String,
+    account: SessionTokens,
+    #[serde(default)]
+    device: Option<SessionTokens>,
+}
+
+fn sessions_path(p: &Path) -> PathBuf {
+    p.join("sessions.json")
+}
+
+fn load_sessions(p: &Path) -> Option<Sessions> {
+    let bytes = std::fs::read(sessions_path(p)).ok()?;
+    Some(serde_json::from_slice(&bytes).unwrap_or_else(|e| die(e)))
+}
+
+fn save_sessions(p: &Path, s: &Sessions) {
+    let path = sessions_path(p);
+    let tmp = path.with_extension("tmp");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut f = opts.open(&tmp).unwrap_or_else(|e| die(e));
+    std::io::Write::write_all(&mut f, &serde_json::to_vec(s).unwrap()).unwrap_or_else(|e| die(e));
+    f.sync_all().unwrap_or_else(|e| die(e));
+    std::fs::rename(&tmp, &path).unwrap_or_else(|e| die(e));
+}
+
+/// Refreshes the stored account session (refresh tokens are single-use, so
+/// the rotated pair is saved before it is used).
+fn account_session(p: &Path, server: &str) -> Option<SessionTokens> {
+    let mut s = load_sessions(p)?;
+    if s.server_url != server {
+        die("this profile is signed in to another server; run logout first");
+    }
+    s.account = auth::refresh(server, &s.account.refresh_token).unwrap_or_else(|e| die(e));
+    save_sessions(p, &s);
+    Some(s.account)
+}
+
+/// Resolves the account argument: `-` means the signed-in account.
+fn account_arg(p: &Path, account: &str) -> String {
+    if account != "-" {
+        return account.to_string();
+    }
+    load_sessions(p)
+        .map(|s| s.account.account_id.to_string())
+        .unwrap_or_else(|| die("`-` needs a prior login"))
+}
+
+fn account_transport(p: &Path, server: &str, account: &str) -> HttpTransport {
+    if let Some(s) = account_session(p, server) {
+        if s.account_id.as_str() != account {
+            die("the account argument differs from the signed-in account");
+        }
+        return HttpTransport::new(server, s.access_token);
+    }
     let (token, _) = HttpTransport::test_session(server, account, None).unwrap_or_else(|e| die(e));
     HttpTransport::new(server, token)
 }
@@ -59,21 +128,96 @@ fn account_transport(server: &str, account: &str) -> HttpTransport {
 fn open(p: &Path) -> (Library, SyncEngine<HttpTransport>) {
     let lib = Library::open(lib_dir(p)).unwrap_or_else(|e| die(e));
     let store = penroam_sync::store::SyncStore::open(&lib_dir(p)).unwrap_or_else(|e| die(e));
-    let st = &store.state;
-    let token =
-        match HttpTransport::test_session(&st.server_url, &st.account_id, Some(&st.device_id)) {
-            Ok((t, _)) => t,
-            // not approved/registered for device sessions yet: account session
-            Err(_) => {
-                HttpTransport::test_session(&st.server_url, &st.account_id, None)
-                    .unwrap_or_else(|e| die(e))
-                    .0
-            }
-        };
-    let t = HttpTransport::new(&st.server_url, token);
+    let (server, account, device) = (
+        store.state.server_url.clone(),
+        store.state.account_id.clone(),
+        store.state.device_id.clone(),
+    );
     drop(store);
+    if load_sessions(p).is_some() {
+        // auth.v1: reuse the device session if it still refreshes, else sign
+        // the server's challenge again with the device key (possible once the
+        // device is an active key-log member)
+        let mut s = load_sessions(p).unwrap();
+        if let Some(d) = s.device.take() {
+            if let Ok(t) = auth::refresh(&server, &d.refresh_token) {
+                s.device = Some(t.clone());
+                save_sessions(p, &s);
+                let tr = HttpTransport::new(&server, t.access_token);
+                let e = SyncEngine::open(&lib_dir(p), tr, secrets(p)).unwrap_or_else(|e| die(e));
+                return (lib, e);
+            }
+        }
+        save_sessions(p, &s);
+        let acct = account_session(p, &server).unwrap();
+        let tr = HttpTransport::new(&server, acct.access_token.clone());
+        let mut e = SyncEngine::open(&lib_dir(p), tr, secrets(p)).unwrap_or_else(|e| die(e));
+        if let Ok(t) = e.device_session(&server, &acct.access_token) {
+            e.transport_mut().set_token(t.access_token.clone());
+            let mut s = load_sessions(p).unwrap();
+            s.device = Some(t);
+            save_sessions(p, &s);
+        }
+        return (lib, e);
+    }
+    let token = match HttpTransport::test_session(&server, &account, Some(&device)) {
+        Ok((t, _)) => t,
+        // not approved/registered for device sessions yet: account session
+        Err(_) => {
+            HttpTransport::test_session(&server, &account, None)
+                .unwrap_or_else(|e| die(e))
+                .0
+        }
+    };
+    let t = HttpTransport::new(&server, token);
     let e = SyncEngine::open(&lib_dir(p), t, secrets(p)).unwrap_or_else(|e| die(e));
     (lib, e)
+}
+
+/// `login`: signs in with the server's OpenID Connect provider and stores
+/// the account session.
+fn login(p: &Path, server: &str, id_token_file: Option<&str>) {
+    let meta = HttpTransport::new(server, String::new())
+        .meta()
+        .unwrap_or_else(|e| die(e));
+    if !meta.has_capability(capabilities::AUTH_V1) {
+        die("this server has no sign-in (auth.v1); the test server needs no login");
+    }
+    let id_token = match id_token_file {
+        Some(f) => std::fs::read_to_string(f)
+            .unwrap_or_else(|e| die(e))
+            .trim()
+            .to_string(),
+        None => {
+            let cfg = auth::auth_config(server).unwrap_or_else(|e| die(e));
+            let disc = auth::discover(&cfg.issuer).unwrap_or_else(|e| die(e));
+            let l = auth::BrowserLogin::start(&cfg, &disc).unwrap_or_else(|e| die(e));
+            eprintln!("Open this URL to sign in:\n{}", l.authorize_url());
+            for opener in ["xdg-open", "open"] {
+                if std::process::Command::new(opener)
+                    .arg(l.authorize_url())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+            l.finish(std::time::Duration::from_secs(300))
+                .unwrap_or_else(|e| die(e))
+        }
+    };
+    let account = auth::session_from_id_token(server, &id_token).unwrap_or_else(|e| die(e));
+    println!("{}", account.account_id);
+    save_sessions(
+        p,
+        &Sessions {
+            server_url: server.to_string(),
+            account,
+            device: None,
+        },
+    );
 }
 
 fn view(lib: &mut Library) -> serde_json::Value {
@@ -109,23 +253,41 @@ fn main() {
             .unwrap_or_else(|| die("missing argument"))
     };
     match args[2].as_str() {
+        "login" => {
+            let file = match args.get(4).map(String::as_str) {
+                Some("--id-token-file") => Some(arg(5)),
+                Some(other) => die(format!("unknown option {other}")),
+                None => None,
+            };
+            login(&p, &arg(3), file.as_deref());
+        }
+        "logout" => {
+            if let Some(s) = load_sessions(&p) {
+                for t in [Some(&s.account), s.device.as_ref()].into_iter().flatten() {
+                    let _ = auth::refresh(&s.server_url, &t.refresh_token)
+                        .and_then(|t| auth::logout(&s.server_url, &t.access_token));
+                }
+                std::fs::remove_file(sessions_path(&p)).unwrap_or_else(|e| die(e));
+            }
+            println!("signed out");
+        }
         "create" => {
-            let (server, account) = (arg(3), arg(4));
+            let (server, account) = (arg(3), account_arg(&p, &arg(4)));
             Library::open(lib_dir(&p)).unwrap_or_else(|e| die(e));
             let (_, code) = SyncEngine::create_account(
                 setup(&p, &server, &account),
-                account_transport(&server, &account),
+                account_transport(&p, &server, &account),
                 secrets(&p),
             )
             .unwrap_or_else(|e| die(e));
             println!("{code}");
         }
         "recover" => {
-            let (server, account, code) = (arg(3), arg(4), arg(5));
+            let (server, account, code) = (arg(3), account_arg(&p, &arg(4)), arg(5));
             Library::open(lib_dir(&p)).unwrap_or_else(|e| die(e));
             SyncEngine::enroll_with_recovery(
                 setup(&p, &server, &account),
-                account_transport(&server, &account),
+                account_transport(&p, &server, &account),
                 secrets(&p),
                 &code,
             )
@@ -133,11 +295,11 @@ fn main() {
             println!("enrolled");
         }
         "pair-begin" => {
-            let (server, account) = (arg(3), arg(4));
+            let (server, account) = (arg(3), account_arg(&p, &arg(4)));
             Library::open(lib_dir(&p)).unwrap_or_else(|e| die(e));
             let (_, code) = SyncEngine::begin_pairing(
                 setup(&p, &server, &account),
-                account_transport(&server, &account),
+                account_transport(&p, &server, &account),
                 secrets(&p),
             )
             .unwrap_or_else(|e| die(e));

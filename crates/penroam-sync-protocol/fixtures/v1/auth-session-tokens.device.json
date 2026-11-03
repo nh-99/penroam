@@ -1,0 +1,7 @@
+{
+  "account_id": "acct-fixture-0001",
+  "device_id": "dev-a-3b1f",
+  "access_token": "at_fixture-access-token",
+  "expires_in_s": 900,
+  "refresh_token": "rt_fixture-refresh-token"
+}

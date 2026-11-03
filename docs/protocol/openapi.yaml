@@ -1,0 +1,534 @@
+openapi: 3.1.0
+info:
+  title: Penroam Sync Protocol
+  version: "1.1"
+  description: |
+    HTTP mapping of the Penroam sync protocol (major 1, minor 1). The normative text is
+    sync-protocol-v1.md in this directory; the Rust types are in the penroam-sync-protocol crate.
+    This file is hand-written. A test in crates/penroam-sync-protocol checks that it lists
+    every route the crate defines.
+
+    Every response carries a Penroam-Request-Id header. Errors use the ErrorBody schema with the
+    HTTP status from the error-code table (§9); when retry_after_ms is set, a Retry-After header
+    (whole seconds) is sent too. Bodies need Content-Length. Optional features are gated by the
+    capability strings in ServerMeta.capabilities.
+  license:
+    name: MPL-2.0
+servers:
+  - url: http://127.0.0.1:8787
+    description: Development test server (loopback only)
+security:
+  - bearer: []
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: |
+        Opaque token. "Account" tokens identify an account; "device" tokens identify a device of
+        that account and are accepted everywhere. With auth.v1 they come from /v1/auth/*.
+  parameters:
+    DeviceId:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+    BlobId:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Id" }
+  responses:
+    Error:
+      description: Error envelope
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    NoContent:
+      description: Done
+  schemas:
+    Id:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{1,128}$"
+    Cursor:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{1,512}$"
+    ProtocolVersion:
+      type: object
+      required: [major, minor]
+      properties:
+        major: { type: integer, minimum: 0 }
+        minor: { type: integer, minimum: 0 }
+    Limits:
+      type: object
+      required: [max_batch_envelopes, max_batch_bytes, max_ciphertext_bytes_per_op,
+                 max_header_json_bytes, max_blob_bytes, max_depends_on, max_pull_page_size,
+                 max_id_length]
+      properties:
+        max_batch_envelopes: { type: integer }
+        max_batch_bytes: { type: integer }
+        max_ciphertext_bytes_per_op: { type: integer }
+        max_header_json_bytes: { type: integer }
+        max_blob_bytes: { type: integer }
+        max_depends_on: { type: integer }
+        max_pull_page_size: { type: integer }
+        max_id_length: { type: integer }
+    ServerMeta:
+      type: object
+      required: [min_client_protocol, max_client_protocol, capabilities, limits, server_instance_id]
+      properties:
+        min_client_protocol: { $ref: "#/components/schemas/ProtocolVersion" }
+        max_client_protocol: { $ref: "#/components/schemas/ProtocolVersion" }
+        capabilities: { type: array, items: { type: string } }
+        limits: { $ref: "#/components/schemas/Limits" }
+        server_instance_id: { type: string }
+    ErrorBody:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code:
+          type: string
+          description: Machine code from the §9 table; unknown codes are treated as not retryable.
+        message: { type: string }
+        request_id: { type: string }
+        retry_after_ms: { type: integer }
+    OpRef:
+      type: object
+      required: [device_id, device_seq]
+      properties:
+        device_id: { $ref: "#/components/schemas/Id" }
+        device_seq: { type: integer }
+    EnvelopeHeader:
+      type: object
+      additionalProperties: false
+      required: [envelope_version, op_id, device_id, device_seq, notebook_id, depends_on,
+                 key_epoch, op_schema_version, ciphertext_sha256, ciphertext_length, signature]
+      properties:
+        envelope_version: { type: integer, const: 1 }
+        op_id: { $ref: "#/components/schemas/Id" }
+        device_id: { $ref: "#/components/schemas/Id" }
+        device_seq: { type: integer }
+        notebook_id: { $ref: "#/components/schemas/Id" }
+        depends_on: { type: array, items: { $ref: "#/components/schemas/OpRef" } }
+        key_epoch: { type: integer }
+        op_schema_version: { type: integer, minimum: 1 }
+        ciphertext_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        ciphertext_length: { type: integer, minimum: 1 }
+        signature: { type: string }
+    PulledOp:
+      type: object
+      required: [server_seq, header]
+      properties:
+        server_seq: { type: integer }
+        header: { $ref: "#/components/schemas/EnvelopeHeader" }
+    AckResult:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [accepted, duplicate, rejected] }
+        server_seq: { type: integer }
+        error: { $ref: "#/components/schemas/ErrorBody" }
+    PushOpsResponse:
+      type: object
+      required: [acks]
+      properties:
+        acks:
+          type: array
+          items:
+            type: object
+            required: [op_id, result]
+            properties:
+              op_id: { $ref: "#/components/schemas/Id" }
+              result: { $ref: "#/components/schemas/AckResult" }
+    PullOpsResponse:
+      type: object
+      required: [items, next_cursor, has_more]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/PulledOp" } }
+        next_cursor: { $ref: "#/components/schemas/Cursor" }
+        has_more: { type: boolean }
+    AckRequest:
+      type: object
+      required: [applied_cursor]
+      properties:
+        applied_cursor: { $ref: "#/components/schemas/Cursor" }
+    UsageResponse:
+      type: object
+      required: [account_id, op_count, op_bytes, blob_count, blob_bytes]
+      properties:
+        account_id: { $ref: "#/components/schemas/Id" }
+        op_count: { type: integer }
+        op_bytes: { type: integer }
+        blob_count: { type: integer }
+        blob_bytes: { type: integer }
+        quota_bytes: { type: [integer, "null"] }
+    DeviceRegistrationRequest:
+      type: object
+      required: [signing_public_key, encryption_public_key]
+      properties:
+        device_id: { $ref: "#/components/schemas/Id" }
+        signing_public_key: { type: string }
+        encryption_public_key: { type: string }
+        label: { type: [string, "null"] }
+    DeviceRegistrationResponse:
+      type: object
+      required: [device_id]
+      properties:
+        device_id: { $ref: "#/components/schemas/Id" }
+    DeviceListResponse:
+      type: object
+      required: [devices]
+      properties:
+        devices:
+          type: array
+          items:
+            type: object
+            required: [device_id, signing_public_key, encryption_public_key, revoked]
+            properties:
+              device_id: { $ref: "#/components/schemas/Id" }
+              signing_public_key: { type: string }
+              encryption_public_key: { type: string }
+              label: { type: [string, "null"] }
+              revoked: { type: boolean }
+    KeyLogEntry:
+      type: object
+      required: [index, data]
+      properties:
+        index: { type: integer }
+        data: { type: string, description: Unpadded base64url of the entry bytes }
+    KeyLogPage:
+      type: object
+      required: [entries, next_index]
+      properties:
+        entries: { type: array, items: { $ref: "#/components/schemas/KeyLogEntry" } }
+        next_index: { type: integer }
+    KeyLogAppendRequest:
+      type: object
+      required: [index, data]
+      properties:
+        index: { type: integer }
+        data: { type: string }
+    KeyLogAppendResponse:
+      type: object
+      required: [index]
+      properties:
+        index: { type: integer }
+    BlobPutResponse:
+      type: object
+      required: [blob_id, duplicate]
+      properties:
+        blob_id: { $ref: "#/components/schemas/Id" }
+        duplicate: { type: boolean }
+    CheckpointRecord:
+      type: object
+      required: [covers_cursor, covers_server_seq, blob_id, blob_sha256, blob_length, key_epoch,
+                 created_by, signature]
+      properties:
+        covers_cursor: { $ref: "#/components/schemas/Cursor" }
+        covers_server_seq: { type: integer }
+        blob_id: { $ref: "#/components/schemas/Id" }
+        blob_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+        blob_length: { type: integer }
+        key_epoch: { type: integer }
+        created_by: { $ref: "#/components/schemas/Id" }
+        signature: { type: string }
+    AuthConfig:
+      type: object
+      required: [issuer, client_id, scopes, redirect]
+      properties:
+        issuer: { type: string, format: uri }
+        client_id: { type: string }
+        scopes: { type: array, items: { type: string } }
+        redirect: { type: string, enum: [loopback] }
+    SessionTokens:
+      type: object
+      required: [account_id, access_token, expires_in_s, refresh_token]
+      properties:
+        account_id: { $ref: "#/components/schemas/Id" }
+        device_id: { $ref: "#/components/schemas/Id" }
+        access_token: { type: string }
+        expires_in_s: { type: integer }
+        refresh_token: { type: string }
+paths:
+  /v1/meta:
+    get:
+      summary: Protocol range, capabilities, limits, instance id
+      security: []
+      responses:
+        "200":
+          description: Server metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServerMeta" }
+  /v1/devices:
+    post:
+      summary: Register a device's public keys (account token)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceRegistrationRequest" }
+      responses:
+        "200":
+          description: Registered (idempotent for the same id and keys)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceRegistrationResponse" }
+        default: { $ref: "#/components/responses/Error" }
+    get:
+      summary: List devices (informational; membership comes from the key log)
+      responses:
+        "200":
+          description: Devices
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceListResponse" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/devices/{id}:
+    delete:
+      summary: Revoke a device (device token)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/ops/batch:
+    post:
+      summary: Push a PRSB frame of envelopes (device token)
+      requestBody:
+        required: true
+        content:
+          application/vnd.penroam.batch.v1:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: One ack per framed item, in order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushOpsResponse" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/ops:
+    get:
+      summary: Pull envelopes after a cursor (device token)
+      parameters:
+        - { name: cursor, in: query, schema: { $ref: "#/components/schemas/Cursor" } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: |
+            With Accept application/vnd.penroam.batch.v1 (default): a PRSB frame of PulledOp
+            items plus Penroam-Next-Cursor and Penroam-Has-More headers. With Accept
+            application/json: the control document without ciphertexts.
+          headers:
+            Penroam-Next-Cursor: { schema: { $ref: "#/components/schemas/Cursor" } }
+            Penroam-Has-More: { schema: { type: string, enum: ["true", "false"] } }
+          content:
+            application/vnd.penroam.batch.v1:
+              schema: { type: string, format: binary }
+            application/json:
+              schema: { $ref: "#/components/schemas/PullOpsResponse" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/acks:
+    post:
+      summary: Durably applied cursor of this device (device token)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AckRequest" }
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/usage:
+    get:
+      summary: Usage counters and quota
+      responses:
+        "200":
+          description: Usage
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageResponse" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/keylog:
+    get:
+      summary: Key-log entries from an index (at most 256)
+      parameters:
+        - { name: from, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200":
+          description: Entries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KeyLogPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      summary: Append at exactly the current length (409 conflict otherwise)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeyLogAppendRequest" }
+      responses:
+        "200":
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KeyLogAppendResponse" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/blobs/uploads:
+    post:
+      summary: Reserved; not implemented in protocol 1.x (blobs use PUT /v1/blobs/{id})
+      responses:
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/blobs/{id}:
+    put:
+      summary: Upload an immutable encrypted blob (device token)
+      parameters:
+        - { $ref: "#/components/parameters/BlobId" }
+        - name: Penroam-Content-Sha256
+          in: header
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Stored, or identical bytes already stored (duplicate)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlobPutResponse" }
+        default: { $ref: "#/components/responses/Error" }
+    get:
+      summary: Download a blob (device token)
+      parameters: [{ $ref: "#/components/parameters/BlobId" }]
+      responses:
+        "200":
+          description: Raw ciphertext
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/checkpoints:
+    post:
+      summary: Advertise a signed checkpoint (device token; blob uploaded first)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckpointRecord" }
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/checkpoints/latest:
+    get:
+      summary: Latest checkpoint record (404 not_found if none)
+      responses:
+        "200":
+          description: Record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckpointRecord" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/auth/config:
+    get:
+      summary: OpenID Connect issuer and public client id (auth.v1)
+      security: []
+      responses:
+        "200":
+          description: Sign-in configuration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthConfig" }
+  /v1/auth/session:
+    post:
+      summary: Exchange an ID token for an account session (auth.v1)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_token]
+              properties:
+                id_token: { type: string }
+      responses:
+        "200":
+          description: Account session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionTokens" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/auth/refresh:
+    post:
+      summary: Rotate a single-use refresh token (auth.v1)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200":
+          description: New tokens, same scope
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionTokens" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/auth/logout:
+    post:
+      summary: Revoke the caller's session (auth.v1)
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/auth/device-challenge:
+    post:
+      summary: One-time challenge for a device session (auth.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id]
+              properties:
+                device_id: { $ref: "#/components/schemas/Id" }
+      responses:
+        "200":
+          description: Challenge
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challenge, expires_in_s]
+                properties:
+                  challenge: { type: string }
+                  expires_in_s: { type: integer }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/auth/device-session:
+    post:
+      summary: Signed challenge in, device session out (auth.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id, challenge, signature]
+              properties:
+                device_id: { $ref: "#/components/schemas/Id" }
+                challenge: { type: string }
+                signature: { type: string }
+      responses:
+        "200":
+          description: Device session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionTokens" }
+        default: { $ref: "#/components/responses/Error" }

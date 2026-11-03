@@ -640,7 +640,7 @@ fn meta_is_compatible() {
     m.limits.validate().unwrap();
     assert_eq!(
         penroam_sync_protocol::negotiate(penroam_sync_protocol::ProtocolRange::CLIENT, &m),
-        Ok(penroam_sync_protocol::ProtocolVersion::new(1, 0))
+        Ok(penroam_sync_protocol::ProtocolVersion::CURRENT)
     );
     assert!(m.has_capability("ops.batch.v1"));
 }

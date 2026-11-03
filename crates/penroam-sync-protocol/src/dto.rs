@@ -30,6 +30,9 @@ pub mod capabilities {
     /// Signed checkpoint records (`POST /v1/checkpoints`,
     /// `GET /v1/checkpoints/latest`).
     pub const CHECKPOINTS_V1: &str = "checkpoints.v1";
+    /// OpenID Connect sign-in and device sessions (`/v1/auth/*`, protocol
+    /// 1.1; see [`crate::auth`]).
+    pub const AUTH_V1: &str = "auth.v1";
 }
 
 /// `GET /v1/meta` response.

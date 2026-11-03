@@ -22,6 +22,10 @@ use penroam_sync_protocol::{
     ErrorBody, Limits, ProtocolRange, PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse,
     ServerMeta, UsageResponse,
 };
+use penroam_sync_protocol::{
+    canonical_device_auth_bytes, AuthConfig, DeviceChallenge, DeviceChallengeRequest,
+    DeviceSessionRequest, RefreshRequest, SessionRequest, SessionTokens,
+};
 use serde::{de::DeserializeOwned, Serialize};
 
 fn dir() -> PathBuf {
@@ -70,6 +74,15 @@ fn every_fixture_is_checked() {
         "error.cursor-expired.json",
         "error.rate-limited.json",
         "error.upgrade-required.json",
+        "auth-config.json",
+        "auth-session-request.json",
+        "auth-refresh-request.json",
+        "auth-session-tokens.account.json",
+        "auth-session-tokens.device.json",
+        "auth-device-challenge-request.json",
+        "auth-device-challenge.json",
+        "auth-device-session-request.json",
+        "auth-device-session.signing-bytes.hex",
     ]
     .into_iter()
     .map(String::from)
@@ -194,5 +207,49 @@ fn misc_dtos_and_errors() {
         "error.upgrade-required.json",
     ] {
         let _: ErrorBody = roundtrip(name);
+    }
+}
+
+#[test]
+fn auth_documents() {
+    let cfg: AuthConfig = roundtrip("auth-config.json");
+    assert!(cfg.scopes.iter().any(|s| s == "openid"));
+    assert_eq!(cfg.redirect, penroam_sync_protocol::auth::REDIRECT_LOOPBACK);
+    let _: SessionRequest = roundtrip("auth-session-request.json");
+    let _: RefreshRequest = roundtrip("auth-refresh-request.json");
+    let acct: SessionTokens = roundtrip("auth-session-tokens.account.json");
+    assert!(acct.device_id.is_none());
+    let dev: SessionTokens = roundtrip("auth-session-tokens.device.json");
+    let _: DeviceChallengeRequest = roundtrip("auth-device-challenge-request.json");
+    let ch: DeviceChallenge = roundtrip("auth-device-challenge.json");
+    let req: DeviceSessionRequest = roundtrip("auth-device-session-request.json");
+    req.validate().unwrap();
+    assert_eq!(req.challenge, ch.challenge);
+    let meta: ServerMeta = roundtrip("meta.json");
+    let bytes = String::from_utf8(read("auth-device-session.signing-bytes.hex")).unwrap();
+    assert_eq!(
+        bytes.trim_end(),
+        hex::encode(&canonical_device_auth_bytes(
+            &dev.account_id,
+            dev.device_id.as_ref().unwrap(),
+            &req.challenge,
+            &meta.server_instance_id,
+        ))
+    );
+}
+
+/// `docs/protocol/openapi.yaml` is hand-written; it must name every route.
+#[test]
+fn openapi_lists_every_route() {
+    let spec = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/protocol/openapi.yaml");
+    let Ok(text) = std::fs::read_to_string(&spec) else {
+        // the crate was packaged without the repository's docs
+        return;
+    };
+    for route in penroam_sync_protocol::routes::ALL {
+        assert!(
+            text.contains(&format!("\n  {route}:\n")),
+            "{route} missing from openapi.yaml"
+        );
     }
 }

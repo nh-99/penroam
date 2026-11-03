@@ -3,8 +3,8 @@
 **Status: `security_review_pending`.** This design and its implementation
 (`crates/penroam-sync`) have **not** been reviewed by an independent security reviewer. Do not
 describe Penroam sync as audited end-to-end encryption until that review is done and its
-findings are resolved. Sync is a developer preview and only works against the local
-development test server.
+findings are resolved. Sync is a developer preview. It works against the local development
+test server and against servers that implement the public sign-in (`auth.v1`).
 
 ## What we protect
 
@@ -34,9 +34,26 @@ server sees".
 The server sees account and device identifiers, envelope headers (operation ids, device
 sequences, causal references, epochs, ciphertext lengths and hashes, signatures),
 opaque **notebook routing aliases** (not notebook ids), opaque blob ids and sizes, key-log
-entries (public keys, wrapped keys, device labels inside signed entries), request times,
+entries (public keys, wrapped keys, device labels inside signed entries: key-log entries are
+signed but not encrypted, so clients keep labels generic), request times,
 IP addresses and storage usage. Sync is **not metadata-private**: activity patterns, sizes
 and the number of notebooks are visible.
+
+## Sign-in (servers with `auth.v1`)
+
+Sign-in and encryption are separate. The identity provider and the sync server decide who may
+use an account's storage; they never receive the recovery code or a content key.
+
+* The app signs in in the system browser (authorization code + PKCE, loopback redirect), checks
+  `state` and the ID token's `nonce`, and gives the ID token to the sync server, which verifies
+  it. No password passes through the app.
+* An account session only registers devices and reads/appends the key log. Pushing, pulling,
+  blobs and checkpoints need a device session, which the server issues only to a device that
+  signs a fresh challenge with a key that is an active member of the key log. A stolen account
+  session therefore gives no access to ciphertext; even a malicious server gains nothing for
+  confidentiality, because content keys are wrapped only to devices.
+* Losing account access (provider account, session) and losing the decryption keys are
+  different problems. Signing in again restores access to storage, not to keys.
 
 ## Key hierarchy
 

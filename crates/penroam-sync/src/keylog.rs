@@ -71,7 +71,8 @@ pub struct DeviceCert {
     pub sign_pk: String,
     /// X25519 public key, unpadded base64url.
     pub dh_pk: String,
-    /// User-chosen label (encrypted log, so not visible to the server).
+    /// User-chosen label. Key-log entries are signed, not encrypted, so the
+    /// server can read it; clients keep it generic (no names or note content).
     pub label: String,
 }
 

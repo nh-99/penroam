@@ -13,6 +13,8 @@
 //! * [`secrets`]: where device private keys live (OS keychain or a file).
 //! * [`transport`]: protocol calls over HTTP or in-process.
 //! * [`engine`]: the reconcile loop (prepare → exchange → apply).
+//! * `auth` (feature `http`): OpenID Connect sign-in with PKCE in the system
+//!   browser and device sessions, for servers that advertise `auth.v1`.
 //!
 //! Cargo features: `http` (default; `transport::HttpTransport`), `keychain`
 //! (OS credential stores, `secrets::KeychainSecretStore`), `testkit`
@@ -27,6 +29,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#[cfg(feature = "http")]
+pub mod auth;
 pub mod crypto;
 pub mod engine;
 pub mod keylog;

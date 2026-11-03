@@ -1,0 +1,6 @@
+{
+  "account_id": "acct-fixture-0001",
+  "access_token": "at_fixture-access-token",
+  "expires_in_s": 900,
+  "refresh_token": "rt_fixture-refresh-token"
+}

@@ -9,15 +9,18 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use penroam_sync_protocol::auth::REDIRECT_LOOPBACK;
 use penroam_sync_protocol::base64url;
 use penroam_sync_protocol::contract::{error_code_table, to_fixture_json, InvalidEnvelopeCase};
 use penroam_sync_protocol::envelope::sha256_hex;
 use penroam_sync_protocol::framing::encode_json_batch;
 use penroam_sync_protocol::hex;
 use penroam_sync_protocol::{
-    canonical_aad_bytes, canonical_signing_bytes, AccountId, AckRequest, ContractManifest,
-    DeviceId, DeviceRegistrationRequest, DeviceRegistrationResponse, EnvelopeHeader, ErrorBody,
-    ErrorCode, Limits, NotebookRoutingId, OpRef, PullOpsRequest,
+    canonical_aad_bytes, canonical_device_auth_bytes, canonical_signing_bytes, AccountId,
+    AckRequest, AuthConfig, ContractManifest, DeviceChallenge, DeviceChallengeRequest, DeviceId,
+    DeviceRegistrationRequest, DeviceRegistrationResponse, DeviceSessionRequest, EnvelopeHeader,
+    ErrorBody, ErrorCode, Limits, NotebookRoutingId, OpRef, PullOpsRequest, RefreshRequest,
+    SessionRequest, SessionTokens,
 };
 
 use crate::{InMemoryServer, RequestError};
@@ -327,6 +330,75 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
             "client protocol 1.0 is older than the server minimum 2.0; upgrade the app",
             "req-upgrade",
         )),
+    );
+
+    // Sign-in and sessions (auth.v1). Tokens are fixed placeholders.
+    json(
+        "auth-config.json",
+        to_fixture_json(&AuthConfig {
+            issuer: "https://login.example.invalid/dex".into(),
+            client_id: "penroam-app".into(),
+            scopes: vec!["openid".into(), "email".into(), "offline_access".into()],
+            redirect: REDIRECT_LOOPBACK.into(),
+        }),
+    );
+    json(
+        "auth-session-request.json",
+        to_fixture_json(&SessionRequest {
+            id_token: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJl".into(),
+        }),
+    );
+    json(
+        "auth-refresh-request.json",
+        to_fixture_json(&RefreshRequest {
+            refresh_token: "rt_fixture-refresh-token".into(),
+        }),
+    );
+    for (name, device_id) in [
+        ("auth-session-tokens.account.json", None),
+        ("auth-session-tokens.device.json", Some(dev_a.clone())),
+    ] {
+        json(
+            name,
+            to_fixture_json(&SessionTokens {
+                account_id: account.clone(),
+                device_id,
+                access_token: "at_fixture-access-token".into(),
+                expires_in_s: 900,
+                refresh_token: "rt_fixture-refresh-token".into(),
+            }),
+        );
+    }
+    json(
+        "auth-device-challenge-request.json",
+        to_fixture_json(&DeviceChallengeRequest {
+            device_id: dev_a.clone(),
+        }),
+    );
+    let challenge = base64url::encode(&[0x3c; 32]);
+    json(
+        "auth-device-challenge.json",
+        to_fixture_json(&DeviceChallenge {
+            challenge: challenge.clone(),
+            expires_in_s: 120,
+        }),
+    );
+    json(
+        "auth-device-session-request.json",
+        to_fixture_json(&DeviceSessionRequest {
+            device_id: dev_a.clone(),
+            challenge: challenge.clone(),
+            signature: placeholder_signature(),
+        }),
+    );
+    json(
+        "auth-device-session.signing-bytes.hex",
+        hex::encode(&canonical_device_auth_bytes(
+            &account,
+            &dev_a,
+            &challenge,
+            FIXTURE_INSTANCE_ID,
+        )) + "\n",
     );
 
     raw.push(("pull-batch.page1.bin", page1.frame));
