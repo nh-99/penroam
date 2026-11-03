@@ -10,14 +10,14 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
-import dev.opennote.booxink.BooxCapabilities
-import dev.opennote.booxink.BooxInk
-import dev.opennote.booxink.BooxInkView
-import dev.opennote.booxink.InkPoint
-import dev.opennote.booxink.InkStroke
-import dev.opennote.booxink.OverlayPlacement
-import dev.opennote.booxink.StrokeJson
-import dev.opennote.booxink.ViewTransform
+import com.nohowtech.booxink.BooxCapabilities
+import com.nohowtech.booxink.BooxInk
+import com.nohowtech.booxink.BooxInkView
+import com.nohowtech.booxink.InkPoint
+import com.nohowtech.booxink.InkStroke
+import com.nohowtech.booxink.OverlayPlacement
+import com.nohowtech.booxink.StrokeJson
+import com.nohowtech.booxink.ViewTransform
 import org.json.JSONArray
 import org.json.JSONObject
 

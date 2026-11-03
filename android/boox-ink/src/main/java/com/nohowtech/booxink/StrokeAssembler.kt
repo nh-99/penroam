@@ -1,4 +1,4 @@
-package dev.opennote.booxink
+package com.nohowtech.booxink
 
 import kotlin.math.abs
 import kotlin.math.hypot

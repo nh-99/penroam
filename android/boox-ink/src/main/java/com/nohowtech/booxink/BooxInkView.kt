@@ -1,4 +1,4 @@
-package dev.opennote.booxink
+package com.nohowtech.booxink
 
 import android.app.Activity
 import android.app.Application

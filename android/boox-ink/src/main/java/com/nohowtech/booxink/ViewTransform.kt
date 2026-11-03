@@ -1,4 +1,4 @@
-package dev.opennote.booxink
+package com.nohowtech.booxink
 
 /**
  * Maps between view-local physical pixels (what MotionEvent and the Onyx

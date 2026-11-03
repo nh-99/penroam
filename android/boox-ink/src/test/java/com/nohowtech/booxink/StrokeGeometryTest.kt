@@ -1,4 +1,4 @@
-package dev.opennote.booxink
+package com.nohowtech.booxink
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals

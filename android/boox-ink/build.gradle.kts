@@ -8,7 +8,7 @@ val onyxDeviceVersion: String by project
 val onyxBaseVersion: String by project
 
 android {
-    namespace = "dev.opennote.booxink"
+    namespace = "com.nohowtech.booxink"
     compileSdk = 36
 
     defaultConfig {

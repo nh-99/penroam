@@ -1,4 +1,4 @@
-package dev.opennote.booxink
+package com.nohowtech.booxink
 
 import android.graphics.Canvas
 import android.graphics.Paint
