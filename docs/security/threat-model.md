@@ -52,6 +52,9 @@ use an account's storage; they never receive the recovery code or a content key.
   signs a fresh challenge with a key that is an active member of the key log. A stolen account
   session therefore gives no access to ciphertext; even a malicious server gains nothing for
   confidentiality, because content keys are wrapped only to devices.
+* Session tokens: the app keeps only refresh tokens, in the OS keychain next to the device keys
+  (access tokens stay in memory). Refresh tokens are single-use; a copied one ends the session
+  when either copy is used twice. The renderer never sees any token.
 * Losing account access (provider account, session) and losing the decryption keys are
   different problems. Signing in again restores access to storage, not to keys.
 

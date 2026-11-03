@@ -5,7 +5,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { hasHost } from "../platform/ipc";
-import { onSyncChanged, onSyncStatus, syncApi, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
+import { onSyncChanged, onSyncStatus, syncApi, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
 
 export type SetupStep = "none" | "recovery" | "pairing" | "compare";
 
@@ -19,6 +19,10 @@ export const useSync = defineStore("sync", () => {
   const pairingCode = ref<string | null>(null);
   const comparison = ref<string | null>(null);
   const busy = ref(false);
+  /** A browser sign-in is in progress. */
+  const signingIn = ref(false);
+  /** The server checked in the setup form, and what it needs. */
+  const server = ref<(ServerInfo & { url: string }) | null>(null);
   const error = ref<string | null>(null);
   const changeListeners = new Set<(c: SyncChanged) => void>();
   let unlisten: UnlistenFn[] = [];
@@ -87,6 +91,36 @@ export const useSync = defineStore("sync", () => {
       status.value = info.status;
     }
     if (configured.value && step.value === "none") devices.value = (await syncApi.devices().catch(() => null)) ?? devices.value;
+  }
+
+  /** Checks a server address (setup form step 1). */
+  async function checkServer(url: string) {
+    const info = await run(() => syncApi.serverInfo(url));
+    server.value = info ? { ...info, url } : null;
+  }
+
+  /** Forgets the checked server (to type another address). */
+  function changeServer() {
+    server.value = null;
+    error.value = null;
+  }
+
+  /** Browser sign-in: before setup, or again after the sign-in ended. */
+  async function signIn(url: string) {
+    signingIn.value = true;
+    try {
+      const account = await run(() => syncApi.signIn(url));
+      if (account && server.value?.url === url) server.value = { ...server.value, signedInAccount: account };
+      if (account && configured.value) await refresh();
+      return account;
+    } finally {
+      signingIn.value = false;
+    }
+  }
+
+  async function signOut(url: string) {
+    const ok = await run(() => syncApi.signOut(url));
+    if (ok !== null && server.value?.url === url) server.value = { ...server.value, signedInAccount: null };
   }
 
   async function setupFirst(serverUrl: string, account: string, label: string) {
@@ -168,6 +202,7 @@ export const useSync = defineStore("sync", () => {
       configured.value = false;
       status.value = null;
       devices.value = [];
+      server.value = null;
     }
   };
   const diagnostics = () => run(() => syncApi.diagnostics());
@@ -190,11 +225,17 @@ export const useSync = defineStore("sync", () => {
     pairingCode,
     comparison,
     busy,
+    signingIn,
+    server,
     error,
     awaiting,
     init,
     refresh,
     onChanged,
+    checkServer,
+    changeServer,
+    signIn,
+    signOut,
     setupFirst,
     setupPair,
     setupRecovery,

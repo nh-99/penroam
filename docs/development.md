@@ -94,10 +94,18 @@ Sessions used so far are in `tools/linux-e2e/sessions/`; see [`platforms/linux.m
 
 ## Sync (developer preview)
 
-The app's sync settings work against the **development test server**. It has a stub sign-in, no
-TLS and no hardening, so keep it on loopback. Servers that advertise `auth.v1` (sign-in through
-an OpenID Connect provider, protocol §12a) are supported by the client crate and the CLI below;
-the app does not offer that sign-in yet.
+The app's sync settings work against two kinds of server. The settings ask for the server
+address first:
+
+* **Servers that advertise `auth.v1`** (protocol §12a): **Sign in with your browser** opens the
+  system browser for the server's identity provider (PKCE, loopback redirect). The session is kept
+  in the OS keychain next to the device keys. When it ends, the status says so and offers
+  **Sign in again**; queued changes stay on the device.
+* **The development test server**: you type an account name. It has a stub sign-in, no TLS and no
+  hardening, so keep it on loopback.
+
+Server addresses must be `https://`, or `http://` on this computer only
+(`PENROAM_SYNC_ALLOW_ANY_URL=1` allows any `http://` host, for development).
 
 ```bash
 cargo run -p penroam-sync-testkit --bin penroam-sync-testserver -- --listen 127.0.0.1:8787 --data /tmp/penroam-sync-server
@@ -106,8 +114,12 @@ PENROAM_DEV_SYNC=1 pnpm tauri dev      # sync settings appear in debug builds or
 
 In the app: **Settings → Sync (developer preview)**. Set up the first device (save the recovery
 code), then on a second profile (another `PENROAM_LIBRARY_DIR`) choose pairing and approve its
-code from the first device, or use the recovery code. Only loopback server URLs are accepted
-unless `PENROAM_SYNC_ALLOW_ANY_URL=1`.
+code from the first device, or use the recovery code.
+
+Scripted UI runs that sign in must not reach the developer's real browser or keychain: give the
+app its own XDG data, config and runtime directories, and register a stand-in browser as the
+`x-scheme-handler/https` default in that private `mimeapps.list`. `xdg-open` ignores `$BROWSER`
+whenever a default handler exists.
 
 Device keys go to the OS keychain (Secret Service on Linux, Keychain on macOS/iOS, Credential
 Manager on Windows, Keystore-backed storage on Android). Without one, sync refuses to start;

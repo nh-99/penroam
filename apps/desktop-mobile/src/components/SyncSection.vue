@@ -3,7 +3,7 @@
 // sync as available. Notes never depend on sync: everything here can be
 // disconnected without touching local notebooks.
 import { computed, onMounted, ref } from "vue";
-import { Cloud, Copy, KeyRound, Link2, Pause, Play, RefreshCw, ShieldAlert, Smartphone, Trash2, Unplug } from "@lucide/vue";
+import { Cloud, Copy, KeyRound, Link2, LogIn, Pause, Play, RefreshCw, ShieldAlert, Smartphone, Trash2, Unplug } from "@lucide/vue";
 import Btn from "./ui/Btn.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import { useSync } from "../stores/sync";
@@ -47,7 +47,16 @@ const toneClass = computed(
 const groups = computed(() => codeGroups(sync.recoveryCode ?? ""));
 const lastGroup = computed(() => groups.value[groups.value.length - 1] ?? "");
 const confirmed = computed(() => confirmGroup.value.trim().toUpperCase() === lastGroup.value.toUpperCase() && lastGroup.value !== "");
-const canSetup = computed(() => serverUrl.value.trim() !== "" && account.value.trim() !== "" && label.value.trim() !== "" && !sync.busy);
+/** The checked server is ready for setup: signed in, or a test server with an account name. */
+const ready = computed(() => {
+  const srv = sync.server;
+  if (!srv) return false;
+  return srv.signIn ? srv.signedInAccount !== null : account.value.trim() !== "";
+});
+const canSetup = computed(() => ready.value && label.value.trim() !== "" && !sync.busy);
+/** Account argument of the setup commands: the server's own for sign-in servers. */
+const setupAccount = computed(() => (sync.server?.signIn ? "" : account.value.trim()));
+const setupUrl = computed(() => sync.server?.url ?? serverUrl.value.trim());
 
 onMounted(() => void sync.refresh());
 
@@ -92,7 +101,7 @@ async function confirmDisconnect() {
       <span class="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted epaper:border">developer preview</span>
     </h3>
     <p class="text-xs leading-relaxed text-muted">
-      Works only with a local development test server for now. Notes are encrypted on this device before upload; the server stores ciphertext.
+      Works with a Penroam sync server (you sign in through your web browser) or a local development test server. Notes are encrypted on this device before upload; the server stores ciphertext.
     </p>
     <p v-if="sync.error" class="rounded-lg border border-danger/40 p-2 text-xs text-danger" role="alert">{{ sync.error }}</p>
 
@@ -130,34 +139,56 @@ async function confirmDisconnect() {
       </div>
     </div>
 
-    <!-- not set up -->
+    <!-- not set up: 1. server, 2. sign in (or account name on a test server), 3. set up -->
     <div v-else-if="!sync.configured" class="space-y-2">
-      <label class="block text-xs">Server URL
-        <input v-model="serverUrl" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm" inputmode="url" autocomplete="off" />
-      </label>
-      <label class="block text-xs">Account name
-        <input v-model="account" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm" autocomplete="off" placeholder="e.g. my-notes" />
-      </label>
-      <label class="block text-xs">This device's name (only your devices see it)
-        <input v-model="label" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm" autocomplete="off" />
-      </label>
-      <template v-if="mode === 'choose'">
-        <div class="flex flex-col gap-2 pt-1">
-          <Btn variant="primary" :disabled="!canSetup" @click="sync.setupFirst(serverUrl, account, label)"><Cloud :size="16" />Set up on this first device</Btn>
-          <Btn variant="outline" :disabled="!canSetup" @click="sync.setupPair(serverUrl, account, label)"><Link2 :size="16" />Add this device (pair with a trusted device)</Btn>
-          <Btn variant="ghost" :disabled="!canSetup" @click="mode = 'recover'"><KeyRound :size="16" />Use recovery code</Btn>
-        </div>
+      <template v-if="!sync.server">
+        <label class="block text-xs">Server URL
+          <input v-model="serverUrl" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm" inputmode="url" autocomplete="off" @keydown.enter="sync.checkServer(serverUrl.trim())" />
+        </label>
+        <Btn variant="primary" :disabled="!serverUrl.trim() || sync.busy" @click="sync.checkServer(serverUrl.trim())">Continue</Btn>
       </template>
       <template v-else>
-        <label class="block text-xs">Recovery code
-          <input v-model="recoveryInput" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 font-mono text-sm uppercase" autocomplete="off" spellcheck="false" placeholder="PRK1-…" />
+        <p class="flex items-center gap-2 text-xs">
+          <span class="min-w-0 flex-1 truncate">Server: <span class="font-mono">{{ sync.server.url }}</span></span>
+          <button class="touch-target rounded-lg px-2 text-accent underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.changeServer()">Change</button>
+        </p>
+        <template v-if="sync.server.signIn">
+          <div v-if="!sync.server.signedInAccount" class="space-y-2">
+            <p class="text-xs leading-relaxed text-muted">This server signs you in through your web browser. Penroam never sees your password.</p>
+            <Btn variant="primary" :disabled="sync.busy" @click="sync.signIn(sync.server.url)"><LogIn :size="16" />Sign in with your browser</Btn>
+            <p v-if="sync.signingIn" class="flex items-center gap-2 text-xs text-muted" role="status"><RefreshCw :size="14" class="animate-spin" />Finish signing in in your browser, then come back here.</p>
+          </div>
+          <p v-else class="flex items-center gap-2 text-xs">
+            <span class="flex-1">Signed in.</span>
+            <button class="touch-target rounded-lg px-2 text-accent underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.signOut(sync.server.url)">Sign out</button>
+          </p>
+        </template>
+        <label v-else class="block text-xs">Account name (development test server)
+          <input v-model="account" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm" autocomplete="off" placeholder="e.g. my-notes" />
         </label>
-        <div class="flex gap-2">
-          <Btn variant="primary" :disabled="!canSetup || !recoveryInput.trim()" @click="sync.setupRecovery(serverUrl, account, label, recoveryInput)">Add this device</Btn>
-          <Btn @click="mode = 'choose'">Back</Btn>
-        </div>
+        <template v-if="ready">
+          <label class="block text-xs">This device's name (only your devices see it)
+            <input v-model="label" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm" autocomplete="off" />
+          </label>
+          <template v-if="mode === 'choose'">
+            <div class="flex flex-col gap-2 pt-1">
+              <Btn variant="primary" :disabled="!canSetup" @click="sync.setupFirst(setupUrl, setupAccount, label)"><Cloud :size="16" />Set up on this first device</Btn>
+              <Btn variant="outline" :disabled="!canSetup" @click="sync.setupPair(setupUrl, setupAccount, label)"><Link2 :size="16" />Add this device (pair with a trusted device)</Btn>
+              <Btn variant="ghost" :disabled="!canSetup" @click="mode = 'recover'"><KeyRound :size="16" />Use recovery code</Btn>
+            </div>
+          </template>
+          <template v-else>
+            <label class="block text-xs">Recovery code
+              <input v-model="recoveryInput" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 font-mono text-sm uppercase" autocomplete="off" spellcheck="false" placeholder="PRK1-…" />
+            </label>
+            <div class="flex gap-2">
+              <Btn variant="primary" :disabled="!canSetup || !recoveryInput.trim()" @click="sync.setupRecovery(setupUrl, setupAccount, label, recoveryInput)">Add this device</Btn>
+              <Btn @click="mode = 'choose'">Back</Btn>
+            </div>
+          </template>
+          <p class="text-xs text-muted">Notebooks already on this device are uploaded (encrypted) once sync is set up.</p>
+        </template>
       </template>
-      <p class="text-xs text-muted">Notebooks already on this device are uploaded (encrypted) once sync is set up.</p>
     </div>
 
     <!-- configured -->
@@ -171,6 +202,10 @@ async function confirmDisconnect() {
         </p>
         <div v-if="sync.awaiting && sync.step === 'none'" class="mt-2">
           <Btn variant="outline" @click="sync.step = 'pairing'; sync.pollPairing()">Check for approval</Btn>
+        </div>
+        <div v-if="sync.status?.phase === 'needsReauth'" class="mt-2 space-y-1">
+          <Btn variant="primary" :disabled="sync.busy" @click="sync.signIn(sync.status.serverUrl)"><LogIn :size="16" />Sign in again</Btn>
+          <p v-if="sync.signingIn" class="flex items-center gap-2 text-xs text-muted" role="status"><RefreshCw :size="14" class="animate-spin" />Finish signing in in your browser, then come back here.</p>
         </div>
         <p v-if="sync.status?.phase === 'revoked'" class="mt-2 text-xs text-muted">
           Disconnect below to stop syncing on this device. Your notes stay here; you can set up sync again later.

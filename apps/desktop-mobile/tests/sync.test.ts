@@ -10,6 +10,9 @@ const api = vi.hoisted(() => ({
   pollPairing: vi.fn(),
   disconnect: vi.fn(),
   devices: vi.fn(),
+  serverInfo: vi.fn(),
+  signIn: vi.fn(),
+  signOut: vi.fn(),
 }));
 vi.mock("../src/platform/sync", async (orig) => ({
   ...(await orig<typeof import("../src/platform/sync")>()),
@@ -136,5 +139,53 @@ describe("sync store", () => {
     s.finishRecovery();
     expect(s.recoveryCode).toBeNull();
     expect(s.step).toBe("none");
+  });
+
+  it("checks the server, signs in through the browser, and sets up with the server's account", async () => {
+    const { useSync } = await import("../src/stores/sync");
+    api.info.mockResolvedValue({ available: true, configured: false, status: null });
+    api.serverInfo.mockResolvedValue({ signIn: true, signedInAccount: null });
+    api.signIn.mockResolvedValue("a1b2c3");
+    api.setupFirst.mockResolvedValue({ recoveryCode: "PRK1-AAAAA", pairingCode: null });
+    const s = useSync();
+    await s.init();
+    await s.checkServer("https://sync.penroam.ink");
+    expect(s.server).toEqual({ url: "https://sync.penroam.ink", signIn: true, signedInAccount: null });
+    const pending = s.signIn("https://sync.penroam.ink");
+    expect(s.signingIn).toBe(true);
+    expect(await pending).toBe("a1b2c3");
+    expect(s.signingIn).toBe(false);
+    expect(s.server?.signedInAccount).toBe("a1b2c3");
+    await s.setupFirst("https://sync.penroam.ink", "", "laptop");
+    expect(api.setupFirst).toHaveBeenCalledWith("https://sync.penroam.ink", "", "laptop");
+    expect(s.step).toBe("recovery");
+  });
+
+  it("keeps the form usable when sign-in fails or the server is unreachable", async () => {
+    const { useSync } = await import("../src/stores/sync");
+    api.info.mockResolvedValue({ available: true, configured: false, status: null });
+    api.serverInfo.mockRejectedValueOnce(new Error("could not reach the server: offline"));
+    const s = useSync();
+    await s.init();
+    await s.checkServer("https://sync.penroam.ink");
+    expect(s.server).toBeNull();
+    expect(s.error).toMatch(/could not reach/);
+    api.serverInfo.mockResolvedValue({ signIn: true, signedInAccount: "a1" });
+    await s.checkServer("https://sync.penroam.ink");
+    api.signOut.mockResolvedValue(undefined);
+    await s.signOut("https://sync.penroam.ink");
+    expect(s.server?.signedInAccount).toBeNull();
+    api.signIn.mockRejectedValue(new Error("sign-in was refused: access_denied"));
+    expect(await s.signIn("https://sync.penroam.ink")).toBeNull();
+    expect(s.signingIn).toBe(false);
+    expect(s.error).toMatch(/refused/);
+    s.changeServer();
+    expect(s.server).toBeNull();
+    expect(s.error).toBeNull();
+  });
+
+  it("says how to recover from an ended sign-in", () => {
+    expect(describeStatus({ ...base, phase: "needsReauth" }).text).toMatch(/sign in again.*queued/);
+    expect(statusIcon({ ...base, phase: "needsReauth" })).toBe("alert");
   });
 });

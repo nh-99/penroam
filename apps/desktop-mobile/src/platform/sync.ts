@@ -1,5 +1,6 @@
 // Typed facade over the sync commands (apps/desktop-mobile/src-tauri/src/sync.rs).
-// Sync is a developer preview: only the local development test server works.
+// Sync is a developer preview. Servers either sign users in through the system
+// browser (auth.v1) or are the local development test server (typed account name).
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { CommandError, hasHost } from "./ipc";
@@ -76,6 +77,14 @@ export interface SyncConflict {
   alternates: { opId: string; value: unknown }[];
 }
 
+/** What a server needs before setup (see `sync_server_info`). */
+export interface ServerInfo {
+  /** Sign-in through the browser; false = development test server (typed account name). */
+  signIn: boolean;
+  /** Account this device is signed in to on that server. */
+  signedInAccount: string | null;
+}
+
 export interface SetupResult {
   recoveryCode: string | null;
   pairingCode: string | null;
@@ -98,6 +107,10 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 
 export const syncApi = {
   info: () => call<SyncInfo>("sync_info"),
+  serverInfo: (serverUrl: string) => call<ServerInfo>("sync_server_info", { serverUrl }),
+  /** Opens the system browser; resolves with the account id after the user signed in. */
+  signIn: (serverUrl: string) => call<string>("sync_sign_in", { serverUrl }),
+  signOut: (serverUrl: string) => call<void>("sync_sign_out", { serverUrl }),
   setupFirst: (serverUrl: string, account: string, label: string) => call<SetupResult>("sync_setup_first", { serverUrl, account, label }),
   setupPair: (serverUrl: string, account: string, label: string) => call<SetupResult>("sync_setup_pair", { serverUrl, account, label }),
   setupRecovery: (serverUrl: string, account: string, label: string, code: string) =>
@@ -136,7 +149,7 @@ export function describeStatus(s: SyncStatus | null): { tone: "ok" | "busy" | "m
     case "backoff":
       return { tone: "warn", text: `Server busy or unreachable · retrying automatically${s.queued ? ` · ${s.queued} queued` : ""}` };
     case "needsReauth":
-      return { tone: "warn", text: "Sign-in expired · changes stay queued on this device" };
+      return { tone: "warn", text: "Sign-in expired · sign in again to resume; changes stay queued on this device" };
     case "revoked":
       return { tone: "danger", text: "This device was removed from the account; local notes are kept" };
     case "needsUpgrade":

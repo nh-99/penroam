@@ -71,6 +71,11 @@ const rec = computed(() => lib.recovery);
             Penroam works fully offline. Notebooks are stored on this device in an open format and, with the sync preview above,
             uploaded end-to-end encrypted. There are no analytics or AI models. Export still works without sync.
           </template>
+          <template v-else-if="sync.available">
+            Penroam works fully offline. Notebooks are stored only on this device, in an open format. Sync (above) is optional and
+            off until you set it up; there are no analytics or AI models. Use Export to move a notebook to another device as a
+            <code>.penroam</code> file.
+          </template>
           <template v-else>
             Penroam works fully offline. Notebooks are stored only on this device, in an open format; there is no account, cloud,
             sync, analytics or AI model. Use Export to move a notebook to another device as a <code>.penroam</code> file.

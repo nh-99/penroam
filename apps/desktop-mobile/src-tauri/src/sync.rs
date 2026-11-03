@@ -2,9 +2,19 @@
 //! engine and reconciles in the background. The library lock is taken only
 //! for the local phases, so saving and pen input never wait for the network.
 //!
-//! Only the development test server exists today, so sign-in uses its
-//! session stub and server URLs are limited to loopback unless
-//! `PENROAM_SYNC_ALLOW_ANY_URL=1` (for alternate server implementations).
+//! Sign-in depends on the server:
+//! * Servers that advertise `auth.v1` (protocol §12a): the user signs in with
+//!   the server's identity provider in the **system browser**
+//!   ([`sync_sign_in`], PKCE with a loopback redirect). The account session's
+//!   refresh token is kept in the OS keychain next to the device keys; the
+//!   worker trades it for a device session once this device is a key-log
+//!   member, and keeps that one in the keychain too. Refresh tokens rotate on
+//!   every use. When the sign-in ends (refresh refused) the status becomes
+//!   `needsReauth` and the settings offer "Sign in again"; queued changes stay.
+//! * The development test server: its session stub, with a typed account name.
+//!
+//! Server URLs must be `https://`, or `http://` on loopback only (any
+//! `http://` host with `PENROAM_SYNC_ALLOW_ANY_URL=1`, for development).
 //! Tokens and keys never reach the WebView or logs.
 //!
 //! Lifecycle:
@@ -26,18 +36,23 @@ use crate::commands::CmdError;
 use crate::AppState;
 use penroam_core::replica::{Conflict, ConflictTarget};
 use penroam_storage::ErrorCode;
+use penroam_sync::auth;
 use penroam_sync::secrets::KeychainSecretStore;
 use penroam_sync::store::SyncStore;
 use penroam_sync::transport::HttpTransport;
+use penroam_sync::SyncTransport as _;
 use penroam_sync::{
     DeviceView, FileSecretStore, SecretStore, Setup, SyncEngine, SyncError, SyncStatus,
 };
-use serde::Serialize;
+use penroam_sync_protocol::dto::capabilities;
+use penroam_sync_protocol::{ErrorCode as WireCode, SessionTokens};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 type Engine = SyncEngine<HttpTransport>;
@@ -45,6 +60,10 @@ type Reply<T> = Sender<Result<T, String>>;
 
 const IDLE_INTERVAL: Duration = Duration::from_secs(60);
 const DEBOUNCE: Duration = Duration::from_millis(1500);
+/// How long a browser sign-in may take before it is abandoned.
+const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
+/// Pause between attempts while the sign-in has ended (the user must act).
+const SIGNED_OUT_RETRY: Duration = Duration::from_secs(60);
 
 /// Messages to the worker thread. Variants with a [`Reply`] are answered on
 /// that channel.
@@ -60,6 +79,8 @@ enum Cmd {
     Resolve(Uuid, ConflictTarget, Uuid, Reply<()>),
     PollPairing(Reply<Option<String>>),
     Diagnostics(Reply<String>),
+    /// A new account session was stored: drop the current token and retry.
+    Reauth,
     Disconnect(Reply<()>),
 }
 
@@ -120,7 +141,8 @@ pub fn available() -> bool {
     cfg!(debug_assertions) || std::env::var("PENROAM_DEV_SYNC").is_ok_and(|v| v == "1")
 }
 
-/// Accepts only loopback server URLs unless `PENROAM_SYNC_ALLOW_ANY_URL=1`.
+/// Accepts `https://` URLs, and `http://` only on loopback unless
+/// `PENROAM_SYNC_ALLOW_ANY_URL=1` (tokens must never cross a network in clear).
 fn check_url(url: &str) -> Result<String, CmdError> {
     let u = url.trim().trim_end_matches('/').to_string();
     let any = std::env::var("PENROAM_SYNC_ALLOW_ANY_URL").is_ok_and(|v| v == "1");
@@ -134,10 +156,14 @@ fn check_url(url: &str) -> Result<String, CmdError> {
     } else {
         host
     };
-    if !any && !matches!(host, "127.0.0.1" | "localhost" | "::1") {
+    let tls = u.starts_with("https://");
+    if !tls && !any && !matches!(host, "127.0.0.1" | "localhost" | "::1") {
         return Err(err(
-            "only a local development test server (127.0.0.1) is allowed in this preview",
+            "use an https:// server address (plain http:// is only allowed for a server on this computer)",
         ));
+    }
+    if host.is_empty() {
+        return Err(err("the server URL has no host"));
     }
     Ok(u)
 }
@@ -189,9 +215,170 @@ fn secrets(app: &AppHandle, root: &std::path::Path) -> Result<Box<dyn SecretStor
     }
 }
 
+/// Keychain entry with the account session (`auth.v1` servers).
+const ACCOUNT_SESSION: &str = "sync-account-session";
+/// Keychain entry with the device session (`auth.v1` servers).
+const DEVICE_SESSION: &str = "sync-device-session";
+
+/// A session kept in the keychain: only the refresh token is stored (access
+/// tokens live in memory), bound to the server it belongs to.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSession {
+    server_url: String,
+    account_id: String,
+    refresh_token: String,
+}
+
+fn load_session(store: &dyn SecretStore, name: &str, url: &str) -> Option<StoredSession> {
+    let raw = store.get(name).ok().flatten()?;
+    serde_json::from_str::<StoredSession>(&raw)
+        .ok()
+        .filter(|s| s.server_url == url)
+}
+
+fn save_session(
+    store: &dyn SecretStore,
+    name: &str,
+    url: &str,
+    t: &SessionTokens,
+) -> Result<(), String> {
+    let s = StoredSession {
+        server_url: url.to_string(),
+        account_id: t.account_id.to_string(),
+        refresh_token: t.refresh_token.clone(),
+    };
+    store
+        .set(name, &serde_json::to_string(&s).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
+}
+
+/// Whether the server signs users in itself (`auth.v1`) rather than being the
+/// development test server.
+fn uses_sign_in(url: &str) -> Result<bool, String> {
+    HttpTransport::new(url, String::new())
+        .meta()
+        .map(|m| m.has_capability(capabilities::AUTH_V1))
+        .map_err(|e| e.to_string())
+}
+
+/// Why no token could be obtained.
+enum TokenError {
+    /// The sign-in ended (no stored session, or its refresh was refused).
+    SignedOut,
+    /// Anything else (network, server); retried later.
+    Other(String),
+}
+
+fn is_unauthenticated(e: &penroam_sync::TransportError) -> bool {
+    e.code() == Some(WireCode::Unauthenticated)
+}
+
+/// A fresh account session from the stored refresh token. The rotated refresh
+/// token is saved before the new access token is used; a refused refresh
+/// deletes the stored session (the user must sign in again).
+fn refresh_account(store: &dyn SecretStore, url: &str) -> Result<SessionTokens, TokenError> {
+    let s = load_session(store, ACCOUNT_SESSION, url).ok_or(TokenError::SignedOut)?;
+    match auth::refresh(url, &s.refresh_token) {
+        Ok(t) => {
+            save_session(store, ACCOUNT_SESSION, url, &t).map_err(TokenError::Other)?;
+            Ok(t)
+        }
+        Err(auth::AuthError::Transport(e)) if is_unauthenticated(&e) => {
+            let _ = store.delete(ACCOUNT_SESSION);
+            Err(TokenError::SignedOut)
+        }
+        Err(e) => Err(TokenError::Other(e.to_string())),
+    }
+}
+
+/// An account-level token for the setup commands: the signed-in session on
+/// `auth.v1` servers (the account is the server's, not typed), or the test
+/// server stub with the typed account name. Returns (token, account id).
+fn account_access(
+    store: &dyn SecretStore,
+    url: &str,
+    account: &str,
+) -> Result<(String, String), CmdError> {
+    if uses_sign_in(url).map_err(err)? {
+        return match refresh_account(store, url) {
+            Ok(t) => Ok((t.access_token, t.account_id.to_string())),
+            Err(TokenError::SignedOut) => Err(err("sign in to this server first")),
+            Err(TokenError::Other(e)) => Err(err(e)),
+        };
+    }
+    if account.trim().is_empty() {
+        return Err(err("enter an account name"));
+    }
+    let t = test_token(url, account, None).map_err(err)?;
+    Ok((t, account.trim().to_string()))
+}
+
+/// The token the worker uses. `auth.v1`: the stored device session if it still
+/// refreshes, else a new device session signed with this device's key (only
+/// possible once it is a key-log member), else the account session (enough for
+/// pairing). Test server: its stub.
+fn worker_token(app: &AppHandle, engine: &mut Engine) -> Result<String, TokenError> {
+    let (url, account, device) = {
+        let st = &engine.store.state;
+        (
+            st.server_url.clone(),
+            st.account_id.clone(),
+            st.device_id.clone(),
+        )
+    };
+    if !uses_sign_in(&url).map_err(TokenError::Other)? {
+        return test_token(&url, &account, Some(&device)).map_err(TokenError::Other);
+    }
+    let root = library_root(app);
+    let store = secrets(app, &root).map_err(|e| TokenError::Other(e.message))?;
+    if let Some(d) = load_session(store.as_ref(), DEVICE_SESSION, &url) {
+        match auth::refresh(&url, &d.refresh_token) {
+            Ok(t) => {
+                save_session(store.as_ref(), DEVICE_SESSION, &url, &t)
+                    .map_err(TokenError::Other)?;
+                return Ok(t.access_token);
+            }
+            Err(auth::AuthError::Transport(e))
+                if !matches!(e, penroam_sync::TransportError::Network(_)) =>
+            {
+                // ended or refused (for example the device was removed): fall through
+                let _ = store.delete(DEVICE_SESSION);
+            }
+            Err(e) => return Err(TokenError::Other(e.to_string())),
+        }
+    }
+    let acct = refresh_account(store.as_ref(), &url)?;
+    if acct.account_id.as_str() != account {
+        return Err(TokenError::Other(
+            "signed in to a different account than this device syncs with".into(),
+        ));
+    }
+    match engine.device_session(&url, &acct.access_token) {
+        Ok(t) => {
+            save_session(store.as_ref(), DEVICE_SESSION, &url, &t).map_err(TokenError::Other)?;
+            Ok(t.access_token)
+        }
+        Err(_) => Ok(acct.access_token),
+    }
+}
+
+/// Best-effort logout of every stored session for `url`, then removal from
+/// the keychain.
+fn forget_sessions(store: &dyn SecretStore, url: &str) {
+    for name in [DEVICE_SESSION, ACCOUNT_SESSION] {
+        if let Some(s) = load_session(store, name, url) {
+            if let Ok(t) = auth::refresh(url, &s.refresh_token) {
+                let _ = auth::logout(url, &t.access_token);
+            }
+        }
+        let _ = store.delete(name);
+    }
+}
+
 /// Gets a session token from the development test server's sign-in stub:
 /// a device token when the device is registered, else an account token.
-fn token(url: &str, account: &str, device: Option<&str>) -> Result<String, String> {
+fn test_token(url: &str, account: &str, device: Option<&str>) -> Result<String, String> {
     if let Some(d) = device {
         if let Ok((t, _)) = HttpTransport::test_session(url, account, Some(d)) {
             return Ok(t);
@@ -225,6 +412,30 @@ fn emit_status(app: &AppHandle, e: &Engine) {
 fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
     let mut due: Option<Instant> = Some(Instant::now());
     let mut have_token = false;
+    let mut signed_out = false;
+    // Gets a token when none is held. Returns false when none could be had;
+    // after a sign-out the empty token makes the next request fail with
+    // `unauthenticated`, which the engine reports as `needsReauth`.
+    let ensure = |engine: &mut Engine, have: &mut bool, out: &mut bool| -> bool {
+        if *have {
+            return true;
+        }
+        match worker_token(&app, engine) {
+            Ok(t) => {
+                engine.transport_mut().set_token(t);
+                *have = true;
+                *out = false;
+                true
+            }
+            Err(TokenError::SignedOut) => {
+                engine.transport_mut().set_token(String::new());
+                *out = true;
+                false
+            }
+            Err(TokenError::Other(_)) => false,
+        }
+    };
+    let unauth = |e: &SyncError| matches!(e, SyncError::Transport(t) if is_unauthenticated(t));
     loop {
         let wait = due.map_or(IDLE_INTERVAL, |d| {
             d.saturating_duration_since(Instant::now())
@@ -266,15 +477,27 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 continue;
             }
             Ok(Cmd::Approve(code, label, r)) => {
-                let _ = r.send(
-                    engine
-                        .approve_device(&code, &label)
-                        .map_err(|e| e.to_string()),
-                );
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let mut res = engine.approve_device(&code, &label);
+                if res.as_ref().is_err_and(unauth) {
+                    have_token = false;
+                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                        res = engine.approve_device(&code, &label);
+                    }
+                }
+                let _ = r.send(res.map_err(|e| e.to_string()));
                 continue;
             }
             Ok(Cmd::Remove(id, r)) => {
-                let _ = r.send(engine.remove_device(&id).map_err(|e| e.to_string()));
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let mut res = engine.remove_device(&id);
+                if res.as_ref().is_err_and(unauth) {
+                    have_token = false;
+                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                        res = engine.remove_device(&id);
+                    }
+                }
+                let _ = r.send(res.map_err(|e| e.to_string()));
                 continue;
             }
             Ok(Cmd::Conflicts(nb, r)) => {
@@ -292,7 +515,15 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 continue;
             }
             Ok(Cmd::PollPairing(r)) => {
-                let res = engine.poll_enrollment().map_err(|e| e.to_string());
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let mut res = engine.poll_enrollment();
+                if res.as_ref().is_err_and(unauth) {
+                    have_token = false;
+                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                        res = engine.poll_enrollment();
+                    }
+                }
+                let res = res.map_err(|e| e.to_string());
                 if matches!(res, Ok(Some(_))) {
                     have_token = false; // a device session is possible now
                     due = Some(Instant::now());
@@ -316,8 +547,18 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 let _ = r.send(Ok(serde_json::to_string_pretty(&report).unwrap_or_default()));
                 continue;
             }
+            Ok(Cmd::Reauth) => {
+                have_token = false;
+                signed_out = false;
+                engine.attempt = 0;
+                due = Some(Instant::now());
+                continue;
+            }
             Ok(Cmd::Disconnect(r)) => {
                 let root = library_root(&app);
+                if let Ok(store) = secrets(&app, &root) {
+                    forget_sessions(store.as_ref(), &engine.store.state.server_url);
+                }
                 let _ = r.send(engine.disconnect(&root).map_err(|e| e.to_string()));
                 app.state::<AppState>().sync.set(None);
                 let _ = app.emit("sync://status", serde_json::Value::Null);
@@ -332,19 +573,10 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
             emit_status(&app, &engine);
             continue;
         }
-        if !have_token {
-            let st = &engine.store.state;
-            match token(&st.server_url, &st.account_id, Some(&st.device_id)) {
-                Ok(t) => {
-                    engine.transport_mut().set_token(t);
-                    have_token = true;
-                }
-                Err(_) => {
-                    due = Some(Instant::now() + Duration::from_secs(30));
-                    emit_status(&app, &engine);
-                    continue;
-                }
-            }
+        if !ensure(&mut engine, &mut have_token, &mut signed_out) && !signed_out {
+            due = Some(Instant::now() + Duration::from_secs(30));
+            emit_status(&app, &engine);
+            continue;
         }
         let state = app.state::<AppState>();
         let result = engine.reconcile(&state.lib);
@@ -362,8 +594,10 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 due = None; // idle until a nudge or the interval
             }
             Err(e) => {
-                if matches!(e, SyncError::Transport(t) if t.code() == Some(penroam_sync_protocol::ErrorCode::Unauthenticated))
-                {
+                if signed_out {
+                    // reported as needsReauth; wait for "Sign in again" (Cmd::Reauth)
+                    due = Some(Instant::now() + SIGNED_OUT_RETRY);
+                } else if unauth(e) {
                     have_token = false;
                     due = Some(Instant::now() + Duration::from_secs(5));
                 } else {
@@ -473,7 +707,9 @@ pub fn sync_setup_first(
     guard(&state)?;
     let url = check_url(&server_url)?;
     let root = library_root(&app);
-    let t = HttpTransport::new(&url, token(&url, &account, None).map_err(err)?);
+    let store = secrets(&app, &root)?;
+    let (token, account) = account_access(store.as_ref(), &url, &account)?;
+    let t = HttpTransport::new(&url, token);
     let (engine, code) = Engine::create_account(
         Setup {
             library_root: root.clone(),
@@ -482,7 +718,7 @@ pub fn sync_setup_first(
             label,
         },
         t,
-        secrets(&app, &root)?,
+        store,
     )
     .map_err(sync_err)?;
     start(&app, engine);
@@ -505,7 +741,9 @@ pub fn sync_setup_pair(
     guard(&state)?;
     let url = check_url(&server_url)?;
     let root = library_root(&app);
-    let t = HttpTransport::new(&url, token(&url, &account, None).map_err(err)?);
+    let store = secrets(&app, &root)?;
+    let (token, account) = account_access(store.as_ref(), &url, &account)?;
+    let t = HttpTransport::new(&url, token);
     let (engine, code) = Engine::begin_pairing(
         Setup {
             library_root: root.clone(),
@@ -514,7 +752,7 @@ pub fn sync_setup_pair(
             label,
         },
         t,
-        secrets(&app, &root)?,
+        store,
     )
     .map_err(sync_err)?;
     start(&app, engine);
@@ -537,7 +775,9 @@ pub fn sync_setup_recovery(
     guard(&state)?;
     let url = check_url(&server_url)?;
     let root = library_root(&app);
-    let t = HttpTransport::new(&url, token(&url, &account, None).map_err(err)?);
+    let store = secrets(&app, &root)?;
+    let (token, account) = account_access(store.as_ref(), &url, &account)?;
+    let t = HttpTransport::new(&url, token);
     let engine = Engine::enroll_with_recovery(
         Setup {
             library_root: root.clone(),
@@ -546,11 +786,107 @@ pub fn sync_setup_recovery(
             label,
         },
         t,
-        secrets(&app, &root)?,
+        store,
         &code,
     )
     .map_err(sync_err)?;
     start(&app, engine);
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+/// What the setup form needs to know about a server.
+pub struct ServerInfo {
+    /// The server signs users in through the browser (`auth.v1`); otherwise
+    /// it is the development test server and takes a typed account name.
+    sign_in: bool,
+    /// The account this device is signed in to on that server, if any.
+    signed_in_account: Option<String>,
+}
+
+/// Checks a server address before setup.
+#[tauri::command(async)]
+pub fn sync_server_info(app: AppHandle, server_url: String) -> Result<ServerInfo, CmdError> {
+    let url = check_url(&server_url)?;
+    let sign_in =
+        uses_sign_in(&url).map_err(|e| err(format!("could not reach the server: {e}")))?;
+    let signed_in_account = if sign_in {
+        let root = library_root(&app);
+        let store = secrets(&app, &root)?;
+        load_session(store.as_ref(), ACCOUNT_SESSION, &url).map(|s| s.account_id)
+    } else {
+        None
+    };
+    Ok(ServerInfo {
+        sign_in,
+        signed_in_account,
+    })
+}
+
+/// Signs in with the server's identity provider in the system browser and
+/// keeps the session in the keychain. Also used to sign in again after the
+/// sign-in ended: then the account must be the one this device syncs with.
+/// Returns the account id.
+#[tauri::command(async)]
+pub fn sync_sign_in(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_url: String,
+) -> Result<String, CmdError> {
+    if !available() {
+        return Err(err("sync is not available in this build"));
+    }
+    let url = check_url(&server_url)?;
+    if !uses_sign_in(&url).map_err(err)? {
+        return Err(err(
+            "this server has no sign-in (it is a development test server)",
+        ));
+    }
+    let cfg = auth::auth_config(&url).map_err(|e| err(e.to_string()))?;
+    let disc = auth::discover(&cfg.issuer).map_err(|e| err(e.to_string()))?;
+    let login = auth::BrowserLogin::start(&cfg, &disc).map_err(|e| err(e.to_string()))?;
+    app.opener()
+        .open_url(login.authorize_url(), None::<&str>)
+        .map_err(|e| err(format!("could not open the browser: {e}")))?;
+    let id_token = login
+        .finish(SIGN_IN_TIMEOUT)
+        .map_err(|e| err(e.to_string()))?;
+    let t = auth::session_from_id_token(&url, &id_token).map_err(|e| err(e.to_string()))?;
+    let root = library_root(&app);
+    let configured = state.sync.tx.lock().map(|g| g.is_some()).unwrap_or(false);
+    if configured {
+        let synced = SyncStore::open(&root)
+            .map(|s| s.state.account_id)
+            .unwrap_or_default();
+        if synced != t.account_id.as_str() {
+            let _ = auth::logout(&url, &t.access_token);
+            return Err(err(
+                "that sign-in belongs to a different account than this device syncs with",
+            ));
+        }
+    }
+    let store = secrets(&app, &root)?;
+    save_session(store.as_ref(), ACCOUNT_SESSION, &url, &t).map_err(err)?;
+    let _ = store.delete(DEVICE_SESSION);
+    if configured {
+        let _ = state.sync.send(Cmd::Reauth);
+    }
+    Ok(t.account_id.to_string())
+}
+
+/// Signs out of a server before sync is set up (to use another account).
+#[tauri::command(async)]
+pub fn sync_sign_out(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_url: String,
+) -> Result<(), CmdError> {
+    guard(&state)?;
+    let url = check_url(&server_url)?;
+    let root = library_root(&app);
+    let store = secrets(&app, &root)?;
+    forget_sessions(store.as_ref(), &url);
     Ok(())
 }
 
@@ -639,6 +975,10 @@ pub fn sync_disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             }
             if let Ok(store) = secrets(&app, &root) {
                 let _ = store.delete(DEVICE_SECRET);
+                let url = SyncStore::open(&root)
+                    .map(|s| s.state.server_url)
+                    .unwrap_or_default();
+                forget_sessions(store.as_ref(), &url);
             }
             std::fs::remove_dir_all(SyncStore::dir_for(&root)).map_err(|e| err(e.to_string()))?;
             state.sync.set(None);

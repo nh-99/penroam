@@ -48,6 +48,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_native_ink::init())
+        // used from Rust only (system-browser sign-in); the WebView gets no opener permission
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let root = std::env::var("PENROAM_LIBRARY_DIR")
                 .map(std::path::PathBuf::from)
@@ -105,6 +107,9 @@ pub fn run() {
             commands::import_stroke_document,
             commands::exit_app,
             sync::sync_info,
+            sync::sync_server_info,
+            sync::sync_sign_in,
+            sync::sync_sign_out,
             sync::sync_setup_first,
             sync::sync_setup_pair,
             sync::sync_setup_recovery,
