@@ -110,6 +110,10 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
       - uses: android-actions/setup-android@v3
+        # the action's default package list includes the legacy `tools`
+        # package, which current cmdline-tools no longer provide; Gradle
+        # downloads the platform and build tools it needs itself
+        with: { packages: platform-tools }
       - run: cd android && ./gradlew --no-daemon :boox-ink:testDebugUnitTest
 
   swift-linux:

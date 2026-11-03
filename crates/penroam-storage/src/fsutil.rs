@@ -13,7 +13,7 @@
 //! that nothing acknowledged is lost.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// Infix of temporary files written by [`write_atomic`]. Leftovers (from a
@@ -155,13 +155,18 @@ fn crashed() -> bool {
     false
 }
 
-/// Appends `bytes` at the end of an open file and fsyncs before returning.
-/// On failure the file is truncated back to its previous length (so a
-/// failed append, e.g. on a full disk, never leaves a partial record that a
-/// later append would follow).
+/// Appends `bytes` at offset `len_before` (the end of the file) and fsyncs
+/// before returning. On failure the file is truncated back to `len_before`
+/// (so a failed append, e.g. on a full disk, never leaves a partial record
+/// that a later append would follow).
+///
+/// `f` must be opened for writing, not in append mode: on Windows an
+/// append-mode handle lacks the access right that truncation needs, so the
+/// rollback would silently fail.
 pub fn append_durable(f: &mut File, len_before: u64, bytes: &[u8]) -> io::Result<()> {
     let res = (|| {
         fp("append.write")?;
+        f.seek(SeekFrom::Start(len_before))?;
         #[cfg(feature = "fault-injection")]
         if let Err(e) = fault::point("append.torn") {
             // the write stops in the middle: a prefix reaches the disk
@@ -186,7 +191,7 @@ pub fn create_durable(path: &Path, header: &[u8]) -> io::Result<File> {
     let mut f = OpenOptions::new()
         .create_new(true)
         .read(true)
-        .append(true)
+        .write(true)
         .open(path)?;
     fp("create.header")?;
     f.write_all(header)?;

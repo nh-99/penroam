@@ -1,0 +1,3 @@
+# Test fixtures are byte-exact (their SHA-256 sums are pinned): never let
+# git convert line endings in them, e.g. with core.autocrlf on Windows.
+tests/fixtures/** -text

@@ -595,7 +595,9 @@ impl Journal {
         // (and quarantined), and the next append starts a fresh segment
         if !last_is_damaged {
             if let Some(s) = j.segments.last() {
-                let f = OpenOptions::new().read(true).append(true).open(&s.path)?;
+                // write, not append: rolling back a failed append truncates,
+                // which an append-mode handle cannot do on Windows
+                let f = OpenOptions::new().read(true).write(true).open(&s.path)?;
                 let len = f.metadata()?.len();
                 j.active = Some((f, len));
             }
