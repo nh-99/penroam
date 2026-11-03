@@ -15,6 +15,13 @@ thiserror.workspace = true
 sha2.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "penroam-sync-testserver"
+path = "src/bin/penroam-sync-testserver.rs"
+
 [[bin]]
 name = "penroam-sync-fixtures"
 path = "src/bin/penroam-sync-fixtures.rs"

@@ -23,6 +23,10 @@ pub mod capabilities {
     pub const ACKS_V1: &str = "acks.v1";
     /// Usage counters (`GET /v1/usage`).
     pub const USAGE_V1: &str = "usage.v1";
+    /// Append-only, opaque account key log (`GET`/`POST /v1/keylog`).
+    pub const KEYLOG_V1: &str = "keylog.v1";
+    /// Encrypted immutable blobs (`PUT`/`GET /v1/blobs/{id}`).
+    pub const BLOBS_V1: &str = "blobs.v1";
 }
 
 /// `GET /v1/meta` response.
@@ -191,10 +195,15 @@ pub struct UsageResponse {
     pub quota_bytes: Option<u64>,
 }
 
-/// `POST /v1/devices` request. **Placeholder** until device enrollment exists: public keys are
-/// opaque unpadded-base64url strings; no key format is fixed yet.
+/// `POST /v1/devices` request. Public keys are opaque unpadded-base64url
+/// strings to the server. Clients never trust keys the server returns: device
+/// membership is decided by the signed key log (see the protocol document).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRegistrationRequest {
+    /// Client-chosen device id (it is part of signed key-log entries). The
+    /// server uses it as given or rejects the request with `conflict`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<DeviceId>,
     /// Device signing public key (opaque base64url).
     pub signing_public_key: String,
     /// Device encryption/key-agreement public key (opaque base64url).
@@ -226,11 +235,96 @@ impl DeviceRegistrationRequest {
     }
 }
 
-/// `POST /v1/devices` response. **Placeholder** until device enrollment exists.
+/// `POST /v1/devices` response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRegistrationResponse {
     /// Assigned device id.
     pub device_id: DeviceId,
+}
+
+/// One device as the server knows it (`GET /v1/devices`). Informational
+/// only: clients take membership and keys from the verified key log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    /// Device id.
+    pub device_id: DeviceId,
+    /// Signing public key as registered.
+    pub signing_public_key: String,
+    /// Key-agreement public key as registered.
+    pub encryption_public_key: String,
+    /// Server-visible label.
+    pub label: Option<String>,
+    /// Revoked devices can no longer write.
+    pub revoked: bool,
+}
+
+/// `GET /v1/devices` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceListResponse {
+    /// Devices of the authenticated account.
+    pub devices: Vec<DeviceInfo>,
+}
+
+/// Maximum decoded size of one key-log entry.
+pub const KEYLOG_ENTRY_MAX_BYTES: usize = 64 * 1024;
+/// Maximum entries returned by one `GET /v1/keylog`.
+pub const KEYLOG_PAGE_MAX: usize = 256;
+
+/// One opaque key-log entry. `data` is unpadded base64url of bytes the
+/// server never interprets (signed and verified by clients).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyLogEntry {
+    /// Position in the account key log, starting at 0.
+    pub index: u64,
+    /// Opaque entry bytes (unpadded base64url).
+    pub data: String,
+}
+
+/// `POST /v1/keylog`: append at exactly `index` (the current length).
+/// A different length means someone else appended first: `conflict` (409),
+/// and the client re-reads the log before trying again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyLogAppendRequest {
+    /// Expected index of the new entry (= current log length).
+    pub index: u64,
+    /// Opaque entry bytes (unpadded base64url).
+    pub data: String,
+}
+
+impl KeyLogAppendRequest {
+    /// Check encoding and size.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match base64url::decode(&self.data) {
+            Ok(b) if !b.is_empty() && b.len() <= KEYLOG_ENTRY_MAX_BYTES => Ok(()),
+            _ => Err("data"),
+        }
+    }
+}
+
+/// `POST /v1/keylog` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyLogAppendResponse {
+    /// Index the entry was stored at.
+    pub index: u64,
+}
+
+/// `GET /v1/keylog?from=N` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyLogPage {
+    /// Entries from `from`, in order.
+    pub entries: Vec<KeyLogEntry>,
+    /// Current log length (index the next append must use).
+    pub next_index: u64,
+}
+
+/// `PUT /v1/blobs/{id}` response. Blobs are immutable: the same id with the
+/// same bytes is `duplicate`; different bytes are rejected with `conflict`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlobPutResponse {
+    /// The blob id.
+    pub blob_id: crate::ids::BlobId,
+    /// `true` when identical bytes were already stored.
+    pub duplicate: bool,
 }
 
 #[cfg(test)]
@@ -279,6 +373,7 @@ mod tests {
     #[test]
     fn device_registration_validation() {
         let mut d = DeviceRegistrationRequest {
+            device_id: None,
             signing_public_key: base64url::encode(&[1; 32]),
             encryption_public_key: base64url::encode(&[2; 32]),
             label: Some("Pixel".into()),

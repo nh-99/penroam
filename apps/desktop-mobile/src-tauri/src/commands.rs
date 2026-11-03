@@ -118,6 +118,7 @@ pub fn create_notebook(
     template: Option<Template>,
     cover: Option<String>,
 ) -> R<NotebookAndPage> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     let defaults = PageDefaults {
         paper: paper.unwrap_or(Paper::Letter),
         template: template.unwrap_or_default(),
@@ -131,26 +132,31 @@ pub fn create_notebook(
 
 #[tauri::command(async)]
 pub fn rename_notebook(state: State<'_, AppState>, id: Uuid, title: String) -> R<Notebook> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).rename_notebook(id, &title)?)
 }
 
 #[tauri::command(async)]
 pub fn set_notebook_cover(state: State<'_, AppState>, id: Uuid, cover: String) -> R<Notebook> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).set_notebook_cover(id, &cover)?)
 }
 
 #[tauri::command(async)]
 pub fn delete_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).delete_notebook(id)?)
 }
 
 #[tauri::command(async)]
 pub fn restore_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).restore_notebook(id)?)
 }
 
 #[tauri::command(async)]
 pub fn purge_notebook(state: State<'_, AppState>, id: Uuid) -> R<()> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).purge_notebook(id)?)
 }
 
@@ -163,6 +169,7 @@ pub fn create_page(
     paper: Option<Paper>,
     size: Option<Size>,
 ) -> R<NotebookAndPage> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     let mut lib = lib!(state);
     if let Some(size) = size {
         // explicit size (custom paper): used by the benchmark harness
@@ -187,16 +194,19 @@ pub fn update_page_order(
     notebook_id: Uuid,
     order: Vec<Uuid>,
 ) -> R<Notebook> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).update_page_order(notebook_id, order)?)
 }
 
 #[tauri::command(async)]
 pub fn delete_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Notebook> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).delete_page(notebook_id, page_id)?)
 }
 
 #[tauri::command(async)]
 pub fn restore_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Notebook> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).restore_page(notebook_id, page_id)?)
 }
 
@@ -224,6 +234,7 @@ pub fn apply_page_operations(
     page_id: Uuid,
     batch: OperationBatch,
 ) -> R<ApplyOutcome> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     Ok(lib!(state).apply_page_operations(notebook_id, page_id, &batch)?)
 }
 
@@ -331,6 +342,7 @@ pub fn import_pdf(
     file_name: Option<String>,
     index: Option<usize>,
 ) -> R<NotebookAndPages> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     let bytes = read_user_file(&app, &path, 1 << 30)?;
     if !bytes.starts_with(b"%PDF") && !bytes.windows(5).take(1024).any(|w| w == b"%PDF-") {
         return Err(CmdError {
@@ -408,6 +420,7 @@ pub fn import_notebook(
     state: State<'_, AppState>,
     path: String,
 ) -> R<ImportReport> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     let bytes = read_user_file(&app, &path, MAX_IMPORT_BYTES)?;
     let r = lib!(state).import_archive(std::io::Cursor::new(bytes));
     trim_heap();
@@ -444,6 +457,7 @@ pub fn import_stroke_document(
     page_id: Uuid,
     json: String,
 ) -> R<ApplyOutcome> {
+    state.sync.nudge(); // schedules a debounced background sync (no-op without sync)
     let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| invalid(e.to_string()))?;
     drop(json);
     let mut lib = lib!(state);

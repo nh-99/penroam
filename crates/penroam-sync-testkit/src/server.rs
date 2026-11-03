@@ -1,15 +1,24 @@
-//! In-memory fake sync server.
+//! In-memory fake sync server (development test server, not production).
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+use serde::{Deserialize, Serialize};
+
 use penroam_sync_protocol::dto::capabilities;
+use penroam_sync_protocol::dto::KEYLOG_PAGE_MAX;
+use penroam_sync_protocol::envelope::sha256_hex;
 use penroam_sync_protocol::framing::{decode_json_batch, encode_json_batch};
+use penroam_sync_protocol::hex;
 use penroam_sync_protocol::version::PROTOCOL_MAJOR;
 use penroam_sync_protocol::{
-    verify_ciphertext, AccountId, AckRequest, AckResult, Cursor, DeviceId, EnvelopeHeader,
-    ErrorBody, ErrorCode, Limits, OpAck, OpId, ProtocolRange, PullOpsRequest, PullOpsResponse,
-    PulledOp, PushOpsResponse, ServerMeta, UsageResponse,
+    verify_ciphertext, AccountId, AckRequest, AckResult, BlobId, BlobPutResponse, Cursor, DeviceId,
+    DeviceInfo, DeviceListResponse, DeviceRegistrationRequest, DeviceRegistrationResponse,
+    EnvelopeHeader, ErrorBody, ErrorCode, KeyLogAppendRequest, KeyLogAppendResponse, KeyLogEntry,
+    KeyLogPage, Limits, OpAck, OpId, ProtocolRange, PullOpsRequest, PullOpsResponse, PulledOp,
+    PushOpsResponse, ServerMeta, UsageResponse,
 };
 
 use crate::cursor::{self, CursorError, CursorPayload, STREAM_OPS};
@@ -46,35 +55,102 @@ pub struct PullPage {
     pub frame: Vec<u8>,
 }
 
+mod b64 {
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&penroam_sync_protocol::base64url::encode(v))
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let s = String::deserialize(d)?;
+        penroam_sync_protocol::base64url::decode(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 struct StoredOp {
     header: EnvelopeHeader,
+    #[serde(with = "b64")]
     ciphertext: Vec<u8>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DeviceKeys {
+    signing_public_key: String,
+    encryption_public_key: String,
+    label: Option<String>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
 struct DeviceState {
     revoked: bool,
     applied_position: Option<u64>,
+    #[serde(default)]
+    keys: Option<DeviceKeys>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BlobMeta {
+    sha256: String,
+    len: u64,
+}
+
+#[derive(Default, Serialize, Deserialize)]
 struct Account {
     devices: BTreeMap<DeviceId, DeviceState>,
     /// `log[i]` has `server_seq = i + 1`.
     log: Vec<StoredOp>,
+    #[serde(skip)]
     by_op: HashMap<OpId, u64>,
+    #[serde(skip)]
     by_device_seq: HashMap<(DeviceId, u64), OpId>,
     /// Cursors with a position below this are expired (simulated compaction).
     retention_floor: u64,
     quota_bytes: Option<u64>,
     op_bytes: u64,
+    /// Opaque key-log entries (base64url), index = position.
+    #[serde(default)]
+    keylog: Vec<String>,
+    #[serde(default)]
+    blobs: BTreeMap<BlobId, BlobMeta>,
+    #[serde(skip)]
+    blob_data: HashMap<BlobId, Vec<u8>>,
+    #[serde(default)]
+    blob_bytes: u64,
+}
+
+impl Account {
+    fn rebuild_indexes(&mut self) {
+        self.by_op.clear();
+        self.by_device_seq.clear();
+        for (i, op) in self.log.iter().enumerate() {
+            let seq = i as u64 + 1;
+            self.by_op.insert(op.header.op_id.clone(), seq);
+            self.by_device_seq.insert(
+                (op.header.device_id.clone(), op.header.device_seq),
+                op.header.op_id.clone(),
+            );
+        }
+    }
 }
 
 #[derive(Default)]
 struct Faults {
     fail_next: VecDeque<ErrorCode>,
     drop_next_responses: u32,
+    delay_next: VecDeque<u64>,
 }
+
+/// On-disk form of the server state (`state.json`). Faults are not saved.
+#[derive(Serialize, Deserialize)]
+struct Persisted {
+    format: String,
+    version: u32,
+    secret: String,
+    instance_id: String,
+    accounts: BTreeMap<AccountId, Account>,
+}
+
+const STATE_FORMAT: &str = "penroam-sync-testserver";
 
 struct State {
     accounts: BTreeMap<AccountId, Account>,
@@ -90,11 +166,20 @@ struct State {
 /// cursor pagination, per-device applied-cursor acks, usage counters and
 /// fault injection. Authentication is simulated: callers pass the account
 /// and device they are "logged in" as.
+///
+/// **Development test server.** It lacks production authentication,
+/// billing, rate limiting and hardening; never expose it to untrusted
+/// networks.
 pub struct InMemoryServer {
     state: Mutex<State>,
     secret: [u8; 32],
     instance_id: String,
     limits: Limits,
+    /// Advertise the key-log and blob capabilities. Off for the deterministic
+    /// fixture server so the pinned `meta.json` keeps its capability list.
+    extended: bool,
+    /// Directory of `state.json` and blob files when persistent.
+    dir: Option<PathBuf>,
 }
 
 impl Default for InMemoryServer {
@@ -110,7 +195,107 @@ impl InMemoryServer {
         secret[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
         secret[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
         let instance = uuid::Uuid::new_v4().simple().to_string();
-        Self::with_secret(secret, format!("testkit-{instance}"), Limits::DEFAULT)
+        let mut s = Self::with_secret(secret, format!("testkit-{instance}"), Limits::DEFAULT);
+        s.extended = true;
+        s
+    }
+
+    /// Opens (or creates) a persistent server in `dir`. Every successful
+    /// mutation is written to `dir/state.json` (blobs to `dir/blobs/`)
+    /// atomically before the call returns, so a killed process never loses
+    /// an acknowledged op, key-log entry or blob. The cursor secret is
+    /// stored too, so cursors stay valid across restarts.
+    pub fn open_persistent(dir: &Path) -> std::io::Result<InMemoryServer> {
+        std::fs::create_dir_all(dir.join("blobs"))?;
+        let path = dir.join("state.json");
+        let mut server = InMemoryServer::new();
+        server.dir = Some(dir.to_path_buf());
+        if path.exists() {
+            let bytes = std::fs::read(&path)?;
+            let p: Persisted = serde_json::from_slice(&bytes)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            if p.format != STATE_FORMAT || p.version != 1 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unsupported test server state",
+                ));
+            }
+            let secret = hex::decode(&p.secret)
+                .filter(|s| s.len() == 32)
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "bad secret")
+                })?;
+            server.secret.copy_from_slice(&secret);
+            server.instance_id = p.instance_id;
+            let mut accounts = p.accounts;
+            for (id, a) in accounts.iter_mut() {
+                a.rebuild_indexes();
+                for (blob, meta) in &a.blobs {
+                    let data = std::fs::read(Self::blob_path(dir, id, blob))?;
+                    if sha256_hex(&data) != meta.sha256 {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("blob {blob} does not match its digest"),
+                        ));
+                    }
+                    a.blob_data.insert(blob.clone(), data);
+                }
+            }
+            server.lock().accounts = accounts;
+        } else {
+            server.save(&server.lock())?;
+        }
+        Ok(server)
+    }
+
+    fn blob_path(dir: &Path, account: &AccountId, blob: &BlobId) -> PathBuf {
+        dir.join("blobs").join(format!("{account}--{blob}"))
+    }
+
+    fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        let tmp = path.with_extension("tmp");
+        {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(bytes)?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)?;
+        if let Some(parent) = path.parent() {
+            if let Ok(d) = std::fs::File::open(parent) {
+                let _ = d.sync_all();
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes `state.json` when persistent (caller holds the lock).
+    fn save(&self, state: &State) -> std::io::Result<()> {
+        let Some(dir) = &self.dir else { return Ok(()) };
+        #[derive(Serialize)]
+        struct View<'a> {
+            format: &'a str,
+            version: u32,
+            secret: String,
+            instance_id: &'a str,
+            accounts: &'a BTreeMap<AccountId, Account>,
+        }
+        let bytes = serde_json::to_vec(&View {
+            format: STATE_FORMAT,
+            version: 1,
+            secret: hex::encode(&self.secret),
+            instance_id: &self.instance_id,
+            accounts: &state.accounts,
+        })
+        .map_err(std::io::Error::other)?;
+        Self::write_atomic(&dir.join("state.json"), &bytes)
+    }
+
+    /// Persist after an administrative change (panics only if the disk fails,
+    /// which a test server reports loudly).
+    fn save_admin(&self, state: &State) {
+        if let Err(e) = self.save(state) {
+            panic!("test server could not persist its state: {e}");
+        }
     }
 
     /// Deterministic server (fixtures, reproducible tests).
@@ -124,6 +309,8 @@ impl InMemoryServer {
             secret,
             instance_id: instance_id.into(),
             limits: limits.clamped(),
+            extended: false,
+            dir: None,
         }
     }
 
@@ -135,7 +322,19 @@ impl InMemoryServer {
 
     /// Create an empty account (idempotent).
     pub fn create_account(&self, account: &AccountId) {
-        self.lock().accounts.entry(account.clone()).or_default();
+        let mut s = self.lock();
+        if !s.accounts.contains_key(account) {
+            s.accounts.insert(account.clone(), Account::default());
+            self.save_admin(&s);
+        }
+    }
+
+    /// Whether `device` is registered under `account` (revoked or not).
+    pub fn device_registered(&self, account: &AccountId, device: &DeviceId) -> bool {
+        self.lock()
+            .accounts
+            .get(account)
+            .is_some_and(|a| a.devices.contains_key(device))
     }
 
     /// Register a device under an account (idempotent; un-revokes).
@@ -143,24 +342,28 @@ impl InMemoryServer {
         let mut s = self.lock();
         let a = s.accounts.entry(account.clone()).or_default();
         a.devices.entry(device.clone()).or_default().revoked = false;
+        self.save_admin(&s);
     }
 
     /// Revoke a device.
     pub fn revoke_device(&self, account: &AccountId, device: &DeviceId) {
-        if let Some(d) = self
-            .lock()
+        let mut s = self.lock();
+        if let Some(d) = s
             .accounts
             .get_mut(account)
             .and_then(|a| a.devices.get_mut(device))
         {
             d.revoked = true;
+            self.save_admin(&s);
         }
     }
 
     /// Set an account byte quota over stored op ciphertext.
     pub fn set_quota(&self, account: &AccountId, quota_bytes: Option<u64>) {
-        if let Some(a) = self.lock().accounts.get_mut(account) {
+        let mut s = self.lock();
+        if let Some(a) = s.accounts.get_mut(account) {
             a.quota_bytes = quota_bytes;
+            self.save_admin(&s);
         }
     }
 
@@ -168,8 +371,10 @@ impl InMemoryServer {
     /// with `cursor_expired`, and a pull without a cursor fails with
     /// `checkpoint_required`.
     pub fn expire_cursors_before(&self, account: &AccountId, server_seq: u64) {
-        if let Some(a) = self.lock().accounts.get_mut(account) {
+        let mut s = self.lock();
+        if let Some(a) = s.accounts.get_mut(account) {
             a.retention_floor = a.retention_floor.max(server_seq);
+            self.save_admin(&s);
         }
     }
 
@@ -207,6 +412,25 @@ impl InMemoryServer {
         self.lock().faults.drop_next_responses += n;
     }
 
+    /// The HTTP layer sleeps `ms` before answering each of the next `n`
+    /// requests (simulated slow network/server). The in-process API ignores it.
+    pub fn delay_next_responses(&self, n: u32, ms: u64) {
+        let mut s = self.lock();
+        for _ in 0..n {
+            s.faults.delay_next.push_back(ms);
+        }
+    }
+
+    /// Next pending delay for the HTTP layer, if any.
+    pub(crate) fn take_delay(&self) -> Option<u64> {
+        self.lock().faults.delay_next.pop_front()
+    }
+
+    /// Effective limits.
+    pub fn limits(&self) -> Limits {
+        self.limits
+    }
+
     // ---- protocol endpoints ----
 
     /// `GET /v1/meta`.
@@ -214,12 +438,19 @@ impl InMemoryServer {
         ServerMeta {
             min_client_protocol: ProtocolRange::CLIENT.min,
             max_client_protocol: ProtocolRange::CLIENT.max,
-            capabilities: vec![
-                capabilities::OPS_BATCH_V1.into(),
-                capabilities::OPS_PULL_V1.into(),
-                capabilities::ACKS_V1.into(),
-                capabilities::USAGE_V1.into(),
-            ],
+            capabilities: {
+                let mut c: Vec<String> = vec![
+                    capabilities::OPS_BATCH_V1.into(),
+                    capabilities::OPS_PULL_V1.into(),
+                    capabilities::ACKS_V1.into(),
+                    capabilities::USAGE_V1.into(),
+                ];
+                if self.extended {
+                    c.push(capabilities::KEYLOG_V1.into());
+                    c.push(capabilities::BLOBS_V1.into());
+                }
+                c
+            },
             limits: self.limits,
             server_instance_id: self.instance_id.clone(),
         }
@@ -231,13 +462,14 @@ impl InMemoryServer {
         &self,
         account: &AccountId,
         device: Option<&DeviceId>,
+        mutates: bool,
         f: impl FnOnce(
             &mut Account,
             &mut dyn FnMut(ErrorCode, String) -> ErrorBody,
         ) -> Result<T, ErrorBody>,
     ) -> Result<T, RequestError> {
         let mut guard = self.lock();
-        let s = &mut *guard;
+        let s: &mut State = &mut guard;
         s.request_counter += 1;
         let request_id = format!("req-{}", s.request_counter);
         let mut err = |code: ErrorCode, message: String| {
@@ -274,6 +506,14 @@ impl InMemoryServer {
             }
         }
         let result = f(acct, &mut err).map_err(RequestError::Api);
+        if mutates && result.is_ok() {
+            if let Err(e) = self.save(s) {
+                return Err(RequestError::Api(err(
+                    ErrorCode::InternalError,
+                    format!("could not persist: {e}"),
+                )));
+            }
+        }
         if s.faults.drop_next_responses > 0 {
             s.faults.drop_next_responses -= 1;
             return Err(RequestError::ResponseLost);
@@ -289,7 +529,7 @@ impl InMemoryServer {
         body: &[u8],
     ) -> Result<PushOpsResponse, RequestError> {
         let limits = self.limits;
-        self.request(account, Some(device), |acct, err| {
+        self.request(account, Some(device), true, |acct, err| {
             let items: Vec<(EnvelopeHeader, Vec<u8>)> =
                 decode_json_batch(body, &limits).map_err(|e| err(e.error_code(), e.to_string()))?;
             let acks = items
@@ -350,7 +590,7 @@ impl InMemoryServer {
         }
         let len = ciphertext.len() as u64;
         if let Some(q) = acct.quota_bytes {
-            if acct.op_bytes + len > q {
+            if acct.op_bytes + acct.blob_bytes + len > q {
                 return Err((ErrorCode::QuotaExceeded, "account quota exceeded".into()));
             }
         }
@@ -412,7 +652,7 @@ impl InMemoryServer {
         req: &PullOpsRequest,
     ) -> Result<PullPage, RequestError> {
         let limits = self.limits;
-        self.request(account, Some(device), |acct, err| {
+        self.request(account, Some(device), false, |acct, err| {
             if req.limit == 0 {
                 return Err(err(
                     ErrorCode::ValidationFailed,
@@ -470,7 +710,7 @@ impl InMemoryServer {
         device: &DeviceId,
         req: &AckRequest,
     ) -> Result<(), RequestError> {
-        self.request(account, Some(device), |acct, err| {
+        self.request(account, Some(device), true, |acct, err| {
             let pos = self
                 .open_cursor(account, acct, &req.applied_cursor)
                 .map_err(|(code, m)| err(code, m.into()))?;
@@ -482,15 +722,246 @@ impl InMemoryServer {
 
     /// `GET /v1/usage`.
     pub fn usage(&self, account: &AccountId) -> Result<UsageResponse, RequestError> {
-        self.request(account, None, |acct, _| {
+        self.request(account, None, false, |acct, _| {
             Ok(UsageResponse {
                 account_id: account.clone(),
                 op_count: acct.log.len() as u64,
                 op_bytes: acct.op_bytes,
-                blob_count: 0,
-                blob_bytes: 0,
+                blob_count: acct.blobs.len() as u64,
+                blob_bytes: acct.blob_bytes,
                 quota_bytes: acct.quota_bytes,
             })
+        })
+    }
+
+    // ---- devices, key log, blobs ----
+
+    /// `POST /v1/devices`: register a device with its public keys. The id is
+    /// `req.device_id` or a generated one. Re-registering the same id with
+    /// the same keys is idempotent; different keys are a `conflict`; a
+    /// revoked id stays revoked (`device_revoked`).
+    pub fn register_device_keys(
+        &self,
+        account: &AccountId,
+        req: &DeviceRegistrationRequest,
+    ) -> Result<DeviceRegistrationResponse, RequestError> {
+        self.request(account, None, true, |acct, err| {
+            req.validate()
+                .map_err(|field| err(ErrorCode::ValidationFailed, format!("invalid {field}")))?;
+            let id = match &req.device_id {
+                Some(id) => id.clone(),
+                None => DeviceId::new(format!("dev-{}", uuid::Uuid::new_v4().simple()))
+                    .expect("generated ids are valid"),
+            };
+            let keys = DeviceKeys {
+                signing_public_key: req.signing_public_key.clone(),
+                encryption_public_key: req.encryption_public_key.clone(),
+                label: req.label.clone(),
+            };
+            match acct.devices.get_mut(&id) {
+                Some(d) if d.revoked => {
+                    return Err(err(ErrorCode::DeviceRevoked, "device revoked".into()))
+                }
+                Some(d) => match &d.keys {
+                    Some(k)
+                        if k.signing_public_key != keys.signing_public_key
+                            || k.encryption_public_key != keys.encryption_public_key =>
+                    {
+                        return Err(err(
+                            ErrorCode::Conflict,
+                            "device id already registered with different keys".into(),
+                        ))
+                    }
+                    _ => d.keys = Some(keys),
+                },
+                None => {
+                    acct.devices.insert(
+                        id.clone(),
+                        DeviceState {
+                            keys: Some(keys),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            Ok(DeviceRegistrationResponse { device_id: id })
+        })
+    }
+
+    /// `GET /v1/devices`.
+    pub fn list_devices(&self, account: &AccountId) -> Result<DeviceListResponse, RequestError> {
+        self.request(account, None, false, |acct, _| {
+            Ok(DeviceListResponse {
+                devices: acct
+                    .devices
+                    .iter()
+                    .map(|(id, d)| DeviceInfo {
+                        device_id: id.clone(),
+                        signing_public_key: d
+                            .keys
+                            .as_ref()
+                            .map(|k| k.signing_public_key.clone())
+                            .unwrap_or_default(),
+                        encryption_public_key: d
+                            .keys
+                            .as_ref()
+                            .map(|k| k.encryption_public_key.clone())
+                            .unwrap_or_default(),
+                        label: d.keys.as_ref().and_then(|k| k.label.clone()),
+                        revoked: d.revoked,
+                    })
+                    .collect(),
+            })
+        })
+    }
+
+    /// `DELETE /v1/devices/{id}` by an authenticated, non-revoked device.
+    pub fn revoke_device_as(
+        &self,
+        account: &AccountId,
+        caller: &DeviceId,
+        target: &DeviceId,
+    ) -> Result<(), RequestError> {
+        self.request(account, Some(caller), true, |acct, err| {
+            let d = acct
+                .devices
+                .get_mut(target)
+                .ok_or_else(|| err(ErrorCode::NotFound, "unknown device".into()))?;
+            d.revoked = true;
+            Ok(())
+        })
+    }
+
+    /// `GET /v1/keylog?from=N` (at most [`KEYLOG_PAGE_MAX`] entries).
+    pub fn keylog_get(&self, account: &AccountId, from: u64) -> Result<KeyLogPage, RequestError> {
+        self.request(account, None, false, |acct, _| {
+            let entries = acct
+                .keylog
+                .iter()
+                .enumerate()
+                .skip(from.min(acct.keylog.len() as u64) as usize)
+                .take(KEYLOG_PAGE_MAX)
+                .map(|(i, data)| KeyLogEntry {
+                    index: i as u64,
+                    data: data.clone(),
+                })
+                .collect();
+            Ok(KeyLogPage {
+                entries,
+                next_index: acct.keylog.len() as u64,
+            })
+        })
+    }
+
+    /// `POST /v1/keylog`: append at exactly the current length.
+    pub fn keylog_append(
+        &self,
+        account: &AccountId,
+        req: &KeyLogAppendRequest,
+    ) -> Result<KeyLogAppendResponse, RequestError> {
+        self.request(account, None, true, |acct, err| {
+            req.validate()
+                .map_err(|_| err(ErrorCode::ValidationFailed, "invalid key-log entry".into()))?;
+            if req.index != acct.keylog.len() as u64 {
+                return Err(err(
+                    ErrorCode::Conflict,
+                    format!(
+                        "key log has {} entries; re-read it before appending",
+                        acct.keylog.len()
+                    ),
+                ));
+            }
+            acct.keylog.push(req.data.clone());
+            Ok(KeyLogAppendResponse { index: req.index })
+        })
+    }
+
+    /// `PUT /v1/blobs/{id}`: store an immutable encrypted blob.
+    pub fn blob_put(
+        &self,
+        account: &AccountId,
+        device: &DeviceId,
+        id: &BlobId,
+        sha256_hex_value: &str,
+        bytes: &[u8],
+    ) -> Result<BlobPutResponse, RequestError> {
+        let limits = self.limits;
+        let dir = self.dir.clone();
+        self.request(account, Some(device), true, |acct, err| {
+            if bytes.len() as u64 > limits.max_blob_bytes {
+                return Err(err(ErrorCode::PayloadTooLarge, "blob too large".into()));
+            }
+            if bytes.is_empty() || !hex::is_sha256_hex(sha256_hex_value) {
+                return Err(err(
+                    ErrorCode::ValidationFailed,
+                    "invalid blob digest".into(),
+                ));
+            }
+            let actual = sha256_hex(bytes);
+            if actual != sha256_hex_value {
+                return Err(err(
+                    ErrorCode::IntegrityMismatch,
+                    "blob bytes do not match the declared SHA-256".into(),
+                ));
+            }
+            if let Some(m) = acct.blobs.get(id) {
+                return if m.sha256 == actual {
+                    Ok(BlobPutResponse {
+                        blob_id: id.clone(),
+                        duplicate: true,
+                    })
+                } else {
+                    Err(err(
+                        ErrorCode::Conflict,
+                        "blob id already stored with different bytes".into(),
+                    ))
+                };
+            }
+            let len = bytes.len() as u64;
+            if let Some(q) = acct.quota_bytes {
+                if acct.op_bytes + acct.blob_bytes + len > q {
+                    return Err(err(
+                        ErrorCode::QuotaExceeded,
+                        "account quota exceeded".into(),
+                    ));
+                }
+            }
+            if let Some(dir) = &dir {
+                Self::write_atomic(&Self::blob_path(dir, account, id), bytes).map_err(|e| {
+                    err(
+                        ErrorCode::InternalError,
+                        format!("could not store blob: {e}"),
+                    )
+                })?;
+            }
+            acct.blobs.insert(
+                id.clone(),
+                BlobMeta {
+                    sha256: actual,
+                    len,
+                },
+            );
+            acct.blob_data.insert(id.clone(), bytes.to_vec());
+            acct.blob_bytes += len;
+            Ok(BlobPutResponse {
+                blob_id: id.clone(),
+                duplicate: false,
+            })
+        })
+    }
+
+    /// `GET /v1/blobs/{id}`.
+    pub fn blob_get(
+        &self,
+        account: &AccountId,
+        device: &DeviceId,
+        id: &BlobId,
+    ) -> Result<Vec<u8>, RequestError> {
+        self.request(account, Some(device), false, |acct, err| {
+            acct.blob_data
+                .get(id)
+                .cloned()
+                .ok_or_else(|| err(ErrorCode::NotFound, "unknown blob".into()))
         })
     }
 }

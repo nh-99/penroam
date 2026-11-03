@@ -26,7 +26,7 @@
 
 use crate::model::*;
 use crate::operation::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -129,7 +129,7 @@ struct NotebookState {
 }
 
 /// Where a conflict is.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConflictTarget {
     NotebookTitle,
@@ -257,7 +257,31 @@ impl Replica {
     }
 
     /// Applies one operation. On error nothing changed.
+    ///
+    /// Checks causal delivery itself: every operation of the writing device
+    /// must arrive in sequence and its dependencies must already be applied
+    /// *to this replica*. That only holds when one replica sees all of a
+    /// device's operations; use [`Replica::apply_delivered`] when the caller
+    /// delivers causally across several notebooks.
     pub fn apply(&mut self, op: &LocalOperation) -> Result<Applied, MergeError> {
+        self.apply_inner(op, true)
+    }
+
+    /// Applies an operation the caller has already delivered causally across
+    /// the whole account (all of its dependencies, in every notebook, were
+    /// applied before it). Device sequences may then have gaps within one
+    /// notebook. Concurrency is still decided from the operation's own
+    /// frontier (`causal_dependencies`), which must be the full version
+    /// vector its device had seen.
+    pub fn apply_delivered(&mut self, op: &LocalOperation) -> Result<Applied, MergeError> {
+        self.apply_inner(op, false)
+    }
+
+    fn apply_inner(
+        &mut self,
+        op: &LocalOperation,
+        check_delivery: bool,
+    ) -> Result<Applied, MergeError> {
         check_schema(op)?;
         if let DocumentOperation::NotebookPurged { .. } = op.body {
             return Err(MergeError::LocalOnly("notebookPurged"));
@@ -285,7 +309,7 @@ impl Replica {
         }
         // causal delivery: contiguous per device, dependencies applied
         let have = self.frontier.get(&op.device_id).copied().unwrap_or(0);
-        if have + 1 != op.local_sequence {
+        if check_delivery && have + 1 != op.local_sequence {
             return Err(MergeError::MissingDependency(OperationRef {
                 device_id: op.device_id,
                 device_seq: op.local_sequence - 1,
@@ -301,7 +325,9 @@ impl Replica {
                 }
                 continue;
             }
-            if self.frontier.get(&d.device_id).copied().unwrap_or(0) < d.device_seq {
+            if check_delivery
+                && self.frontier.get(&d.device_id).copied().unwrap_or(0) < d.device_seq
+            {
                 return Err(MergeError::MissingDependency(*d));
             }
             let e = frontier.entry(d.device_id).or_insert(0);
@@ -316,7 +342,8 @@ impl Replica {
         validate_body(&op.body)?;
         self.check(&op.body)?;
         self.mutate(&op.body, &w, op.at);
-        self.frontier.insert(op.device_id, op.local_sequence);
+        let f = self.frontier.entry(op.device_id).or_insert(0);
+        *f = (*f).max(op.local_sequence);
         self.applied.insert(op.id, (key, fp.0, fp.1));
         self.by_key.insert(key, op.id);
         self.updated_at = self.updated_at.max(op.at);

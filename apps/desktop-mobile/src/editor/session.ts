@@ -86,6 +86,36 @@ export function applyOpLocal(page: Page, op: OpKind, index: Map<string, Element>
   return fx;
 }
 
+/**
+ * Drops the parts of an op that no longer apply to `index` (elements a
+ * remote change removed, or ids that already exist). Returns null when
+ * nothing is left. Used when local edits are re-applied on top of a page
+ * that changed underneath them.
+ */
+export function sanitizeOp(op: OpKind, index: Map<string, Element>): OpKind | null {
+  switch (op.op) {
+    case "addElements": {
+      const elements = op.elements.filter((e) => !index.has(e.id));
+      return elements.length ? { op: "addElements", elements } : null;
+    }
+    case "removeElements": {
+      const ids = op.ids.filter((id) => index.has(id));
+      return ids.length ? { op: "removeElements", ids } : null;
+    }
+    case "replaceElements": {
+      const elements = op.elements.filter((e) => index.has(e.id));
+      return elements.length ? { op: "replaceElements", elements } : null;
+    }
+    case "setTemplate":
+      return op;
+  }
+}
+
+/** The backend rejected a batch because the page changed (stale base revision). */
+export function isRevisionConflict(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as { code?: string }).code === "conflict" && /revision/i.test(String((e as { message?: string }).message ?? ""));
+}
+
 function sortByZ(els: Element[]) {
   // Array.prototype.sort is stable, matching Rust's sort_by_key
   els.sort((a, b) => a.z - b.z);
@@ -96,6 +126,8 @@ export interface SessionEvents {
   onElementsChanged?(changed: { added: Element[]; removed: Element[]; all?: boolean; templateChanged?: boolean }): void;
   onSaveState?(state: SaveState, error?: string): void;
   onHistory?(canUndo: boolean, canRedo: boolean): void;
+  /** The whole page was replaced (remote changes merged in): re-render everything. */
+  onPageReplaced?(): void;
 }
 
 export class PageSession {
@@ -108,7 +140,15 @@ export class PageSession {
   private revision: number;
   private closed = false;
   private index: Map<string, Element>;
+  private rebases = 0;
   events: SessionEvents = {};
+  /**
+   * Reloads the page from storage. When set, a batch rejected because the
+   * page changed underneath (e.g. synced remote edits) is rebased: the fresh
+   * page is loaded and the unsaved local ops are re-applied on top, so local
+   * strokes are never lost.
+   */
+  reload: (() => Promise<Page>) | null = null;
 
   constructor(
     readonly notebookId: string,
@@ -154,9 +194,10 @@ export class PageSession {
   undo(): Change | null {
     const c = this.undoStack.pop();
     if (!c) return null;
-    this.applyLocal(c.inverse);
+    const ops = this.tolerant(c.inverse);
+    this.applyLocal(ops);
     this.redoStack.push(c);
-    this.enqueue(c.inverse);
+    this.enqueue(ops);
     this.emitHistory();
     return c;
   }
@@ -164,11 +205,51 @@ export class PageSession {
   redo(): Change | null {
     const c = this.redoStack.pop();
     if (!c) return null;
-    this.applyLocal(c.forward);
+    const ops = this.tolerant(c.forward);
+    this.applyLocal(ops);
     this.undoStack.push(c);
-    this.enqueue(c.forward);
+    this.enqueue(ops);
     this.emitHistory();
     return c;
+  }
+
+  /** Undo/redo ops minus targets that disappeared since (remote changes). */
+  private tolerant(ops: OpKind[]): OpKind[] {
+    const probe = new Map(this.index);
+    const out: OpKind[] = [];
+    for (const op of ops) {
+      const s = sanitizeOp(op, probe);
+      if (!s) continue;
+      if (s.op === "addElements") for (const e of s.elements) probe.set(e.id, e);
+      if (s.op === "removeElements") for (const id of s.ids) probe.delete(id);
+      out.push(s);
+    }
+    return out;
+  }
+
+  /**
+   * Replaces the page with a fresh copy from storage and re-applies `ops`
+   * (unsaved local edits) on top, dropping parts that no longer apply.
+   * Returns the ops that were applied (to be saved).
+   */
+  replacePage(fresh: Page, ops: OpKind[] = []): OpKind[] {
+    this.page = fresh;
+    this.revision = fresh.revision;
+    this.index = new Map(fresh.elements.map((e) => [e.id, e]));
+    const kept: OpKind[] = [];
+    for (const op of ops) {
+      const s = sanitizeOp(op, this.index);
+      if (!s) continue;
+      applyOpLocal(this.page, s, this.index);
+      kept.push(s);
+    }
+    this.events.onPageReplaced?.();
+    return kept;
+  }
+
+  /** True while nothing is waiting to be saved. */
+  get idle(): boolean {
+    return !this.inflight && this.pending.length === 0;
   }
 
   private applyLocal(ops: OpKind[]) {
@@ -217,6 +298,7 @@ export class PageSession {
     this.setState("saving");
     this.inflight = this.persist(batch).then(
       (out) => {
+        this.rebases = 0;
         this.revision = out.revision;
         this.page.revision = out.revision;
         this.inflight = null;
@@ -224,6 +306,31 @@ export class PageSession {
         else this.setState("saved");
       },
       (err) => {
+        if (isRevisionConflict(err) && this.reload && this.rebases < 3) {
+          // the page changed underneath (merged remote edits): reload it and
+          // re-apply every unsaved local op on top
+          this.rebases++;
+          const local = [...ops, ...this.pending.splice(0, this.pending.length)];
+          const reload = this.reload;
+          this.inflight = (async () => {
+            const fresh = await reload();
+            // edits committed while reloading were applied to the old page: re-apply them too
+            const all = [...local, ...this.pending.splice(0, this.pending.length)];
+            this.pending.unshift(...this.replacePage(fresh, all));
+          })().then(
+            () => {
+              this.inflight = null;
+              if (this.pending.length) this.pump();
+              else this.setState("saved");
+            },
+            (e2) => {
+              this.pending.unshift(...local);
+              this.inflight = null;
+              this.setState("error", errorMessage(e2));
+            },
+          );
+          return;
+        }
         // keep the ops (front of the queue) so nothing is lost; the user can retry
         this.pending.unshift(...ops);
         this.inflight = null;

@@ -23,6 +23,8 @@ uuid.workspace = true
 penroam-core.workspace = true
 penroam-storage.workspace = true
 penroam-pdf.workspace = true
+penroam-sync = { path = "../../../crates/penroam-sync", features = ["keychain"] }
+penroam-sync-protocol = { path = "../../../crates/penroam-sync-protocol" }
 tauri-plugin-native-ink = { path = "../../../plugins/tauri-plugin-native-ink" }
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]

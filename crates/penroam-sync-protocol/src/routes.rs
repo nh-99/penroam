@@ -1,9 +1,9 @@
 //! Route paths for the v1 HTTP API.
 //!
-//! **Proposed, not frozen.** These names follow §4 of the protocol design and
-//! may still change before the contract is frozen. No HTTP client or
-//! server is implemented in this crate. All routes except [`META`] require
-//! authentication. There are no billing routes in the public protocol.
+//! Frozen for protocol 1.0 (see the HTTP mapping in the protocol document).
+//! No HTTP client or server is implemented in this crate. All routes except
+//! [`META`] require `Authorization: Bearer <token>`. There are no billing
+//! routes in the public protocol.
 
 /// `GET` — protocol range, capabilities, limits, server instance id. Unauthenticated.
 pub const META: &str = "/v1/meta";
@@ -17,7 +17,8 @@ pub const OPS_BATCH: &str = "/v1/ops/batch";
 pub const OPS: &str = "/v1/ops";
 /// `POST` initiate a scoped blob upload (not implemented).
 pub const BLOB_UPLOADS: &str = "/v1/blobs/uploads";
-/// `PUT` upload / `GET` download an encrypted blob (not implemented).
+/// `PUT` upload / `GET` download an encrypted immutable blob (raw bytes;
+/// `PUT` carries [`HEADER_CONTENT_SHA256`]).
 pub const BLOB: &str = "/v1/blobs/{id}";
 /// `POST` advertise / `GET` fetch encrypted checkpoints (not implemented).
 pub const CHECKPOINTS: &str = "/v1/checkpoints";
@@ -25,16 +26,29 @@ pub const CHECKPOINTS: &str = "/v1/checkpoints";
 pub const ACKS: &str = "/v1/acks";
 /// `GET` usage counters ([`crate::UsageResponse`]).
 pub const USAGE: &str = "/v1/usage";
+/// `GET ?from=N` / `POST` the opaque account key log
+/// ([`crate::dto::KeyLogPage`], [`crate::dto::KeyLogAppendRequest`]).
+pub const KEYLOG: &str = "/v1/keylog";
 
-/// Proposed response header carrying the next cursor of a framed pull.
+/// JSON control documents.
+pub const MEDIA_JSON: &str = "application/json";
+/// Framed batches (push bodies, framed pull bodies).
+pub const MEDIA_BATCH: &str = "application/vnd.penroam.batch.v1";
+/// Raw encrypted blob bytes.
+pub const MEDIA_OCTETS: &str = "application/octet-stream";
+/// Request id echoed on every response (also inside error bodies).
+pub const HEADER_REQUEST_ID: &str = "Penroam-Request-Id";
+/// Lowercase hex SHA-256 of a `PUT` blob body.
+pub const HEADER_CONTENT_SHA256: &str = "Penroam-Content-Sha256";
+/// Response header carrying the next cursor of a framed pull.
 pub const HEADER_NEXT_CURSOR: &str = "Penroam-Next-Cursor";
-/// Proposed response header carrying `has_more` (`true`/`false`) of a framed pull.
+/// Response header carrying `has_more` (`true`/`false`) of a framed pull.
 pub const HEADER_HAS_MORE: &str = "Penroam-Has-More";
-/// Proposed request header carrying the negotiated protocol version (`1.0`).
+/// Request header carrying the negotiated protocol version (`1.0`).
 pub const HEADER_PROTOCOL: &str = "Penroam-Protocol";
 
 /// Every route, for documentation/compat tests.
-pub const ALL: [&str; 10] = [
+pub const ALL: [&str; 11] = [
     META,
     DEVICES,
     DEVICE,
@@ -45,6 +59,7 @@ pub const ALL: [&str; 10] = [
     CHECKPOINTS,
     ACKS,
     USAGE,
+    KEYLOG,
 ];
 
 #[cfg(test)]

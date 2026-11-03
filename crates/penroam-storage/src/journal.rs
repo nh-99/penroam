@@ -222,6 +222,37 @@ pub fn encode_txn(txn: &Txn) -> Vec<u8> {
     out
 }
 
+/// Errors of [`decode_txn`].
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum RecordError {
+    #[error("malformed operation record: {0}")]
+    Malformed(String),
+    #[error("operation schema {0} is newer than this build supports")]
+    NewerSchema(u16),
+}
+
+/// Decodes exactly one record as written by [`encode_txn`] (magic, length,
+/// CRC-32, payload, nothing after it). Sync payloads use this encoding.
+pub fn decode_txn(record: &[u8]) -> Result<Txn, RecordError> {
+    let bad = |m: &str| RecordError::Malformed(m.to_string());
+    if record.len() < RECORD_HEADER_LEN || &record[..4] != RECORD_MAGIC {
+        return Err(bad("bad record header"));
+    }
+    let len = u32::from_le_bytes(record[4..8].try_into().unwrap()) as usize;
+    let crc = u32::from_le_bytes(record[8..12].try_into().unwrap());
+    if len > MAX_RECORD_BYTES || record.len() != RECORD_HEADER_LEN + len {
+        return Err(bad("record length does not match"));
+    }
+    let payload = &record[RECORD_HEADER_LEN..];
+    if crc32fast::hash(payload) != crc {
+        return Err(bad("record checksum mismatch"));
+    }
+    decode_payload(payload).map_err(|e| match e {
+        DecodeError::NewerSchema(v) => RecordError::NewerSchema(v),
+        DecodeError::Malformed(m) => RecordError::Malformed(m),
+    })
+}
+
 // --------------------------------------------------------------- decode --
 
 #[derive(Debug)]

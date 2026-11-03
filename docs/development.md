@@ -9,7 +9,7 @@ Design: [`architecture/overview.md`](architecture/overview.md).
 
 ```text
 apps/desktop-mobile/   Tauri app (Vue frontend in src/, Rust shell in src-tauri/)
-crates/                penroam-core · penroam-storage · penroam-pdf · penroam-sync-protocol · penroam-sync-testkit
+crates/                penroam-core · penroam-storage · penroam-pdf · penroam-sync-protocol · penroam-sync-testkit · penroam-sync
 plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters)
 android/               BooxInkView (Onyx Pen SDK module) + native reference app
 ios/                   InkKit (Swift ink core, Pencil surface) + BenchHost (iPad test harness)
@@ -92,6 +92,43 @@ Xephyr :7 -screen 1300x940 -ac & DISPLAY=:7 python3 tools/linux-e2e/e2e.py scrip
 ```
 
 Sessions used so far are in `tools/linux-e2e/sessions/`; see [`platforms/linux.md`](platforms/linux.md).
+
+## Sync (developer preview)
+
+Sync only works against the **development test server**. It has a stub sign-in, no TLS and no
+hardening, so keep it on loopback.
+
+```bash
+cargo run -p penroam-sync-testkit --bin penroam-sync-testserver -- --listen 127.0.0.1:8787 --data /tmp/penroam-sync-server
+PENROAM_DEV_SYNC=1 pnpm tauri dev      # sync settings appear in debug builds or with PENROAM_DEV_SYNC=1
+```
+
+In the app: **Settings → Sync (developer preview)**. Set up the first device (save the recovery
+code), then on a second profile (another `PENROAM_LIBRARY_DIR`) choose pairing and approve its
+code from the first device, or use the recovery code. Only loopback server URLs are accepted
+unless `PENROAM_SYNC_ALLOW_ANY_URL=1`.
+
+Device keys go to the OS keychain (Secret Service on Linux, Keychain on macOS/iOS, Credential
+Manager on Windows, Keystore-backed storage on Android). Without one, sync refuses to start;
+for headless development set `PENROAM_SYNC_ALLOW_FILE_SECRETS=1`. Check the real keychain on a
+desktop session with
+`cargo test -p penroam-sync --features keychain --lib -- --ignored keychain`.
+The CLI keeps its keys in a file inside its profile folder (it is a test tool).
+
+Scripted clients, one profile directory each (separate processes, own keys):
+
+```bash
+cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a create http://127.0.0.1:8787 acct-dev
+cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-b pair-begin http://127.0.0.1:8787 acct-dev
+cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a pair-approve <code>
+cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-b pair-poll
+cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a sync
+```
+
+Tests: `cargo test -p penroam-sync` runs the convergence and fault-injection scenarios
+(`tests/sync.rs`), the randomized three-device convergence test (`tests/random.rs`, slow in
+debug builds; use `--release`), two CLI processes against the HTTP test server
+(`tests/processes.rs`) and the pinned crypto vectors (`tests/vectors.rs`).
 
 ## README screenshots
 

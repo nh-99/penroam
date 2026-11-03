@@ -39,8 +39,10 @@ pub mod version;
 pub use canonical::{canonical_aad_bytes, canonical_signing_bytes};
 pub use contract::ContractManifest;
 pub use dto::{
-    AckRequest, AckResult, Cursor, DeviceRegistrationRequest, DeviceRegistrationResponse, OpAck,
-    PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse, ServerMeta, UsageResponse,
+    AckRequest, AckResult, BlobPutResponse, Cursor, DeviceInfo, DeviceListResponse,
+    DeviceRegistrationRequest, DeviceRegistrationResponse, KeyLogAppendRequest,
+    KeyLogAppendResponse, KeyLogEntry, KeyLogPage, OpAck, PullOpsRequest, PullOpsResponse,
+    PulledOp, PushOpsResponse, ServerMeta, UsageResponse,
 };
 pub use envelope::{verify_ciphertext, EnvelopeError, EnvelopeHeader, IntegrityError, OpRef};
 pub use error::{ErrorBody, ErrorCode, RetryPolicy};

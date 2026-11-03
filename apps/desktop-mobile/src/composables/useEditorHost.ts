@@ -10,12 +10,14 @@ import { registerFlusher } from "../platform/lifecycle";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
+import { useSync } from "../stores/sync";
 import { benchHooks } from "../bench/hooks";
 
 export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: Ref<boolean>) {
   const lib = useLibrary();
   const settings = useSettings();
   const ui = useUi();
+  const sync = useSync();
   const state = reactive<EditorState>({
     tool: "pen",
     scale: 1,
@@ -140,6 +142,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       const page = await api.loadPage(nb.id, pageId);
       if (seq !== openSeq) return;
       session = new PageSession(nb.id, page, (batch) => api.applyPageOperations(nb.id, page.id, batch));
+      // a save rejected because synced remote edits changed the page is rebased, not lost
+      session.reload = () => api.loadPage(nb.id, page.id);
       await e.setSession(session, pdfCache);
       if (!lib.thumbs[pageId]) setTimeout(() => void thumbnailNow(), page.background ? 1500 : 200);
     } catch (err) {
@@ -149,6 +153,48 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     }
   }
 
+  /** Pages changed by synced remote edits, waiting until the editor is idle. */
+  const remotePending = new Set<string>();
+  let remoteTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function applyRemoteChanges() {
+    remoteTimer = null;
+    const nb = lib.current;
+    const e = editor.value;
+    if (!nb || !e) return;
+    const s = session;
+    if (s && remotePending.has(s.page.id) && s.notebookId === nb.id) {
+      if (e.isBusy() || !s.idle) {
+        // never interrupt a stroke, drag or text edit: try again shortly
+        remoteTimer = setTimeout(() => void applyRemoteChanges(), 700);
+        return;
+      }
+      remotePending.delete(s.page.id);
+      try {
+        const fresh = await api.loadPage(nb.id, s.page.id);
+        if (session === s && s.idle && !e.isBusy()) s.replacePage(fresh);
+        else remotePending.add(s.page.id);
+      } catch (err) {
+        console.warn("reload after sync", err);
+      }
+    }
+    // other changed pages: refresh their thumbnails in the background
+    for (const pid of [...remotePending]) {
+      remotePending.delete(pid);
+      if (pid === session?.page.id || !nb.pageOrder.includes(pid)) continue;
+      try {
+        const page = await api.loadPage(nb.id, pid);
+        if (page.elements.length > 20000) continue;
+        const png = await renderOffscreenThumb(page);
+        if (png && lib.current?.id === nb.id) await lib.saveThumb(pid, png);
+      } catch (err) {
+        console.warn("thumbnail after sync", err);
+      }
+    }
+    if (remotePending.size && !remoteTimer) remoteTimer = setTimeout(() => void applyRemoteChanges(), 700);
+  }
+
+  let offChanged: (() => void) | null = null;
   let unregister: (() => void) | null = null;
   const onVisibility = () => {
     if (document.visibilityState === "hidden") void flush().catch(() => {});
@@ -164,6 +210,13 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     benchHooks.editor = e;
     applySettings();
     unregister = registerFlusher(flush);
+    if (sync.available) {
+      offChanged = sync.onChanged((c) => {
+        const nbId = lib.current?.id;
+        for (const [n, p] of c.pages) if (n === nbId) remotePending.add(p);
+        if (remotePending.size && !remoteTimer) remoteTimer = setTimeout(() => void applyRemoteChanges(), 50);
+      });
+    }
     document.addEventListener("visibilitychange", onVisibility);
     await openPage(lib.currentPageId);
     if (lib.current) void fillMissingThumbs(lib.current.id);
@@ -176,6 +229,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
 
   onBeforeUnmount(() => {
     unregister?.();
+    offChanged?.();
+    if (remoteTimer) clearTimeout(remoteTimer);
     document.removeEventListener("visibilitychange", onVisibility);
     const e = editor.value;
     editor.value = null;
@@ -199,5 +254,11 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     (seen) => seen && settings.s.penOnly === "auto" && console.info("pen detected: fingers now pan/zoom"),
   );
 
-  return { state, editor, native, loading, pageError, flush, openPage, retry: () => session?.retry(), session: () => session };
+  /** Reloads pages changed outside the editor (sync, conflict resolution) once it is idle. */
+  function markChanged(pageIds: string[]) {
+    for (const p of pageIds) remotePending.add(p);
+    if (remotePending.size && !remoteTimer) remoteTimer = setTimeout(() => void applyRemoteChanges(), 50);
+  }
+
+  return { state, editor, native, loading, pageError, flush, openPage, markChanged, retry: () => session?.retry(), session: () => session };
 }

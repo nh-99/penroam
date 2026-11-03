@@ -1,0 +1,569 @@
+//! Convergence and fault-injection scenarios with independent clients.
+
+mod common;
+
+use common::*;
+use penroam_core::replica::ConflictTarget;
+use penroam_core::*;
+use penroam_sync::Phase;
+use penroam_sync_protocol::ErrorCode;
+use penroam_sync_testkit::InMemoryServer;
+use std::sync::Arc;
+
+fn server() -> Arc<InMemoryServer> {
+    Arc::new(InMemoryServer::new())
+}
+
+#[test]
+fn pairing_then_existing_notebooks_reach_the_new_device() {
+    let s = server();
+    let acct = account(&s, "acct-1");
+    let (mut a, _code) = Client::first(&s, &acct, "laptop");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Physics", PageDefaults::default(), None)
+        .unwrap();
+    add(
+        &mut a.lib,
+        nb.id,
+        p.id,
+        (0..5).map(|i| stroke(i, 1.0, "#111111")).collect(),
+    );
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "tablet", &mut a);
+    b.sync().unwrap();
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert_eq!(ink_count(&mut b.lib, nb.id), 5);
+    assert!(b.status().up_to_date, "{:?}", b.status());
+    assert_eq!(b.engine.devices().len(), 2);
+    // the server never saw the title or the strokes
+    assert!(!format!("{:?}", s.list_devices(&acct).unwrap()).contains("Physics"));
+}
+
+#[test]
+fn offline_strokes_on_both_devices_converge_to_the_union() {
+    let s = server();
+    let acct = account(&s, "acct-2");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Shared", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    a.offline(true);
+    b.offline(true);
+    for i in 0..50 {
+        add(&mut a.lib, nb.id, p.id, vec![stroke(i, 100.0, "#1d4ed8")]);
+        add(&mut b.lib, nb.id, p.id, vec![stroke(i, 300.0, "#b91c1c")]);
+    }
+    // offline: saving is unaffected; sync reports offline and keeps everything queued
+    assert!(a.sync().is_err());
+    assert_eq!(a.status().phase, Phase::Offline);
+    assert_eq!(a.status().queued, 50);
+    assert!(!a.status().up_to_date);
+    a.offline(false);
+    b.offline(false);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut a.lib, nb.id), 100);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert!(a.status().up_to_date && b.status().up_to_date);
+    assert_eq!(a.status().conflicts, 0);
+}
+
+#[test]
+fn concurrent_text_edits_keep_both_versions_until_resolved() {
+    let s = server();
+    let acct = account(&s, "acct-3");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Notes", PageDefaults::default(), None)
+        .unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![text(42, "original")]);
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    edit(
+        &mut a.lib,
+        nb.id,
+        p.id,
+        OpKind::ReplaceElements {
+            elements: vec![text(42, "edited on A")],
+        },
+    );
+    edit(
+        &mut b.lib,
+        nb.id,
+        p.id,
+        OpKind::ReplaceElements {
+            elements: vec![text(42, "edited on B")],
+        },
+    );
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(
+        view(&mut a.lib),
+        view(&mut b.lib),
+        "same visible winner everywhere"
+    );
+    let conflicts = a.engine.conflicts(nb.id).unwrap();
+    assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+    let c = &conflicts[0];
+    let all: Vec<String> =
+        std::iter::once(a.lib.load_page(nb.id, p.id).unwrap().elements[0].clone())
+            .map(|e| serde_json::to_string(&e).unwrap())
+            .chain(c.alternates.iter().map(|x| x.value.to_string()))
+            .collect();
+    assert!(
+        all.iter().any(|v| v.contains("edited on A"))
+            && all.iter().any(|v| v.contains("edited on B"))
+    );
+    // resolve on B by picking the alternate; everyone converges without conflict
+    let (target, pick) = {
+        let c = &b.engine.conflicts(nb.id).unwrap()[0];
+        (c.target.clone(), c.alternates[0].op_id)
+    };
+    assert!(matches!(target, ConflictTarget::Element { .. }));
+    b.engine
+        .resolve_conflict(&mut b.lib, nb.id, &target, pick)
+        .unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert!(a.engine.conflicts(nb.id).unwrap().is_empty());
+}
+
+#[test]
+fn page_deleted_on_one_device_while_edited_on_the_other_keeps_the_edits() {
+    let s = server();
+    let acct = account(&s, "acct-4");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Draft", PageDefaults::default(), None)
+        .unwrap();
+    a.lib.create_page(nb.id, None, None, None).unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    a.lib.delete_page(nb.id, p.id).unwrap();
+    add(
+        &mut b.lib,
+        nb.id,
+        p.id,
+        (0..3).map(|i| stroke(i, 50.0, "#15803d")).collect(),
+    );
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    let n = a.lib.notebook(nb.id).unwrap().clone();
+    assert!(
+        n.trashed_pages.iter().any(|t| t.id == p.id),
+        "tombstone, recoverable from the trash"
+    );
+    assert_eq!(
+        a.lib.load_page(nb.id, p.id).unwrap().elements.len(),
+        3,
+        "B's strokes kept"
+    );
+}
+
+#[test]
+fn lost_push_response_is_retried_without_duplicates() {
+    let s = server();
+    let acct = account(&s, "acct-5");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Retry", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    a.engine.prepare(&mut a.lib).unwrap();
+    let p0 = s.op_count(&acct);
+    // the push is committed but its response never arrives
+    s.drop_next_responses(1);
+    let mut r = penroam_sync::ReconcileReport::default();
+    assert!(a.engine.push_for_tests(&mut r).is_err());
+    assert_eq!(s.op_count(&acct), p0 + 1, "the server committed it");
+    assert_eq!(a.status().queued, 1, "not shown as uploaded");
+    a.sync().unwrap();
+    assert_eq!(s.op_count(&acct), p0 + 1, "the retry was a duplicate");
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut b.lib, nb.id), 1, "applied once");
+    assert!(a.status().up_to_date);
+}
+
+#[test]
+fn crash_after_pull_before_apply_and_lost_cursor_redelivery_are_safe() {
+    let s = server();
+    let acct = account(&s, "acct-6");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Crash", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    add(
+        &mut a.lib,
+        nb.id,
+        p.id,
+        (0..10).map(|i| stroke(i, 5.0, "#111111")).collect(),
+    );
+    a.sync().unwrap();
+    // B pulls (exchange) and is killed before installing
+    b.engine.prepare(&mut b.lib).unwrap();
+    let mut r = penroam_sync::ReconcileReport::default();
+    b.engine.exchange(&mut r).unwrap();
+    assert_eq!(r.delivered, 1);
+    let mut b = b.restart();
+    b.sync().unwrap();
+    assert_eq!(ink_count(&mut b.lib, nb.id), 10);
+    // B "lost" its cursor (killed after apply, before saving it): redelivery
+    b.engine.store.state.cursor = None;
+    b.engine.store.save().unwrap();
+    let mut b = b.restart();
+    b.sync().unwrap();
+    assert_eq!(
+        ink_count(&mut b.lib, nb.id),
+        10,
+        "redelivered ops deduplicated"
+    );
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    // a kill right after local journaling (before ingest) loses nothing either
+    add(&mut b.lib, nb.id, p.id, vec![stroke(99, 9.0, "#b91c1c")]);
+    let mut b = b.restart();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut a.lib, nb.id), 11);
+}
+
+#[test]
+fn large_asset_upload_interrupted_then_retried() {
+    let s = server();
+    let acct = account(&s, "acct-7");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, _) = a
+        .lib
+        .create_notebook("Scans", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    let big: Vec<u8> = (0..25 * 1024 * 1024u32)
+        .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
+        .collect();
+    let asset = a
+        .lib
+        .add_asset(nb.id, &big, "application/pdf", Some("scan.pdf".into()))
+        .unwrap();
+    let ops_before = s.op_count(&acct);
+    // the blob upload fails (server error); nothing referencing it is pushed
+    s.fail_next_requests(3, ErrorCode::ServiceUnavailable);
+    assert!(a.sync().is_err());
+    assert!(a.sync().is_err());
+    assert!(a.sync().is_err());
+    assert_eq!(
+        s.op_count(&acct),
+        ops_before,
+        "no op references a missing blob"
+    );
+    a.sync().unwrap();
+    b.sync().unwrap();
+    let got = b.lib.read_asset(nb.id, &asset.sha256).unwrap();
+    assert_eq!(got.len(), big.len());
+    assert_eq!(got, big);
+}
+
+#[test]
+fn removed_device_cannot_write_and_keeps_local_notes() {
+    let s = server();
+    let acct = account(&s, "acct-8");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Team", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    let b_id = b.engine.device_id().to_string();
+    a.engine.remove_device(&b_id).unwrap();
+    add(&mut b.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    let err = b.sync().unwrap_err();
+    assert_eq!(b.status().phase, Phase::Revoked, "{err}");
+    assert_eq!(
+        ink_count(&mut b.lib, nb.id),
+        1,
+        "pending local note preserved"
+    );
+    // A continues in a new epoch that B cannot read
+    add(&mut a.lib, nb.id, p.id, vec![stroke(2, 2.0, "#111111")]);
+    a.sync().unwrap();
+    assert!(a
+        .engine
+        .devices()
+        .iter()
+        .any(|d| d.device_id == b_id && !d.active));
+}
+
+#[test]
+fn recovery_code_restores_access_on_a_new_device() {
+    let s = server();
+    let acct = account(&s, "acct-9");
+    let (mut a, code) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Recover me", PageDefaults::default(), None)
+        .unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    a.sync().unwrap();
+    let mut c = Client::recovered(&s, &acct, &code);
+    c.sync().unwrap();
+    assert_eq!(view(&mut a.lib), view(&mut c.lib));
+    // a wrong code is refused without touching anything
+    let bad = code.replace(&code[5..10], "00000");
+    let dir = tempfile::tempdir().unwrap();
+    let t = penroam_sync::transport::InProcessTransport::new(
+        s.clone(),
+        acct.clone(),
+        penroam_sync_protocol::DeviceId::new("x").unwrap(),
+    );
+    let r = penroam_sync::SyncEngine::enroll_with_recovery(
+        penroam_sync::Setup {
+            library_root: dir.path().to_path_buf(),
+            server_url: "x".into(),
+            account_id: acct.as_str().into(),
+            label: "x".into(),
+        },
+        t,
+        Box::new(penroam_sync::FileSecretStore::new(dir.path().join("s"))),
+        &bad,
+    );
+    assert!(r.is_err());
+}
+
+#[test]
+fn server_registered_device_without_approval_gets_nothing() {
+    let s = server();
+    let acct = account(&s, "acct-10");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    a.lib
+        .create_notebook("Private", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    // two devices register during pairing: the real one and an injected one
+    let dir = tempfile::tempdir().unwrap();
+    let t = penroam_sync::transport::InProcessTransport::new(
+        s.clone(),
+        acct.clone(),
+        penroam_sync_protocol::DeviceId::new("x").unwrap(),
+    );
+    let (mut real, code) = penroam_sync::SyncEngine::begin_pairing(
+        penroam_sync::Setup {
+            library_root: dir.path().to_path_buf(),
+            server_url: "x".into(),
+            account_id: acct.as_str().into(),
+            label: "real".into(),
+        },
+        t,
+        Box::new(penroam_sync::FileSecretStore::new(dir.path().join("s"))),
+    )
+    .unwrap();
+    let evil =
+        penroam_sync::crypto::DeviceKeys::generate(uuid::Uuid::new_v4().to_string()).unwrap();
+    s.register_device_keys(
+        &acct,
+        &penroam_sync_protocol::DeviceRegistrationRequest {
+            device_id: Some(penroam_sync_protocol::DeviceId::new(evil.device_id.clone()).unwrap()),
+            signing_public_key: penroam_sync_protocol::base64url::encode(&evil.sign_pk()),
+            encryption_public_key: penroam_sync_protocol::base64url::encode(&evil.dh_pk()),
+            label: None,
+        },
+    )
+    .unwrap();
+    // a code naming the injected device's id but the real fingerprint is refused
+    let forged = penroam_sync::engine::pairing_code(&evil.device_id, &code[9..]);
+    assert!(a.engine.approve_device(&forged, "evil").is_err());
+    // the real code approves exactly the real device
+    a.engine.approve_device(&code, "real").unwrap();
+    assert!(real.poll_enrollment().unwrap().is_some());
+    let devices = a.engine.devices();
+    assert_eq!(devices.len(), 2);
+    assert!(devices.iter().all(|d| d.device_id != evil.device_id));
+}
+
+#[test]
+fn tampered_envelopes_are_quarantined_and_never_applied() {
+    use penroam_sync_protocol::framing::{encode_json_batch, FrameItem};
+    let s = server();
+    let acct = account(&s, "acct-11");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Signed", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    let before = view(&mut b.lib);
+    // A's real keys sign an envelope whose ciphertext was not produced with the content key
+    let keys = penroam_sync::crypto::DeviceKeys::from_secret_string(
+        &std::fs::read_to_string(a.root.join("sync-secrets/sync-device-keys.secret")).unwrap(),
+    )
+    .unwrap();
+    let a_dev = penroam_sync_protocol::DeviceId::new(keys.device_id.clone()).unwrap();
+    let next = a.engine.store.state.next_seq + 1;
+    let ct = vec![7u8; 100];
+    let mut h = penroam_sync_protocol::EnvelopeHeader {
+        envelope_version: 1,
+        op_id: penroam_sync_protocol::OpId::new(uuid::Uuid::new_v4().to_string()).unwrap(),
+        device_id: a_dev.clone(),
+        device_seq: next,
+        notebook_id: penroam_sync_protocol::NotebookRoutingId::new("nb-fake").unwrap(),
+        depends_on: vec![],
+        key_epoch: 1,
+        op_schema_version: 1,
+        ciphertext_sha256: penroam_sync::crypto::sha256_hex(&ct),
+        ciphertext_length: ct.len() as u64,
+        signature: String::new(),
+    };
+    let sig = penroam_sync::crypto::sign(
+        &keys.signing,
+        b"",
+        &penroam_sync_protocol::canonical_signing_bytes(&h),
+    );
+    h.signature = penroam_sync_protocol::base64url::encode(&sig);
+    // and a second one with a forged signature
+    let mut h2 = h.clone();
+    h2.op_id = penroam_sync_protocol::OpId::new(uuid::Uuid::new_v4().to_string()).unwrap();
+    h2.device_seq = next + 1;
+    h2.signature = penroam_sync_protocol::base64url::encode(&[1u8; 64]);
+    let _ = FrameItem {
+        header_json: vec![],
+        ciphertext: vec![],
+    };
+    let frame = encode_json_batch(
+        &[(h.clone(), ct.clone()), (h2.clone(), ct.clone())],
+        &s.limits(),
+    )
+    .unwrap();
+    s.push(&acct, &a_dev, &frame).unwrap();
+    b.sync().unwrap();
+    assert_eq!(b.status().quarantined, 2);
+    assert_eq!(b.status().phase, Phase::IntegrityAlert);
+    assert_eq!(view(&mut b.lib), before, "nothing applied");
+    let _ = (nb, p);
+}
+
+#[test]
+fn newer_operation_schema_pauses_without_losing_anything() {
+    use penroam_sync_protocol::framing::encode_json_batch;
+    let s = server();
+    let acct = account(&s, "acct-12");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    a.lib
+        .create_notebook("Future", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    let keys = penroam_sync::crypto::DeviceKeys::from_secret_string(
+        &std::fs::read_to_string(a.root.join("sync-secrets/sync-device-keys.secret")).unwrap(),
+    )
+    .unwrap();
+    let a_dev = penroam_sync_protocol::DeviceId::new(keys.device_id.clone()).unwrap();
+    let ct = vec![9u8; 64];
+    let mut h = penroam_sync_protocol::EnvelopeHeader {
+        envelope_version: 1,
+        op_id: penroam_sync_protocol::OpId::new(uuid::Uuid::new_v4().to_string()).unwrap(),
+        device_id: a_dev.clone(),
+        device_seq: a.engine.store.state.next_seq + 1,
+        notebook_id: penroam_sync_protocol::NotebookRoutingId::new("nb-future").unwrap(),
+        depends_on: vec![],
+        key_epoch: 1,
+        op_schema_version: 2,
+        ciphertext_sha256: penroam_sync::crypto::sha256_hex(&ct),
+        ciphertext_length: ct.len() as u64,
+        signature: String::new(),
+    };
+    let sig = penroam_sync::crypto::sign(
+        &keys.signing,
+        b"",
+        &penroam_sync_protocol::canonical_signing_bytes(&h),
+    );
+    h.signature = penroam_sync_protocol::base64url::encode(&sig);
+    s.push(
+        &acct,
+        &a_dev,
+        &encode_json_batch(&[(h, ct)], &s.limits()).unwrap(),
+    )
+    .unwrap();
+    b.sync().unwrap();
+    let st = b.status();
+    assert_eq!(st.phase, Phase::NeedsUpgrade);
+    assert_eq!(st.pending_remote, 1, "ciphertext kept for a future version");
+    assert!(!st.up_to_date);
+}
+
+#[test]
+fn long_offline_client_after_compaction_keeps_unsent_work() {
+    let s = server();
+    let acct = account(&s, "acct-13");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Old", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    b.engine.store.state.cursor = None; // as if B never pulled
+    b.engine.store.save().unwrap();
+    for i in 0..5 {
+        add(&mut a.lib, nb.id, p.id, vec![stroke(i, 1.0, "#111111")]);
+    }
+    a.sync().unwrap();
+    s.expire_cursors_before(&acct, s.op_count(&acct));
+    add(&mut b.lib, nb.id, p.id, vec![stroke(77, 7.0, "#b91c1c")]);
+    assert!(b.sync().is_err());
+    assert_eq!(b.status().phase, Phase::RebaseRequired);
+    assert_eq!(ink_count(&mut b.lib, nb.id), 1, "local work kept");
+    assert_eq!(
+        b.status().queued,
+        0,
+        "and already uploaded before the pull failed"
+    );
+    a.sync().unwrap();
+    assert!(ink_count(&mut a.lib, nb.id) >= 6, "others still receive it");
+}
+
+#[test]
+fn rename_conflict_and_notebook_created_on_both_sides() {
+    let s = server();
+    let acct = account(&s, "acct-14");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, _) = a
+        .lib
+        .create_notebook("Name", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    a.lib.rename_notebook(nb.id, "Name A").unwrap();
+    b.lib.rename_notebook(nb.id, "Name B").unwrap();
+    b.lib
+        .create_notebook("Only on B", PageDefaults::default(), None)
+        .unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert_eq!(a.lib.notebook_ids().len(), 2);
+    let c = a.engine.conflicts(nb.id).unwrap();
+    assert!(c.iter().any(|c| c.target == ConflictTarget::NotebookTitle));
+    // a later rename on either side supersedes both
+    a.lib.rename_notebook(nb.id, "Final").unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(b.lib.notebook(nb.id).unwrap().title, "Final");
+    assert!(b.engine.conflicts(nb.id).unwrap().is_empty());
+}

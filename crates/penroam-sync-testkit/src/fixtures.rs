@@ -296,6 +296,7 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
     json(
         "device-registration-request.json",
         to_fixture_json(&DeviceRegistrationRequest {
+            device_id: None,
             signing_public_key: base64url::encode(&[0x11; 32]),
             encryption_public_key: base64url::encode(&[0x22; 32]),
             label: Some("Linux desktop".into()),

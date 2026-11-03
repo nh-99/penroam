@@ -44,6 +44,11 @@ pub struct CheckpointManifest {
     pub floor: u64,
     /// `floor` of the previous checkpoint.
     pub prev_floor: u64,
+    /// Per notebook: the journal sequence a merged sync install covered.
+    /// Replay skips notebook-level transactions at or below it (the
+    /// installed snapshot already contains them, merged).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub installed: std::collections::BTreeMap<Uuid, u64>,
 }
 
 impl CheckpointManifest {
@@ -55,6 +60,7 @@ impl CheckpointManifest {
             last_seq: 0,
             floor: 0,
             prev_floor: 0,
+            installed: Default::default(),
         }
     }
 }

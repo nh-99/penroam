@@ -22,7 +22,8 @@ crates/penroam-core             schema, validation, page ops, operation schema +
 crates/penroam-storage          live library: device-wide operation journal, checkpoints, trash, recovery, outbox counters, .penroam archive
 crates/penroam-pdf              PDF inspection (import) and annotated vector export (lopdf)
 crates/penroam-sync-protocol    public sync wire contract: versions, ids, limits, envelope header, canonical bytes, framing, DTOs, errors
-crates/penroam-sync-testkit     in-memory fake sync server (test scaffolding) + protocol fixture generator
+crates/penroam-sync-testkit     development test server (in memory / persisted, HTTP, fault injection) + fixture generator
+crates/penroam-sync             sync client: crypto, key log, operation log, transports, reconcile engine, dev CLI
 plugins/tauri-plugin-native-ink NativeInkSurface: Rust bridge, android/ (Kotlin), ios/ (Swift/UIKit)
 android/  ios/                  native ink modules: BooxInkView (Kotlin), InkKit (Swift), BenchHost (iPad test harness)
 tests/fixtures/                 shared fixtures (strokes, geometry and text-layout goldens, scenes, PDF, .prp golden, legacy libraries)
@@ -74,12 +75,32 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
 * **Merge model.** `penroam_core::replica::Replica` merges operations from several devices
   order-independently: multi-value registers with version-vector dominance, a deterministic
   visible winner (highest op id) with every alternate retained as a conflict, tombstones,
-  add-wins restore, fractional page order keys. It is tested for convergence but **not yet wired
-  into storage** — nothing applies remote operations yet.
+  add-wins restore, fractional page order keys. The sync engine applies operations to it with
+  `apply_delivered` after delivering them in causal order across the whole account.
 * **Sync contract.** `penroam-sync-protocol` defines the wire format (envelope header, canonical
-  signing/AEAD bytes, `PRSB` batch framing, errors, retry policy); `penroam-sync-testkit` is a
-  fake in-memory server for tests. Neither depends on core or storage. There is no network code,
-  authentication or encryption in the app. See [`../protocol/sync-protocol-v1.md`](../protocol/sync-protocol-v1.md).
+  signing/AEAD bytes, `PRSB` batch framing, DTOs, errors, retry policy). `penroam-sync-testkit`
+  is the development test server (in memory or persisted to a folder, with an HTTP front end
+  and fault injection). Neither depends on core or storage. See
+  [`../protocol/sync-protocol-v1.md`](../protocol/sync-protocol-v1.md).
+* **Sync engine (developer preview).** `penroam-sync` keeps its own state under
+  `<library>/sync/`: an append-only operation log of every synced operation (local and remote),
+  parked and quarantined envelopes, and the verified key log pin. One reconcile has three phases
+  so the library lock is never held during network I/O:
+  1. *prepare* (locked): on first use, synthesize create operations from the current
+     snapshots; then copy new journal operations into the operation log, re-sequenced as the
+     sync device's operations whose dependencies are the version vector the library view had
+     absorbed;
+  2. *exchange* (unlocked): verify the key log, upload blobs, push sealed and signed envelopes
+     (per-operation acks), pull pages, verify signature and AEAD before anything else, deliver
+     causally or park, persist the cursor only after that is durable;
+  3. *apply* (locked): merge every notebook that received remote operations
+     (`Replica::apply_delivered`) and install the result with `Library::install_merged`, which
+     writes snapshots and records how far the install covered the journal so replay never
+     re-applies an edit the merged snapshot already contains.
+
+  In the app a worker thread runs reconciles (debounced after local edits, every minute when
+  idle, exponential backoff with jitter after failures) and emits `sync://status` and
+  `sync://changed`. Crypto and membership: [`../security/threat-model.md`](../security/threat-model.md).
 * Undo/redo are semantic: each change carries forward + inverse ops; undo enqueues the inverse
   as a new batch with fresh op ids. Page revisions guard against stale batches (a mismatch is a
   conflict, never a merge); a retried batch id returns the original outcome.

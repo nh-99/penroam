@@ -312,6 +312,7 @@ export class InkEditor {
       onElementsChanged: (c) => this.onElementsChanged(c),
       onSaveState: (s, err) => this.emit({ saveState: s, saveError: err ?? null }),
       onHistory: (u, r) => this.emit({ canUndo: u, canRedo: r }),
+      onPageReplaced: () => this.pageReplaced(),
     };
     const p = session.page;
     this.renderer.setPage(p.size.width, p.size.height, p.template);
@@ -330,6 +331,23 @@ export class InkEditor {
     }
     this.updateNative();
     if (this.background) await this.renderPdf();
+  }
+
+  /** True while a stroke, erase, drag or text edit is in progress. */
+  isBusy(): boolean {
+    return !!(this.active || this.erase || this.drag || this.edit);
+  }
+
+  /** The session's page was replaced (remote changes merged): redraw, keep the view. */
+  private pageReplaced() {
+    const s = this.session;
+    if (!s) return;
+    for (const id of [...this.selection]) if (!s.elementById(id)) this.selection.delete(id);
+    this.renderer.template = s.page.template;
+    this.renderer.renderAll(this.visibleDocRect());
+    if (this.native?.ownsCommittedInk && this.nativeMounted) this.nativeCall((n) => n.loadCommittedInk(this.inkElements()));
+    if (this.selection.size) this.updateSelectionBox();
+    this.emitAll();
   }
 
   private inkElements(): InkStroke[] {

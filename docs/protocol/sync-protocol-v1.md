@@ -1,6 +1,6 @@
 # Penroam Sync Protocol v1: implemented contract
 
-**Status:** Implemented as public Rust types and fixtures. The wire *shapes* in this document (envelope header, canonical bytes, batch framing, error codes) are what `penroam-sync-protocol` encodes and what the committed fixtures pin. **HTTP route names and the HTTP transport mapping are proposed, not frozen.** The design rationale is in `agent-docs/01-SYNC-PROTOCOL-V1.md`.
+**Status:** Implemented as public Rust types and fixtures. The wire *shapes* in this document (envelope header, canonical bytes, batch framing, error codes) are what `penroam-sync-protocol` encodes and what the committed fixtures pin. The HTTP mapping (§12) is frozen for protocol 1.0. Encryption, signatures and the key log (§13–§15) are implemented by the client crate `penroam-sync`; **they have not been independently reviewed** (see [`../security/threat-model.md`](../security/threat-model.md)). The design rationale is in `agent-docs/01-SYNC-PROTOCOL-V1.md`.
 
 | Crate | Purpose | Dependencies |
 |---|---|---|
@@ -88,7 +88,7 @@ The client generates op ids (for example a hyphenated UUIDv4/v7) and keeps each 
 | `op_schema_version` | u16 | ≥ 1 (0 is invalid). Newer values are relayed (§2). |
 | `ciphertext_sha256` | string | Exactly 64 **lowercase** hex characters |
 | `ciphertext_length` | u64 | `1..=max_ciphertext_bytes_per_op` |
-| `signature` | string | 1..=512 characters of canonical unpadded base64url. Not verified yet. Fixtures use a placeholder (64 × `0xA5`). |
+| `signature` | string | 1..=512 characters of canonical unpadded base64url: the Ed25519 signature (§13). The server does not verify it (it does not hold the membership log); receiving clients verify it before decrypting. Fixtures use a placeholder (64 × `0xA5`). |
 
 `EnvelopeHeader::validate(&limits)` returns a typed `EnvelopeError`. Each error has a stable `kind()` and an `error_code()`:
 
@@ -98,7 +98,7 @@ The client generates op ids (for example a hyphenated UUIDv4/v7) and keeps each 
 | `ciphertext_too_large` | `payload_too_large` |
 | `invalid_op_schema_version`, `id_too_long`, `too_many_dependencies`, `duplicate_dependency`, `dependency_cycle`, `empty_ciphertext`, `invalid_ciphertext_hash`, `invalid_signature_encoding` | `invalid_envelope` |
 
-`verify_ciphertext(header, bytes)` checks the declared length and SHA-256. A mismatch returns `integrity_mismatch`. This is an integrity check only. Authentication will come from the device signature (not yet implemented).
+`verify_ciphertext(header, bytes)` checks the declared length and SHA-256. A mismatch returns `integrity_mismatch`. This is an integrity check only; authenticity comes from the device signature, which receiving clients check (§13).
 
 ## 5. Canonical bytes
 
@@ -131,7 +131,7 @@ Always validate a header before signing or verifying it.
 
 Fixtures: `envelope-header.valid.json` produces `envelope-header.valid.signing-bytes.hex` (245 bytes). Its `depends_on` is deliberately unsorted on the wire.
 
-### 5.2 `canonical_aad_bytes`: AEAD associated-data layout (for the future encryption layer)
+### 5.2 `canonical_aad_bytes`: AEAD associated-data layout
 
 This layout binds the payload to its identity, versions, key epoch, length and causal dependencies. It excludes `ciphertext_sha256` and `signature`. `ciphertext_length` is known before encryption for a fixed-tag AEAD.
 
@@ -164,7 +164,7 @@ JSON control headers travel next to the raw binary ciphertext. Ciphertext is nev
 
 * Push body (`POST /v1/ops/batch`): each item header is an `EnvelopeHeader`.
 * Pull frame: each item header is a `PulledOp { server_seq, header }`, in the same order as `PullOpsResponse.items`.
-* Proposed media type: `application/vnd.penroam.batch.v1`.
+* Media type: `application/vnd.penroam.batch.v1`.
 
 The decoder rejects all of the following **before allocating**:
 
@@ -195,14 +195,14 @@ The encoder enforces the same limits. If any header does not parse, the server r
 
 Quotas and pricing are server policy (`UsageResponse.quota_bytes`). They are never permanent client limits.
 
-## 8. DTOs and proposed routes
+## 8. DTOs and routes
 
-All routes below are **proposed, not frozen**. They are defined in `penroam_sync_protocol::routes`. Every route except `/v1/meta` is authenticated.
+Routes are defined in `penroam_sync_protocol::routes` and frozen for protocol 1.0 (HTTP mapping in §12). Every route except `/v1/meta` needs `Authorization: Bearer <token>`.
 
 | Route | Request | Response |
 |---|---|---|
 | `GET /v1/meta` | — | `ServerMeta` |
-| `POST /v1/devices`, `GET /v1/devices`, `DELETE /v1/devices/{id}` | `DeviceRegistrationRequest` (placeholder: public keys are opaque base64url, optional `label` is visible to the server) | `DeviceRegistrationResponse { device_id }` |
+| `POST /v1/devices`, `GET /v1/devices`, `DELETE /v1/devices/{id}` | `DeviceRegistrationRequest { device_id?, signing_public_key, encryption_public_key, label? }` (keys opaque to the server; the label is server-visible, so clients send a generic one) / `DeviceListResponse { devices: [DeviceInfo] }` | `DeviceRegistrationResponse { device_id }`. Clients never trust keys from these routes; membership comes from the key log (§14) |
 | `POST /v1/ops/batch` | PRSB frame of `EnvelopeHeader`s | `PushOpsResponse { acks: [{op_id, result}] }` |
 | `GET /v1/ops?cursor=..&limit=..` | `PullOpsRequest { cursor?, limit }` | `PullOpsResponse { items: [{server_seq, header}], next_cursor, has_more }` plus a PRSB frame of `PulledOp`s (§8.1) |
 | `POST /v1/acks` | `AckRequest { applied_cursor }` | — |
@@ -217,7 +217,7 @@ The `result` of each op is tagged:
 
 Acks always name exact operations, never just "the batch". A `Cursor` is opaque bounded base64url (at most 512 characters). Persist `next_cursor` only after the items have been applied durably. `has_more` says whether more items existed when the query ran.
 
-### 8.1 Pull transport mapping (proposed)
+### 8.1 Pull transport mapping
 
 The JSON control document carries the headers. The ciphertexts travel in a PRSB frame whose items match `items` one to one. Over HTTP, the proposal is: a framed response (`Accept: application/vnd.penroam.batch.v1`) carries the pagination in the `Penroam-Next-Cursor` and `Penroam-Has-More` response headers. The testkit returns both forms as `PullPage { response, frame }`. This mapping is not frozen until a real HTTP client and server exist.
 
@@ -235,7 +235,7 @@ The JSON control document carries the headers. The ciphertexts travel in a PRSB 
 | `conflict` | 409 | no | State conflict. Refresh and decide. |
 | `op_id_conflict` | 409 | no | The op_id or device_seq was reused with different content. This is a local bug or corruption. Do not overwrite. |
 | `recovery_required` | 409 | no | Run the recovery/rebase flow. Preserve unsent ops. |
-| `cursor_expired` | 410 | no | Fetch a checkpoint, then the tail (checkpoints not yet implemented). |
+| `cursor_expired` | 410 | no | Fetch a checkpoint, then the tail. Checkpoints are not implemented yet: the client stops pulling (`rebaseRequired`) and keeps uploading its own operations. |
 | `checkpoint_required` | 410 | no | Same as `cursor_expired` |
 | `payload_too_large` | 413 | no | Split the batch or respect the limits. |
 | `invalid_envelope` | 422 | no | The header failed validation. |
@@ -310,16 +310,110 @@ The fixture set itself is also pinned. `crates/penroam-sync-testkit/tests/fixtur
 
 Changing a committed fixture is a wire-visible change. It needs an explicit version decision.
 
-## 12. Not yet implemented
+## 12. HTTP mapping (frozen for 1.0)
 
-* **Cryptography:**
-  * Ed25519 device signatures over `canonical_signing_bytes`, and signature verification before accepting a write
-  * AEAD encryption with `canonical_aad_bytes`
-  * key epochs and rotation, recovery codes
-  * `crypto-vectors.json`
-* **Authentication and sessions:** login, token handling, the device enrollment and pairing flow, and real device revocation semantics. `DeviceRegistration*` are placeholders.
-* **Blobs:** upload intents, signed URLs, blob storage and verification. Only the route constants and `max_blob_bytes` exist.
-* **Checkpoints/snapshots:** `covers_server_seq`, the checkpoint + tail recovery path, and real compaction/retention. The testkit only *simulates* expiry.
-* **Real HTTP:** server (private repo, Axum) and client transport, OpenAPI document, freezing route names and the pull transport mapping (§8.1), rate limiting, request size enforcement at the HTTP layer.
-* **Client sync engine:** outbox upload, state machine, and applying remote operations through the merge model (`penroam_core::replica`).
-* **Release tooling:** filling `git_sha` in the contract manifest, and the cross-check test of the duplicated format constants against storage/core.
+| Route | Token | Request | Response |
+|---|---|---|---|
+| `GET /v1/meta` | none | — | `ServerMeta` |
+| `POST /v1/devices` | account | `DeviceRegistrationRequest` | `DeviceRegistrationResponse` |
+| `GET /v1/devices` | account | — | `DeviceListResponse` |
+| `DELETE /v1/devices/{id}` | device | — | 204 |
+| `POST /v1/ops/batch` | device | PRSB frame of `EnvelopeHeader`s (`application/vnd.penroam.batch.v1`) | `PushOpsResponse` |
+| `GET /v1/ops?cursor=&limit=` | device | `Accept: application/vnd.penroam.batch.v1` | PRSB frame of `PulledOp`; `Penroam-Next-Cursor` and `Penroam-Has-More: true\|false` headers. With `Accept: application/json`: `PullOpsResponse` without ciphertexts |
+| `POST /v1/acks` | device | `AckRequest` | 204 |
+| `GET /v1/usage` | account | — | `UsageResponse` |
+| `GET /v1/keylog?from=N` | account | — | `KeyLogPage` (at most 256 entries) |
+| `POST /v1/keylog` | account | `KeyLogAppendRequest` | `KeyLogAppendResponse`; 409 `conflict` when `index` is not the current length |
+| `PUT /v1/blobs/{id}` | device | raw bytes, `Penroam-Content-Sha256: <hex>` | `BlobPutResponse` |
+| `GET /v1/blobs/{id}` | device | — | raw bytes |
+
+* "Account" tokens identify an account; "device" tokens identify a registered device of it.
+  How tokens are obtained is not part of this protocol (the development test server has a
+  `POST /_test/session` stub; a hosted service uses its own sign-in).
+* Every response carries `Penroam-Request-Id`. Errors are an `ErrorBody` with the status of
+  §9 and, when `retry_after_ms` is set, `Retry-After` in whole seconds (rounded up).
+* Bodies need `Content-Length`; servers check size limits before reading the body.
+* New capabilities in 1.0: `keylog.v1`, `blobs.v1`. Clients use these routes only when the
+  capability is listed.
+
+## 13. Payloads, encryption and signatures (client rules)
+
+These rules are implemented in `penroam-sync` (`crypto.rs`, `engine.rs`). **Not independently
+reviewed.**
+
+* **Payload.** The plaintext of one envelope is one operation encoded exactly like a journal
+  record (`penroam_storage::journal::encode_txn` of a single-operation notebook transaction:
+  magic, length, CRC-32, binary body with column-encoded ink points). Receivers decode it with
+  `decode_txn` and reject trailing bytes.
+* **Header ↔ payload binding.** After decryption the operation's id, device, sequence, schema
+  version and dependency set must equal the signed header, and the notebook's routing alias
+  (below) must equal `notebook_id`. Any mismatch quarantines the envelope.
+* **Identities.** `device_id` and `op_id` are hyphenated lowercase UUIDs. The *sync device* is
+  created at enrollment and is distinct from the local library's device id. A device's local
+  operations are re-sequenced into its own contiguous `device_seq`.
+* **Causality.** `depends_on` carries the full version vector the device's local view had
+  absorbed when the operation was made (plus its own previous sequence). Receivers deliver an
+  operation only when every dependency and the device's previous sequence are delivered;
+  concurrency in the merge is decided from this vector, never from server order or clocks.
+* **Keys.** Each epoch has a random 32-byte content key (§14). With HKDF-SHA256:
+  * notebook routing alias = `"nb-" + base64url(HMAC-SHA256(HKDF(epoch, "penroam/routing/v1"), notebook_uuid)[..16])`
+  * notebook payload key = `HKDF(epoch, salt = alias, info = "penroam/notebook-content/v1")`
+  * blob key = `HKDF(epoch, salt = alias, info = "penroam/blob/v1")`; blob id = `"b-" + base64url(HMAC(HKDF(epoch, "penroam/blob-id/v1"), alias ‖ asset_sha256)[..20])`
+* **Encryption.** XChaCha20-Poly1305. Ciphertext = `nonce(24) ‖ ciphertext ‖ tag(16)`, so
+  `ciphertext_length = 40 + payload length`. Associated data = `canonical_aad_bytes(header)`.
+  The nonce is `HMAC-SHA256(key, "penroam/nonce/v1" ‖ op_id ‖ SHA-256(payload))[..24]`, so a
+  retried operation produces the same ciphertext (required by the server's idempotency check)
+  and different plaintexts never share a nonce.
+* **Signature.** Ed25519 by the sync device over `canonical_signing_bytes(header)`. Receivers
+  look up the signer in the verified key log, verify the signature, check the ciphertext hash,
+  and only then decrypt. Failures are quarantined, never applied, and surfaced as a security
+  alert.
+* **Unknown schema.** A header with a newer `op_schema_version` is kept encrypted and parked;
+  the client reports `needsUpgrade` and loses nothing.
+
+## 14. Key log
+
+An append-only list of opaque entries per account (`/v1/keylog`). The server only enforces
+"append at the current length". Each entry is JSON
+`{"body": base64url(body_json), "signer": "account"|<device_id>, "sig": base64url(ed25519)}`,
+signed over `"penroam/keylog/v1\0" ‖ body_json`. The body is
+`{"v": 1, "index": n, "prev": hex(SHA-256(previous entry bytes)), "entry": …}` with:
+
+| `entry.kind` | Signed by | Content |
+|---|---|---|
+| `genesis` (index 0 only) | account key | account public key, recovery public key, first device certificate, epoch 1 key wrapped to that device and to the recovery key |
+| `addDevice` | an active member, or the account key | device certificate (id, Ed25519 and X25519 public keys, label), every epoch key wrapped to it |
+| `removeDevice` | an active member, or the account key | device id, `new_epoch = current + 1`, the new key wrapped to every remaining device and to the recovery key |
+
+* The **recovery code** encodes a 32-byte root secret (`PRK1-` + Crockford base32 with a
+  2-byte checksum). It derives the account signing key and the recovery X25519 key. Devices do
+  not store it.
+* Key wrapping: X25519 ephemeral-static, HKDF-SHA256 (salt = ephemeral ‖ recipient public
+  keys, info = `"penroam/wrap/v1" ‖ context`), XChaCha20-Poly1305 with the context as
+  associated data; context = `"penroam/epoch-grant/v1/<epoch>/<recipient>"`.
+* Clients verify the whole chain, pin `(account key, length, head hash)` and reject a log that
+  rewrites a verified prefix. The server can withhold new entries but cannot inject a device
+  or change history.
+* **Pairing.** The new device registers its keys and shows a pairing code: the first 8 hex
+  digits of its id and its 64-bit key fingerprint. A trusted device finds the registration
+  whose keys match that fingerprint, appends `addDevice`, and both devices show a 6-digit
+  comparison code derived from the account key and the new device's fingerprint. Matching
+  codes rule out key substitution in both directions.
+
+## 15. Blobs
+
+Assets are uploaded **before** any operation that references them, encrypted with the blob key
+(nonce derived as in §13, associated data = routing alias), under the opaque blob id. Uploads
+are idempotent (same id and bytes → `duplicate`). Receivers download, decrypt, verify the
+asset's SHA-256, write it atomically, and only then make it visible.
+
+## 16. Not implemented yet
+
+* **Checkpoints/snapshots:** `covers_server_seq`, the checkpoint + tail recovery path, and real
+  compaction/retention. The testkit only *simulates* expiry; clients report `rebaseRequired`.
+* **Production server and sign-in:** the private hosted server, real authentication, rate
+  limiting and an OpenAPI document. Only the development test server exists.
+* **Independent security review** of §13–§14 and published cross-language `crypto-vectors.json`
+  (the Rust crate pins its own vectors in tests).
+* **Release tooling:** filling `git_sha` in the contract manifest, and the cross-check test of
+  the duplicated format constants against storage/core.

@@ -8,6 +8,7 @@ import Toasts from "./components/Toasts.vue";
 import { useLibrary } from "./stores/library";
 import { useSettings } from "./stores/settings";
 import { useUi } from "./stores/ui";
+import { useSync } from "./stores/sync";
 import { api, hasHost } from "./platform/ipc";
 import { flushEverything } from "./platform/lifecycle";
 import { detectNativeInk } from "./platform/nativeInk";
@@ -15,6 +16,7 @@ import { detectNativeInk } from "./platform/nativeInk";
 const lib = useLibrary();
 const settings = useSettings();
 const ui = useUi();
+const sync = useSync();
 const nativeKind = ref<string | null>(null);
 let unlisten: UnlistenFn | null = null;
 
@@ -35,6 +37,15 @@ onMounted(async () => {
   await lib.refresh();
   if (!hasHost()) return;
   console.info("startup: library loaded");
+  // sync (developer preview): one query at start-up; nothing more unless it is available
+  void sync.init().then(() => {
+    if (!sync.available) return;
+    sync.onChanged((c) => {
+      // remote changes were merged into the library
+      if (!lib.current) void lib.refresh();
+      else if (c.notebookIds.includes(lib.current.id)) void lib.reloadCurrent();
+    });
+  });
   const bench = await withTimeout(api.autobenchRequested(), 5000, "autobench query").catch((e) => {
     console.error("autobench query failed", e);
     return null;
@@ -75,7 +86,10 @@ onMounted(async () => {
   }
 });
 
-onBeforeUnmount(() => unlisten?.());
+onBeforeUnmount(() => {
+  unlisten?.();
+  sync.dispose();
+});
 </script>
 
 <template>

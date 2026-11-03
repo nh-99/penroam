@@ -1,0 +1,70 @@
+[package]
+name = "penroam-sync"
+description = "Offline-first, end-to-end encrypted Penroam sync client (engine, crypto, key log, transports)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["http"]
+# HTTP transport (ureq). Off for builds that only use the in-process transport.
+http = ["dep:ureq"]
+# In-process transport over the public test server (tests, tools).
+testkit = ["dep:penroam-sync-testkit"]
+# Device keys in the platform keychain/keystore (see secrets::keychain).
+keychain = [
+  "dep:keyring-core",
+  "dep:apple-native-keyring-store",
+  "dep:windows-native-keyring-store",
+  "dep:zbus-secret-service-keyring-store",
+  "dep:android-native-keyring-store",
+]
+
+[dependencies]
+penroam-core.workspace = true
+penroam-storage.workspace = true
+penroam-sync-protocol = { path = "../penroam-sync-protocol" }
+penroam-sync-testkit = { path = "../penroam-sync-testkit", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+crc32fast = "1"
+ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+hmac = "0.12"
+getrandom = "0.2"
+zeroize = { version = "1.8", features = ["derive"] }
+keyring-core = { version = "1", optional = true }
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "json"] }
+
+# One native credential store per platform (only compiled where it applies).
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", optional = true, features = ["keychain"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+apple-native-keyring-store = { version = "1", optional = true, features = ["protected"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = { version = "1", optional = true, default-features = false }
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1", optional = true, features = ["crypto-rust"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = { version = "1", optional = true }
+
+[dev-dependencies]
+penroam-sync = { path = ".", features = ["testkit"] }
+penroam-sync-testkit = { path = "../penroam-sync-testkit" }
+penroam-storage = { path = "../penroam-storage", features = ["fault-injection"] }
+tempfile.workspace = true
+
+[[bin]]
+name = "penroam-sync-cli"
+required-features = ["http"]

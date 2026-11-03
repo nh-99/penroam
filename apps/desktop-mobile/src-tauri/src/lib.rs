@@ -8,6 +8,7 @@
 
 mod bench;
 mod commands;
+mod sync;
 
 use penroam_storage::Library;
 use std::sync::Mutex;
@@ -15,6 +16,8 @@ use tauri::{Emitter, Manager};
 
 pub struct AppState {
     pub lib: Mutex<Library>,
+    /// Background sync worker (developer preview), if set up.
+    pub sync: sync::SyncSlot,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -34,7 +37,9 @@ pub fn run() {
             }
             app.manage(AppState {
                 lib: Mutex::new(lib),
+                sync: sync::SyncSlot::default(),
             });
+            sync::resume_on_launch(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -78,6 +83,20 @@ pub fn run() {
             commands::export_annotated_pdf,
             commands::import_stroke_document,
             commands::exit_app,
+            sync::sync_info,
+            sync::sync_setup_first,
+            sync::sync_setup_pair,
+            sync::sync_setup_recovery,
+            sync::sync_poll_pairing,
+            sync::sync_approve_device,
+            sync::sync_remove_device,
+            sync::sync_devices,
+            sync::sync_now,
+            sync::sync_pause,
+            sync::sync_conflicts,
+            sync::sync_resolve_conflict,
+            sync::sync_diagnostics,
+            sync::sync_disconnect,
             bench::system_info,
             bench::proc_stats,
             bench::startup_ms,

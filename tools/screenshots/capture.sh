@@ -32,7 +32,12 @@ Xephyr "$DISPLAY_NUM" -screen 2560x1800 -ac -br -noreset >/dev/null 2>&1 &
 XEPHYR_PID=$!
 sleep 2
 
+# Isolated XDG folders: the session changes the theme, and WebKit keeps the
+# app's settings (localStorage) under XDG_DATA_HOME. Without this the run would
+# change the theme of the developer's own Penroam install.
+mkdir -p "$WORK/xdg/data" "$WORK/xdg/cache" "$WORK/xdg/config"
 DISPLAY="$DISPLAY_NUM" GDK_SCALE=2 E2E_SETTLE=6 \
+  XDG_DATA_HOME="$WORK/xdg/data" XDG_CACHE_HOME="$WORK/xdg/cache" XDG_CONFIG_HOME="$WORK/xdg/config" \
   python3 tools/linux-e2e/e2e.py tools/screenshots/session.txt "$WORK/shots" "$WORK/library"
 
 mkdir -p "$OUT"

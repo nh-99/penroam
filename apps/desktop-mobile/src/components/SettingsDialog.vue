@@ -2,6 +2,8 @@
 import { computed } from "vue";
 import { Monitor, Sun, Moon, Tablet, ShieldCheck } from "@lucide/vue";
 import Modal from "./ui/Modal.vue";
+import SyncSection from "./SyncSection.vue";
+import { useSync } from "../stores/sync";
 import { useSettings, type ThemePref } from "../stores/settings";
 import { useLibrary } from "../stores/library";
 import type { PenOnlyMode } from "../editor/input";
@@ -10,6 +12,7 @@ const props = defineProps<{ nativeKind: string | null }>();
 const emit = defineEmits<{ close: [] }>();
 const settings = useSettings();
 const lib = useLibrary();
+const sync = useSync();
 const themes: { v: ThemePref; label: string; icon: any }[] = [
   { v: "system", label: "System", icon: Monitor },
   { v: "light", label: "Light", icon: Sun },
@@ -60,11 +63,18 @@ const rec = computed(() => lib.recovery);
           <input v-model="settings.s.useNativeInk" type="checkbox" class="h-5 w-5" />
         </label>
       </section>
+      <SyncSection v-if="sync.available" />
       <section class="flex gap-3 rounded-xl bg-surface-2 p-3 text-xs leading-relaxed text-muted epaper:border">
         <ShieldCheck :size="18" class="shrink-0 text-ok" />
         <p>
-          Penroam works fully offline. Notebooks are stored only on this device, in an open format; there is no account, cloud,
-          sync, analytics or AI model. Use Export to move a notebook to another device as a <code>.penroam</code> file.
+          <template v-if="sync.configured">
+            Penroam works fully offline. Notebooks are stored on this device in an open format and, with the sync preview above,
+            uploaded end-to-end encrypted. There are no analytics or AI models. Export still works without sync.
+          </template>
+          <template v-else>
+            Penroam works fully offline. Notebooks are stored only on this device, in an open format; there is no account, cloud,
+            sync, analytics or AI model. Use Export to move a notebook to another device as a <code>.penroam</code> file.
+          </template>
           <template v-if="rec && (rec.replayedBatches || rec.truncatedJournals || rec.orphanedFiles)">
             <br />Last start-up recovery: {{ rec.replayedBatches }} journal batch(es) replayed, {{ rec.truncatedJournals }} incomplete record(s) discarded, {{ rec.orphanedFiles }} unreferenced file(s) set aside.
           </template>

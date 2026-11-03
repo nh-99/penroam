@@ -8,6 +8,9 @@ import { useEditorHost } from "../composables/useEditorHost";
 import Toolbar from "../components/Toolbar.vue";
 import PageSidebar from "../components/PageSidebar.vue";
 import SaveIndicator from "../components/SaveIndicator.vue";
+import SyncIndicator from "../components/SyncIndicator.vue";
+import ConflictsDialog from "../components/ConflictsDialog.vue";
+import { useSync } from "../stores/sync";
 import SettingsDialog from "../components/SettingsDialog.vue";
 import PromptDialog from "../components/PromptDialog.vue";
 import TemplatePreview from "../components/TemplatePreview.vue";
@@ -26,6 +29,12 @@ const viewport = ref<HTMLElement | null>(null);
 const narrow = ref(window.innerWidth < 768);
 const drawerOpen = ref(false);
 const showSettings = ref(false);
+const showConflicts = ref(false);
+const sync = useSync();
+function openSync() {
+  if ((sync.status?.conflicts ?? 0) > 0) showConflicts.value = true;
+  else showSettings.value = true;
+}
 const renaming = ref(false);
 const blocked = computed(() => narrow.value && drawerOpen.value);
 const host = useEditorHost(viewport, blocked);
@@ -160,6 +169,7 @@ watch(narrow, (n) => {
         </div>
         <div class="ml-auto flex items-center gap-0.5">
           <SaveIndicator class="mr-1.5" :state="st.saveState" :error="st.saveError" @retry="host.retry()" />
+          <SyncIndicator class="mr-1" @open="openSync" />
           <IconBtn label="Add page after this one" :shortcut="`${mod}+Shift+N`" @click="addPage()"><Plus :size="20" /></IconBtn>
           <Menu label="Page template">
             <template #trigger="{ toggle, open }">
@@ -225,6 +235,7 @@ watch(narrow, (n) => {
         @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" />
     </footer>
 
+    <ConflictsDialog v-if="showConflicts" :notebook-id="nb.id" :current-title="nb.title" @close="showConflicts = false" @resolved="lib.reloadCurrent(); lib.currentPageId && host.markChanged([lib.currentPageId])" />
     <SettingsDialog v-if="showSettings" :native-kind="host.native.value?.kind ?? null" @close="showSettings = false" />
     <PromptDialog v-if="renaming" title="Rename notebook" label="Title" :value="nb.title" confirm="Rename" @close="renaming = false" @submit="(t) => { lib.rename(nb.id, t); renaming = false; }" />
   </div>

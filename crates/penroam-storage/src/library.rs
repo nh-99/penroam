@@ -154,6 +154,8 @@ pub struct Library {
     recent_batches: HashMap<Uuid, (Uuid, Uuid, ApplyOutcome)>,
     recent_order: std::collections::VecDeque<Uuid>,
     purged: HashSet<Uuid>,
+    /// See [`CheckpointManifest::installed`].
+    installed: std::collections::BTreeMap<Uuid, u64>,
     tuning: Tuning,
     id_counter: Option<u128>,
     _lock: File,
@@ -281,6 +283,7 @@ impl Library {
             recent_batches: HashMap::new(),
             recent_order: Default::default(),
             purged: HashSet::new(),
+            installed: Default::default(),
             tuning: Tuning {
                 max_entries: JOURNAL_MAX_ENTRIES,
                 min_compact_bytes: JOURNAL_MIN_COMPACT_BYTES,
@@ -288,6 +291,7 @@ impl Library {
             id_counter: None,
             _lock: lock,
         };
+        lib.installed = lib.manifest.installed.clone();
         lib.load_notebooks()?;
         lib.replay(txns)?;
         lib.outbox.enqueued_through = lib.last_seq;
@@ -450,6 +454,15 @@ impl Library {
             }
             if t.last_seq() <= floor {
                 continue; // covered by the snapshots
+            }
+            if matches!(t.target, TxnTarget::Notebook { .. })
+                && self
+                    .manifest
+                    .installed
+                    .get(&nb_id)
+                    .is_some_and(|s| t.last_seq() <= *s)
+            {
+                continue; // contained, merged, in a sync install
             }
             match &t.target {
                 TxnTarget::Page {
@@ -1367,6 +1380,7 @@ impl Library {
             last_seq: self.last_seq,
             floor,
             prev_floor: self.manifest.floor,
+            installed: self.installed.clone(),
             ..self.manifest.clone()
         };
         if new == self.manifest {
@@ -1511,6 +1525,106 @@ impl Library {
         Ok(())
     }
 
+    // ---------------------------------------------------------------- sync --
+
+    /// Installs a merged notebook state produced by the sync engine (the
+    /// notebook and every page whose content changed). Nothing is journaled:
+    /// the sync operation log is the durability source for remote changes,
+    /// and the engine re-installs after a crash.
+    ///
+    /// Contract: every local operation journaled for this notebook must
+    /// already be part of the merged state (the engine ingests local
+    /// operations before merging). Snapshots are written atomically; page
+    /// revisions move past any journaled local revision so that journal
+    /// replay never re-applies an edit the snapshot already contains.
+    pub fn install_merged(&mut self, nb: Notebook, pages: Vec<Page>) -> Result<()> {
+        let nb_id = nb.id;
+        if self.purged.contains(&nb_id) {
+            // erased on this device; a purge is local-only
+            return Ok(());
+        }
+        validate_notebook(&nb)?;
+        for p in &pages {
+            validate_page(p)?;
+            if !nb.all_page_ids().any(|id| id == p.id) {
+                return Err(StorageError::Invalid(format!(
+                    "page {} is not part of notebook {nb_id}",
+                    p.id
+                )));
+            }
+        }
+        if !self.notebooks.contains_key(&nb_id) {
+            fs::create_dir_all(self.nb_dir(nb_id).join("pages"))?;
+            fs::create_dir_all(self.nb_dir(nb_id).join("assets"))?;
+        }
+        self.notebooks.insert(nb_id, nb);
+        for mut page in pages {
+            let key = (nb_id, page.id);
+            let mut base = self.pending.get(&key).map_or(0, |txns| {
+                txns.iter()
+                    .filter_map(|t| match t.target {
+                        TxnTarget::Page { revision, .. } => Some(revision),
+                        _ => None,
+                    })
+                    .max()
+                    .unwrap_or(0)
+            });
+            if let Some(c) = self.pages.get(&key) {
+                base = base.max(c.page.revision);
+            } else if let Ok((old, _)) =
+                self.read_snapshot(nb_id, page.id, &self.page_path(nb_id, page.id))
+            {
+                base = base.max(old.revision);
+            }
+            page.revision = base + 1;
+            self.pending.remove(&key);
+            if !self.pages.contains_key(&key) {
+                self.evict_if_needed()?;
+            }
+            self.tick += 1;
+            self.pages.insert(
+                key,
+                CachedPage {
+                    page,
+                    journal_entries: 0,
+                    journal_bytes: 0,
+                    snapshot_bytes: 0,
+                    last_used: self.tick,
+                    first_dirty_seq: Some(self.last_seq.max(1)),
+                },
+            );
+            self.snapshot_page(nb_id, key.1)?;
+        }
+        self.save_notebook_snapshot(nb_id)?;
+        self.dirty_notebooks.remove(&nb_id);
+        self.installed.insert(nb_id, self.last_seq);
+        self.write_checkpoint()
+    }
+
+    /// Stores asset bytes received through sync (verified by hash) without
+    /// creating an operation; the merged notebook lists the asset.
+    pub fn install_asset(&mut self, nb_id: Uuid, bytes: &[u8]) -> Result<String> {
+        let hash = sha256_hex(bytes);
+        let path = self.asset_path(nb_id, &hash);
+        if !path.exists() {
+            fs::create_dir_all(self.nb_dir(nb_id).join("assets"))?;
+            write_atomic(&path, bytes)?;
+        }
+        Ok(hash)
+    }
+
+    /// Whether the bytes of an asset are present locally.
+    pub fn has_asset(&self, nb_id: Uuid, hash: &str) -> bool {
+        self.asset_path(nb_id, hash).exists()
+    }
+
+    /// Ids of every notebook in the library (live and trashed).
+    pub fn notebook_ids(&self) -> Vec<Uuid> {
+        let mut v: Vec<Uuid> = self.notebooks.keys().copied().collect();
+        v.sort();
+        v
+    }
+
     // -------------------------------------------------------------- assets --
 
     pub fn add_asset(
@@ -1646,8 +1760,10 @@ fn keys_for_insert(nb: &Notebook, at: usize, n: usize) -> Vec<String> {
 /// increasing in the new order (fewest operations).
 fn reorder_keys(nb: &Notebook, order: &[Uuid]) -> Vec<(Uuid, String)> {
     let keys: Vec<&str> = order.iter().map(|p| nb.key_of(*p).unwrap_or("")).collect();
-    // longest strictly increasing subsequence (by key, then id), O(n log n)
-    let cmp_key = |i: usize| (keys[i], order[i]);
+    // longest subsequence with strictly increasing keys, O(n log n). Equal
+    // keys (from concurrent inserts on two devices) cannot keep their place:
+    // nothing fits strictly between them, so those pages get new keys.
+    let cmp_key = |i: usize| keys[i];
     let mut tails: Vec<usize> = Vec::new();
     let mut prev: Vec<Option<usize>> = vec![None; order.len()];
     for i in 0..order.len() {

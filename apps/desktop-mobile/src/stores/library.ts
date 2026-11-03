@@ -125,6 +125,28 @@ export const useLibrary = defineStore("library", () => {
     await api.saveThumbnail(nb.id, pageId, png).catch((e) => console.warn("thumbnail not saved", e));
   }
 
+  /** Remote (synced) changes touched the open notebook: refresh its metadata. */
+  async function reloadCurrent() {
+    const nb = current.value;
+    if (!nb) return;
+    try {
+      const fresh = await api.getNotebook(nb.id);
+      if (current.value?.id !== nb.id) return;
+      current.value = fresh;
+      const pid = currentPageId.value;
+      if (pid && !fresh.pageOrder.includes(pid)) {
+        // the open page was deleted on another device: it is in the trash, show a neighbour
+        const old = nb.pageOrder.indexOf(pid);
+        currentPageId.value = fresh.pageOrder[Math.min(Math.max(old, 0), fresh.pageOrder.length - 1)] ?? null;
+        ui.info("The page you were on was deleted on another device. It is in this notebook's trash.");
+      }
+      void loadThumbs();
+      void refresh();
+    } catch (e) {
+      console.warn("reload after sync", e);
+    }
+  }
+
   async function rename(id: string, title: string) {
     try {
       const nb = await api.renameNotebook(id, title);
@@ -326,5 +348,6 @@ export const useLibrary = defineStore("library", () => {
     exportPdf,
     saveThumb,
     loadThumbs,
+    reloadCurrent,
   };
 });
