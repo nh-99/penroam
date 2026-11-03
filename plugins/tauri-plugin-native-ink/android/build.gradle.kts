@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.penroam.nativeink"
+    namespace = "ink.penroam.nativeink"
     compileSdk = 36
     defaultConfig {
         minSdk = 26

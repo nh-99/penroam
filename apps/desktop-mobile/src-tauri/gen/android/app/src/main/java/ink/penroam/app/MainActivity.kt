@@ -1,4 +1,4 @@
-package dev.penroam.app
+package ink.penroam.app
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge

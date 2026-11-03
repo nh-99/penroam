@@ -1,4 +1,4 @@
-package dev.penroam.nativeink
+package ink.penroam.nativeink
 
 import android.app.Activity
 import android.view.View

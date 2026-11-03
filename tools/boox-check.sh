@@ -13,7 +13,7 @@
 set -euo pipefail
 export PATH="$HOME/Android/sdk/platform-tools:$PATH"
 cd "$(dirname "$0")/.."
-pkg=dev.penroam.app
+pkg=ink.penroam.app
 ext=/sdcard/Android/data/$pkg/files
 out=benchmarks/results/boox/app-check
 mkdir -p "$out"

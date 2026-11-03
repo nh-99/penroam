@@ -150,7 +150,7 @@ fn library_root(app: &AppHandle) -> PathBuf {
         .unwrap_or_default()
 }
 
-const KEYCHAIN_SERVICE: &str = "dev.penroam.app.sync";
+const KEYCHAIN_SERVICE: &str = "ink.penroam.app.sync";
 const DEVICE_SECRET: &str = "sync-device-keys";
 
 /// The secret store for this library's sync keys: the OS keychain/keystore.

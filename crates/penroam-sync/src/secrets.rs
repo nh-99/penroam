@@ -243,7 +243,7 @@ mod keychain {
         #[ignore]
         fn keychain_round_trip() {
             let scope = format!("test-{}", uuid::Uuid::new_v4());
-            let s = KeychainSecretStore::open("dev.penroam.app.test", &scope).unwrap();
+            let s = KeychainSecretStore::open("ink.penroam.app.test", &scope).unwrap();
             assert_eq!(s.get("k").unwrap(), None);
             s.set("k", "secret\nvalue").unwrap();
             assert_eq!(s.get("k").unwrap().as_deref(), Some("secret\nvalue"));
