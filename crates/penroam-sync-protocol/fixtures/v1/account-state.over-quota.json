@@ -1,0 +1,24 @@
+{
+  "account_id": "acct-fixture-0001",
+  "plan": {
+    "id": "free",
+    "name": "Free",
+    "status": "free"
+  },
+  "storage": {
+    "used_bytes": 851443712,
+    "quota_bytes": 104857600,
+    "free_quota_bytes": 104857600
+  },
+  "writable": false,
+  "read_only_reason": "over_quota",
+  "offers": [],
+  "actions": [
+    "manage_billing",
+    "cancel_deletion"
+  ],
+  "deletion": {
+    "requested_at_unix_s": 1793750400,
+    "erase_after_unix_s": 1796342400
+  }
+}

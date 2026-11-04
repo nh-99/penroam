@@ -415,6 +415,118 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
         )) + "\n",
     );
 
+    // Plan, storage and billing links (account.v1, protocol 1.3).
+    use penroam_sync_protocol::account::{actions, plan_status, read_only_reasons};
+    use penroam_sync_protocol::{
+        AccountState, BillingLink, BillingLinkRequest, DeletionState, PlanOffer, PlanState,
+        StorageState,
+    };
+    const MIB: u64 = 1024 * 1024;
+    json(
+        "account-state.free.json",
+        to_fixture_json(&AccountState {
+            account_id: account.clone(),
+            plan: PlanState {
+                id: "free".into(),
+                name: "Free".into(),
+                status: plan_status::FREE.into(),
+                renews_at_unix_s: None,
+                ends_at_unix_s: None,
+            },
+            storage: StorageState {
+                used_bytes: 2098,
+                quota_bytes: Some(100 * MIB),
+                free_quota_bytes: Some(100 * MIB),
+            },
+            writable: true,
+            read_only_reason: None,
+            offers: vec![PlanOffer {
+                id: "cloud-monthly".into(),
+                name: "Penroam Cloud".into(),
+                price_label: "$3.99 / month".into(),
+                quota_bytes: 5 * 1024 * MIB,
+            }],
+            actions: vec![actions::SUBSCRIBE.into(), actions::REQUEST_DELETION.into()],
+            deletion: None,
+        }),
+    );
+    json(
+        "account-state.over-quota.json",
+        to_fixture_json(&AccountState {
+            account_id: account.clone(),
+            plan: PlanState {
+                id: "free".into(),
+                name: "Free".into(),
+                status: plan_status::FREE.into(),
+                renews_at_unix_s: None,
+                ends_at_unix_s: None,
+            },
+            storage: StorageState {
+                used_bytes: 812 * MIB,
+                quota_bytes: Some(100 * MIB),
+                free_quota_bytes: Some(100 * MIB),
+            },
+            writable: false,
+            read_only_reason: Some(read_only_reasons::OVER_QUOTA.into()),
+            offers: vec![],
+            actions: vec![
+                actions::MANAGE_BILLING.into(),
+                actions::CANCEL_DELETION.into(),
+            ],
+            deletion: Some(DeletionState {
+                requested_at_unix_s: 1_793_750_400,
+                erase_after_unix_s: 1_796_342_400,
+            }),
+        }),
+    );
+    json(
+        "account-state.past-due.json",
+        to_fixture_json(&AccountState {
+            account_id: account.clone(),
+            plan: PlanState {
+                id: "cloud".into(),
+                name: "Penroam Cloud".into(),
+                status: plan_status::PAST_DUE.into(),
+                renews_at_unix_s: None,
+                ends_at_unix_s: Some(1_794_960_000),
+            },
+            storage: StorageState {
+                used_bytes: 812 * MIB,
+                quota_bytes: Some(5 * 1024 * MIB),
+                free_quota_bytes: Some(100 * MIB),
+            },
+            writable: true,
+            read_only_reason: None,
+            offers: vec![],
+            actions: vec![
+                actions::MANAGE_BILLING.into(),
+                actions::REQUEST_DELETION.into(),
+            ],
+            deletion: None,
+        }),
+    );
+    json(
+        "account-billing-link-request.json",
+        to_fixture_json(&BillingLinkRequest {
+            action: actions::SUBSCRIBE.into(),
+            offer_id: Some("cloud-monthly".into()),
+        }),
+    );
+    json(
+        "account-billing-link.json",
+        to_fixture_json(&BillingLink {
+            url: "https://billing.example.invalid/session/fixture".into(),
+            expires_in_s: 600,
+        }),
+    );
+    json(
+        "account-deletion.json",
+        to_fixture_json(&DeletionState {
+            requested_at_unix_s: 1_793_750_400,
+            erase_after_unix_s: 1_796_342_400,
+        }),
+    );
+
     raw.push(("pull-batch.page1.bin", page1.frame));
     raw.push(("pull-batch.page2.bin", page2.frame));
     for (name, bytes) in raw {

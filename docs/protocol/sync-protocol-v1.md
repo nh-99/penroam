@@ -15,7 +15,7 @@ Each number is independent. None is derived from another.
 
 | Constant | Value | Describes |
 |---|---|---|
-| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 1 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
+| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 3 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
 | `ENVELOPE_VERSION` | 1 | Opaque remote container: envelope header, canonical bytes, framing |
 | `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 1 (1) | Encrypted semantic operation payload |
 | `FILE_FORMAT_VERSION` | 1 | Local `.prp` page file |
@@ -27,7 +27,7 @@ Each number is independent. None is derived from another.
 The local-format numbers are copied into the protocol crate on purpose, because it must not depend on storage. They are advertised in `contract-manifest.json`:
 
 ```json
-{ "protocol": {"major": 1, "minor": 1}, "envelope_version": 1,
+{ "protocol": {"major": 1, "minor": 3}, "envelope_version": 1,
   "op_schema": {"min": 1, "max": 1},
   "formats": {"file_format": 1, "journal_format": 1, "archive_format": 2, "notebook_schema": 2, "page_schema": 1},
   "git_sha": null }
@@ -44,8 +44,8 @@ The local-format numbers are copied into the protocol crate on purpose, because 
   * `MalformedRange`: an advertised range has min > max.
 
   Every `Incompatible` maps to `upgrade_required`. The client stops syncing, keeps its outbox and local data, and shows an actionable state. It never "tries anyway".
-* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2). Clients ignore unknown capabilities.
-* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind.
+* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b). Clients ignore unknown capabilities.
+* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind. 1.3 adds `account.v1` (§12b) and the error code `reauth_required`; older clients never call the new routes and read the new code as `unknown`.
 * Clients must call `Limits::validate()` on advertised limits. They refuse values that are 0 or above the hard maxima.
 * Op schema: servers relay payloads whose `op_schema_version` is newer than they know, because the payload is opaque to them. A client that cannot apply a newer schema calls `EnvelopeHeader::check_op_schema_supported()`. On failure it pauses with `upgrade_required` and keeps the ciphertext. It never drops the operation.
 * Unknown `ErrorCode` strings deserialize to `unknown`, which is treated as not retryable.
@@ -233,6 +233,7 @@ The JSON control document carries the headers. The ciphertexts travel in a PRSB 
 | `unauthenticated` | 401 | no | Re-authenticate. Never erase the outbox. |
 | `forbidden` | 403 | no | Account/device mismatch. Surface it. |
 | `device_revoked` | 403 | no | Re-enroll the device. Keep local data. |
+| `reauth_required` | 403 | no | The action needs a recent sign-in (§12b). Sign in again, then retry with the new account session. |
 | `not_found` | 404 | no | Unknown resource |
 | `conflict` | 409 | no | State conflict. Refresh and decide. |
 | `op_id_conflict` | 409 | no | The op_id or device_seq was reused with different content. This is a local bug or corruption. Do not overwrite. |
@@ -376,7 +377,7 @@ opaque; clients store them in the keychain and never log them.
 2. **Session exchange (server).** The server verifies the ID token's signature against the
    issuer's JWKS, `iss`, `aud` (= `client_id`), `exp` and `iat`, maps `(iss, sub)` to an
    account and returns an **account session**. An account session may use `/v1/devices`
-   (register, list), `/v1/keylog`, `/v1/usage` and `/v1/auth/*`. Every other protected route
+   (register, list), `/v1/keylog`, `/v1/usage`, `/v1/account*` (§12b) and `/v1/auth/*`. Every other protected route
    answers 403 `forbidden`.
 3. **Device session.** The device asks for a challenge, signs
    `canonical_device_auth_bytes(account_id, device_id, challenge, server_instance_id)` with its
@@ -393,6 +394,63 @@ opaque; clients store them in the keychain and never log them.
    outbox are kept.
 
 The development test server does not list `auth.v1`; it keeps its `/_test/session` stub.
+
+## 12b. Plan, storage allowance and billing links (`account.v1`, protocol 1.3)
+
+Servers that give accounts a storage allowance, and possibly sell larger ones, list
+`account.v1`. Types are in `penroam_sync_protocol::account`; the client calls are inherent
+methods of `penroam_sync::transport::HttpTransport`. Payment providers are **not** part of the
+protocol: the app never sees a provider id or a price id, and never reports a payment.
+
+| Route | Token | Request | Response |
+|---|---|---|---|
+| `GET /v1/account` | account or device | — | `AccountState` |
+| `POST /v1/account/billing-link` | account or device | `BillingLinkRequest { action, offer_id? }` | `BillingLink { url, expires_in_s }` |
+| `POST /v1/account/deletion` | account session from a recent sign-in | `{}` | `DeletionState { requested_at_unix_s, erase_after_unix_s }` |
+| `DELETE /v1/account/deletion` | account or device | — | 204 |
+
+`AccountState { account_id, plan, storage, writable, read_only_reason?, offers, actions,
+deletion? }`:
+
+* `plan { id, name, status, renews_at_unix_s?, ends_at_unix_s? }`. `status` is one of `free`,
+  `trialing`, `active`, `canceling` (ends at `ends_at_unix_s`), `past_due` (a payment failed; the
+  plan's allowance holds until `ends_at_unix_s`, the end of the grace period) or `granted`
+  (operator allowance, may end at `ends_at_unix_s`).
+* `storage { used_bytes, quota_bytes, free_quota_bytes? }`. `quota_bytes` is the allowance in
+  force now (`null` = unlimited); `free_quota_bytes` is what every account keeps without a plan.
+* `writable` is false exactly when `read_only_reason` is set: `over_quota` (stored data exceeds
+  the allowance, for example after a plan ended), `suspended` (operator) or `deletion_pending`.
+  A read-only account still pulls, downloads blobs and lets the user export; uploads fail with
+  `quota_exceeded` and stay queued on the device. Nothing on the device is deleted or locked.
+* `offers [{ id, name, price_label, quota_bytes }]`: paid plans the account can start. The
+  server formats `price_label`; the billing page shows the binding price.
+* `actions`: what the user can do now, from `subscribe`, `manage_billing`, `request_deletion`,
+  `cancel_deletion`. Clients only call an action that is listed.
+
+All strings except ids are open sets: clients ignore unknown statuses, reasons and actions.
+Clients call `AccountState::validate()` and refuse responses that fail it.
+
+**Billing links.** `subscribe` names an offer id from `offers`; `manage_billing` takes none. The
+server creates the page (for example a hosted checkout or billing portal session) for the
+session's account and returns its URL. Clients accept only what `BillingLink::validate()`
+accepts (absolute `https://`, no credentials, at most 2048 characters) and open it in the
+**system browser**. The app does not learn the outcome from the browser: it reads
+`GET /v1/account` again when it returns to the foreground. The server derives the plan from its
+payment provider's verified records, never from the client. A client build distributed through
+an app store whose rules forbid outside purchase links does not show `offers` or open billing
+links; that is a client decision.
+
+**Deletion.** `POST /v1/account/deletion` needs an **account** session created by a sign-in within
+the server's re-authentication window (the hosted service uses 10 minutes); otherwise it answers
+403 `reauth_required`. During the cooling-off period (until `erase_after_unix_s`) the account is
+read-only (`deletion_pending`), downloads keep working, and `DELETE /v1/account/deletion`
+withdraws the request. Erasing the cloud copy never touches notes on devices.
+
+The development test server lists `account.v1` in its extended mode: a free plan whose
+allowance is the account's quota, no offers and no actions (the action routes answer
+`forbidden`). Fixtures: `account-state.free.json`, `account-state.over-quota.json`,
+`account-state.past-due.json`, `account-billing-link-request.json`, `account-billing-link.json`,
+`account-deletion.json`.
 
 ## 13. Payloads, encryption and signatures (client rules)
 

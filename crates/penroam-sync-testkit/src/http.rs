@@ -645,6 +645,17 @@ fn route_inner(
             api(s.ack(&account, &d, &r), |_| Response::empty())
         }
         ("GET", "/v1/usage") => api(s.usage(&account), |v| Response::json(200, &v)),
+        ("GET", "/v1/account") => api(s.account_state(&account), |v| Response::json(200, &v)),
+        // The test server offers no account actions (`actions` is always empty).
+        ("POST", "/v1/account/billing-link")
+        | ("POST", "/v1/account/deletion")
+        | ("DELETE", "/v1/account/deletion") => {
+            return Err(http_err(
+                ErrorCode::Forbidden,
+                "the test server offers no billing or account deletion",
+                rid,
+            ));
+        }
         ("GET", "/v1/keylog") => {
             let from = match req.query.get("from") {
                 Some(f) => f

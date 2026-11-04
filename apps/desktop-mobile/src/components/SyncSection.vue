@@ -6,6 +6,7 @@ import { computed, onMounted, ref } from "vue";
 import { Cloud, Copy, KeyRound, Link2, LogIn, Pause, Play, RefreshCw, ShieldAlert, Smartphone, Trash2, Unplug } from "@lucide/vue";
 import Btn from "./ui/Btn.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import CloudAccountSection from "./CloudAccountSection.vue";
 import { useSync } from "../stores/sync";
 import { useUi } from "../stores/ui";
 import { codeGroups, describeStatus, formatAgo, type SyncDevice } from "../platform/sync";
@@ -233,6 +234,8 @@ async function confirmDisconnect() {
           <template v-else>This device's keys are stored in the {{ sync.status.secretStore }}.</template>
         </p>
       </div>
+
+      <CloudAccountSection v-if="sync.status?.phase !== 'revoked'" />
 
       <div>
         <h4 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Devices</h4>

@@ -12,6 +12,7 @@ import SyncIndicator from "../components/SyncIndicator.vue";
 import ConflictsDialog from "../components/ConflictsDialog.vue";
 import { useSync } from "../stores/sync";
 import SettingsDialog from "../components/SettingsDialog.vue";
+import CloudBanner from "../components/CloudBanner.vue";
 import PromptDialog from "../components/PromptDialog.vue";
 import TemplatePreview from "../components/TemplatePreview.vue";
 import IconBtn from "../components/ui/IconBtn.vue";
@@ -193,6 +194,7 @@ watch(narrow, (n) => {
       <Toolbar v-if="!narrow" class="border-t border-line" :state="st" @tool="setTool" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
         @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" />
+      <CloudBanner compact class="border-t border-b-0" />
     </header>
 
     <div class="relative flex min-h-0 flex-1">

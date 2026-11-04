@@ -113,6 +113,36 @@ export interface SetupResult {
   pairingCode: string | null;
 }
 
+/** A paid plan offered by the server (desktop builds only; mobile builds never get offers). */
+export interface PlanOffer {
+  id: string;
+  name: string;
+  priceLabel: string;
+  quotaBytes: number;
+}
+
+/** Plan and storage of the synced account (`sync_account`, servers with `account.v1`). */
+export interface AccountView {
+  planName: string;
+  /** free, trialing, active, canceling, past_due, granted, or a newer value. */
+  planStatus: string;
+  renewsAtMs: number | null;
+  endsAtMs: number | null;
+  usedBytes: number;
+  quotaBytes: number | null;
+  freeQuotaBytes: number | null;
+  writable: boolean;
+  /** over_quota, suspended, deletion_pending, or a newer value. */
+  readOnlyReason: string | null;
+  offers: PlanOffer[];
+  canManageBilling: boolean;
+  canRequestDeletion: boolean;
+  canCancelDeletion: boolean;
+  deletionEraseAfterMs: number | null;
+  /** This build may show prices and open billing pages (desktop). */
+  purchasesAllowed: boolean;
+}
+
 export interface SyncChanged {
   notebookIds: string[];
   pages: [string, string][];
@@ -149,6 +179,12 @@ export const syncApi = {
     call<void>("sync_resolve_conflict", { notebookId, target, choose }),
   diagnostics: () => call<string>("sync_diagnostics"),
   disconnect: () => call<void>("sync_disconnect"),
+  account: () => call<AccountView | null>("sync_account"),
+  /** Opens checkout (`subscribe` + offer id) or the billing portal in the system browser. */
+  openBilling: (action: "subscribe" | "manage_billing", offerId?: string) => call<void>("sync_open_billing", { action, offerId: offerId ?? null }),
+  /** Signs in again in the browser, then asks the server to erase the cloud copy. */
+  requestDeletion: () => call<{ eraseAfterMs: number }>("sync_request_account_deletion"),
+  cancelDeletion: () => call<void>("sync_cancel_account_deletion"),
 };
 
 export async function onSyncStatus(cb: (s: SyncStatus | null) => void): Promise<UnlistenFn> {
@@ -178,7 +214,7 @@ export function describeStatus(s: SyncStatus | null): { tone: "ok" | "busy" | "m
     case "needsUpgrade":
       return { tone: "warn", text: "Another device uses a newer Penroam · update to receive those changes (nothing is lost)" };
     case "quotaExceeded":
-      return { tone: "warn", text: "Server storage is full · changes stay queued on this device" };
+      return { tone: "warn", text: "Uploads paused: cloud storage is full or the account is read-only · changes stay queued on this device" };
     case "rebaseRequired":
       return { tone: "warn", text: "This device was offline too long for the server's history · local changes are kept and still uploaded" };
     case "integrityAlert":
@@ -218,4 +254,121 @@ export function formatAgo(ms: number | null, now = Date.now()): string {
 /** Recovery code groups for display (`PRK1-XXXXX-…` → groups). */
 export function codeGroups(code: string): string[] {
   return code.split("-").filter(Boolean);
+}
+
+/** Byte counts for people: 812 KB, 4.2 MB, 5 GB (decimal-looking labels, binary units). */
+export function formatBytes(n: number): string {
+  const units = ["bytes", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  if (i === 0) return `${n} ${n === 1 ? "byte" : "bytes"}`;
+  return `${v >= 10 || Number.isInteger(v) ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+/** Share of the allowance in use, 0..1 (null when unlimited). */
+export function usageFraction(a: AccountView): number | null {
+  if (a.quotaBytes == null) return null;
+  if (a.quotaBytes === 0) return 1;
+  return Math.min(1, a.usedBytes / a.quotaBytes);
+}
+
+function day(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+}
+
+/**
+ * One line about the plan. Never promises anything the server did not say; unknown statuses
+ * show the plan name only.
+ */
+export function describePlan(a: AccountView): string {
+  switch (a.planStatus) {
+    case "free":
+      return "Free storage";
+    case "active":
+      return a.renewsAtMs ? `${a.planName} · renews ${day(a.renewsAtMs)}` : a.planName;
+    case "trialing":
+      return a.renewsAtMs ? `${a.planName} · trial until ${day(a.renewsAtMs)}` : `${a.planName} · trial`;
+    case "canceling":
+      return a.endsAtMs ? `${a.planName} · ends ${day(a.endsAtMs)}` : `${a.planName} · cancelled`;
+    case "past_due":
+      return a.endsAtMs
+        ? `${a.planName} · payment failed; update your payment method by ${day(a.endsAtMs)}`
+        : `${a.planName} · payment failed; update your payment method`;
+    case "granted":
+      return a.endsAtMs ? `${a.planName} · until ${day(a.endsAtMs)}` : a.planName;
+    default:
+      return a.planName;
+  }
+}
+
+/**
+ * Why uploads are paused, and what still works. `purchasesAllowed` decides whether the text
+ * may point at a plan (mobile builds never do).
+ */
+export function describeReadOnly(a: AccountView): string | null {
+  if (a.writable) return null;
+  const keep = "Your notes stay on this device and you can still download and export them; new changes wait on this device.";
+  switch (a.readOnlyReason) {
+    case "over_quota":
+      return a.purchasesAllowed && (a.offers.length > 0 || a.canManageBilling)
+        ? `Cloud storage is full, so uploads are paused. ${keep} Delete notebooks you no longer need, or choose a plan with more storage.`
+        : `Cloud storage is full, so uploads are paused. ${keep} Delete notebooks you no longer need to make room.`;
+    case "deletion_pending":
+      return `This account is scheduled for deletion, so uploads are paused. ${keep}`;
+    case "suspended":
+      return `Uploads for this account are paused by Penroam support. ${keep}`;
+    default:
+      return `Uploads are paused. ${keep}`;
+  }
+}
+
+/** Storage share from which the banner warns before uploads pause. */
+export const NEARLY_FULL = 0.9;
+
+/** A prompt about cloud storage or payment, shown as a banner over the library and editor. */
+export interface CloudNotice {
+  /** full: uploads paused for lack of storage; nearlyFull: at NEARLY_FULL or more; pastDue: payment failed. */
+  kind: "full" | "nearlyFull" | "pastDue";
+  text: string;
+  /** Show "See plans" (desktop builds with offers from the server). */
+  canUpgrade: boolean;
+  /** Show "Update payment method" (desktop builds with a billing account). */
+  canManage: boolean;
+}
+
+/**
+ * What the banner says, or null for nothing. Mobile builds get the same facts without any
+ * button that leads to a purchase. Deletion and suspension are explained in settings only.
+ */
+export function cloudNotice(a: AccountView | null): CloudNotice | null {
+  if (!a) return null;
+  const canUpgrade = a.purchasesAllowed && a.offers.length > 0;
+  const canManage = a.purchasesAllowed && a.canManageBilling;
+  if (!a.writable && a.readOnlyReason === "over_quota") {
+    return {
+      kind: "full",
+      text: canUpgrade
+        ? "Cloud storage is full, so uploads are paused. Your notes are safe on this device. Get more storage to sync again."
+        : "Cloud storage is full, so uploads are paused. Your notes are safe on this device. Delete notebooks you no longer need to make room.",
+      canUpgrade,
+      canManage: false,
+    };
+  }
+  if (a.planStatus === "past_due") {
+    return { kind: "pastDue", text: describePlan(a), canUpgrade: false, canManage };
+  }
+  const f = usageFraction(a);
+  if (a.writable && f !== null && f >= NEARLY_FULL) {
+    return {
+      kind: "nearlyFull",
+      text: `Cloud storage is ${Math.floor(f * 100)}% full (${formatBytes(a.usedBytes)} of ${formatBytes(a.quotaBytes!)}). Uploads pause when it is full.`,
+      canUpgrade,
+      canManage: false,
+    };
+  }
+  return null;
 }

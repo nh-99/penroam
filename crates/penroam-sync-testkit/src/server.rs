@@ -7,6 +7,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
+use penroam_sync_protocol::account::{plan_status, read_only_reasons};
 use penroam_sync_protocol::dto::capabilities;
 use penroam_sync_protocol::dto::KEYLOG_PAGE_MAX;
 use penroam_sync_protocol::envelope::sha256_hex;
@@ -14,11 +15,12 @@ use penroam_sync_protocol::framing::{decode_json_batch, encode_json_batch};
 use penroam_sync_protocol::hex;
 use penroam_sync_protocol::version::PROTOCOL_MAJOR;
 use penroam_sync_protocol::{
-    verify_ciphertext, AccountId, AckRequest, AckResult, BlobId, BlobPutResponse, CheckpointRecord,
-    Cursor, DeviceId, DeviceInfo, DeviceListResponse, DeviceRegistrationRequest,
+    verify_ciphertext, AccountId, AccountState, AckRequest, AckResult, BlobId, BlobPutResponse,
+    CheckpointRecord, Cursor, DeviceId, DeviceInfo, DeviceListResponse, DeviceRegistrationRequest,
     DeviceRegistrationResponse, EnvelopeHeader, ErrorBody, ErrorCode, KeyLogAppendRequest,
-    KeyLogAppendResponse, KeyLogEntry, KeyLogPage, Limits, OpAck, OpId, ProtocolRange,
-    PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse, ServerMeta, UsageResponse,
+    KeyLogAppendResponse, KeyLogEntry, KeyLogPage, Limits, OpAck, OpId, PlanState, ProtocolRange,
+    PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse, ServerMeta, StorageState,
+    UsageResponse,
 };
 
 use crate::cursor::{self, CursorError, CursorPayload, STREAM_OPS};
@@ -472,6 +474,7 @@ impl InMemoryServer {
                     c.push(capabilities::KEYLOG_V1.into());
                     c.push(capabilities::BLOBS_V1.into());
                     c.push(capabilities::CHECKPOINTS_V1.into());
+                    c.push(capabilities::ACCOUNT_V1.into());
                 }
                 c
             },
@@ -799,6 +802,36 @@ impl InMemoryServer {
                 blob_count: acct.blobs.len() as u64,
                 blob_bytes: acct.blob_bytes,
                 quota_bytes: acct.quota_bytes,
+            })
+        })
+    }
+
+    /// `GET /v1/account` (capability `account.v1`). The test server sells nothing: every
+    /// account is on a free plan whose allowance is the account's quota, no actions are offered,
+    /// and the account is read-only (`over_quota`) once its stored bytes reach the quota.
+    pub fn account_state(&self, account: &AccountId) -> Result<AccountState, RequestError> {
+        self.request(account, None, false, |acct, _| {
+            let used = acct.op_bytes + acct.blob_bytes;
+            let over = acct.quota_bytes.is_some_and(|q| used >= q);
+            Ok(AccountState {
+                account_id: account.clone(),
+                plan: PlanState {
+                    id: "free".into(),
+                    name: "Test server".into(),
+                    status: plan_status::FREE.into(),
+                    renews_at_unix_s: None,
+                    ends_at_unix_s: None,
+                },
+                storage: StorageState {
+                    used_bytes: used,
+                    quota_bytes: acct.quota_bytes,
+                    free_quota_bytes: acct.quota_bytes,
+                },
+                writable: !over,
+                read_only_reason: over.then(|| read_only_reasons::OVER_QUOTA.into()),
+                offers: Vec::new(),
+                actions: Vec::new(),
+                deletion: None,
             })
         })
     }

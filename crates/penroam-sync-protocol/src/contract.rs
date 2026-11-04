@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn manifest_numbers_are_the_documented_ones() {
         let m = ContractManifest::current();
-        assert_eq!((m.protocol.major, m.protocol.minor), (1, 2));
+        assert_eq!((m.protocol.major, m.protocol.minor), (1, 3));
         assert_eq!(m.envelope_version, 1);
         assert_eq!((m.op_schema.min, m.op_schema.max), (1, 1));
         assert_eq!(

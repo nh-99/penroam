@@ -47,8 +47,11 @@ use penroam_sync::SyncTransport as _;
 use penroam_sync::{
     DeviceView, FileSecretStore, SecretStore, Setup, SyncEngine, SyncError, SyncStatus,
 };
+use penroam_sync_protocol::account::actions;
 use penroam_sync_protocol::dto::capabilities;
-use penroam_sync_protocol::{ErrorCode as WireCode, SessionTokens};
+use penroam_sync_protocol::{
+    AccountState, BillingLinkRequest, ErrorCode as WireCode, SessionTokens,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -170,6 +173,12 @@ enum Cmd {
     Diagnostics(Reply<String>),
     /// A new account session was stored: drop the current token and retry.
     Reauth,
+    /// Plan and storage (`account.v1`); `None` when the server has no accounts.
+    Account(Reply<Option<AccountView>>),
+    /// A billing page URL (`account.v1`): action and offer id.
+    BillingLink(String, Option<String>, Reply<String>),
+    /// Withdraw a pending account deletion.
+    CancelDeletion(Reply<()>),
     Disconnect(Reply<()>),
 }
 
@@ -668,6 +677,47 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 let _ = r.send(Ok(serde_json::to_string_pretty(&report).unwrap_or_default()));
                 continue;
             }
+            Ok(Cmd::Account(r)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let mut res = account_view(engine.transport_mut());
+                if res.as_ref().is_err_and(is_unauthenticated) {
+                    have_token = false;
+                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                        res = account_view(engine.transport_mut());
+                    }
+                }
+                let _ = r.send(res.map_err(|e| account_error(&e)));
+                continue;
+            }
+            Ok(Cmd::BillingLink(action, offer, r)) => {
+                let req = BillingLinkRequest {
+                    action,
+                    offer_id: offer,
+                };
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let mut res = engine.transport_mut().billing_link(&req);
+                if res.as_ref().is_err_and(is_unauthenticated) {
+                    have_token = false;
+                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                        res = engine.transport_mut().billing_link(&req);
+                    }
+                }
+                let _ = r.send(res.map(|l| l.url).map_err(|e| account_error(&e)));
+                continue;
+            }
+            Ok(Cmd::CancelDeletion(r)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let mut res = engine.transport_mut().cancel_deletion();
+                if res.as_ref().is_err_and(is_unauthenticated) {
+                    have_token = false;
+                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                        res = engine.transport_mut().cancel_deletion();
+                    }
+                }
+                let _ = r.send(res.map_err(|e| account_error(&e)));
+                due = Some(Instant::now());
+                continue;
+            }
             Ok(Cmd::Reauth) => {
                 have_token = false;
                 signed_out = false;
@@ -1137,4 +1187,180 @@ mod tests {
         assert!(check_url_with("https://sync-staging.penroam.ink", true).is_ok());
         assert!(check_url_with("http://sync.example.com", true).is_err());
     }
+}
+
+// ------------------------------------------------------- Penroam Cloud account --
+
+/// Whether this build may show prices, purchase buttons or open billing pages. Store-distributed
+/// mobile apps must not link to outside purchases, so the iOS and Android builds never do; the
+/// account's plan and storage are still shown there. Enforced here, not only in the UI.
+const PURCHASES_ALLOWED: bool = cfg!(desktop);
+
+/// A paid plan, for the settings.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferView {
+    id: String,
+    name: String,
+    price_label: String,
+    quota_bytes: u64,
+}
+
+/// Plan and storage of the synced account (`account.v1`), for the settings.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountView {
+    plan_name: String,
+    /// `free`, `trialing`, `active`, `canceling`, `past_due`, `granted` or a newer value.
+    plan_status: String,
+    renews_at_ms: Option<u64>,
+    ends_at_ms: Option<u64>,
+    used_bytes: u64,
+    quota_bytes: Option<u64>,
+    free_quota_bytes: Option<u64>,
+    writable: bool,
+    read_only_reason: Option<String>,
+    /// Empty when this build may not sell (mobile) or nothing is for sale.
+    offers: Vec<OfferView>,
+    can_manage_billing: bool,
+    can_request_deletion: bool,
+    can_cancel_deletion: bool,
+    deletion_erase_after_ms: Option<u64>,
+    /// This build may show purchases and billing links.
+    purchases_allowed: bool,
+}
+
+fn ms(s: Option<u64>) -> Option<u64> {
+    s.map(|s| s.saturating_mul(1000))
+}
+
+fn to_view(a: AccountState) -> AccountView {
+    let sells = PURCHASES_ALLOWED && a.allows(actions::SUBSCRIBE);
+    AccountView {
+        plan_name: a.plan.name.clone(),
+        plan_status: a.plan.status.clone(),
+        renews_at_ms: ms(a.plan.renews_at_unix_s),
+        ends_at_ms: ms(a.plan.ends_at_unix_s),
+        used_bytes: a.storage.used_bytes,
+        quota_bytes: a.storage.quota_bytes,
+        free_quota_bytes: a.storage.free_quota_bytes,
+        writable: a.writable,
+        read_only_reason: a.read_only_reason.clone(),
+        offers: if sells {
+            a.offers
+                .iter()
+                .map(|o| OfferView {
+                    id: o.id.clone(),
+                    name: o.name.clone(),
+                    price_label: o.price_label.clone(),
+                    quota_bytes: o.quota_bytes,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        can_manage_billing: PURCHASES_ALLOWED && a.allows(actions::MANAGE_BILLING),
+        can_request_deletion: a.allows(actions::REQUEST_DELETION),
+        can_cancel_deletion: a.allows(actions::CANCEL_DELETION),
+        deletion_erase_after_ms: ms(a.deletion.as_ref().map(|d| d.erase_after_unix_s)),
+        purchases_allowed: PURCHASES_ALLOWED,
+    }
+}
+
+fn account_view(
+    t: &mut HttpTransport,
+) -> Result<Option<AccountView>, penroam_sync::TransportError> {
+    if !t.meta()?.has_capability(capabilities::ACCOUNT_V1) {
+        return Ok(None);
+    }
+    t.account_state().map(|a| Some(to_view(a)))
+}
+
+/// What the settings show for a failed account request: the server's safe message, without
+/// network details in release builds.
+fn account_error(e: &penroam_sync::TransportError) -> String {
+    match e {
+        penroam_sync::TransportError::Api(b) => b.message.clone(),
+        other => unreachable_message(&other.to_string()),
+    }
+}
+
+/// Plan and storage of the account this device syncs with; `None` when sync is not set up or
+/// the server has no plans.
+#[tauri::command(async)]
+pub fn sync_account(state: State<'_, AppState>) -> Result<Option<AccountView>, CmdError> {
+    if !state.sync.tx.lock().map(|g| g.is_some()).unwrap_or(false) {
+        return Ok(None);
+    }
+    ask(&state.sync, Cmd::Account)
+}
+
+/// Opens the server's checkout (`subscribe` with an offer id) or billing portal
+/// (`manage_billing`) in the system browser. Desktop builds only. The link is checked to be
+/// `https://` by the transport before it is opened.
+#[tauri::command(async)]
+pub fn sync_open_billing(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    action: String,
+    offer_id: Option<String>,
+) -> Result<(), CmdError> {
+    if !PURCHASES_ALLOWED {
+        return Err(err("billing is managed outside this app"));
+    }
+    if action != actions::SUBSCRIBE && action != actions::MANAGE_BILLING {
+        return Err(err("unknown billing action"));
+    }
+    let url = ask(&state.sync, |r| Cmd::BillingLink(action, offer_id, r))?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| err(format!("could not open the browser: {e}")))
+}
+
+/// When the cloud copy of a deleted account is erased.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionView {
+    erase_after_ms: u64,
+}
+
+/// Asks the server to erase the account's cloud copy after its cooling-off period. Needs a
+/// fresh sign-in in the browser (the server requires it); that one-off session is logged out
+/// afterwards. Notes on this and every other device are not touched.
+#[tauri::command(async)]
+pub fn sync_request_account_deletion(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DeletionView, CmdError> {
+    let root = library_root(&app);
+    let synced = SyncStore::open(&root).map_err(|_| err("sync is not set up"))?;
+    let url = synced.state.server_url.clone();
+    if !uses_sign_in(&url).map_err(err)? {
+        return Err(err("this server has no accounts to delete"));
+    }
+    let cfg = auth::auth_config(&url).map_err(|e| err(e.to_string()))?;
+    let disc = auth::discover(&cfg.issuer).map_err(|e| err(e.to_string()))?;
+    let id_token = browser_sign_in(&app, &cfg, &disc)?;
+    let t = auth::session_from_id_token(&url, &id_token).map_err(|e| err(e.to_string()))?;
+    let result = if t.account_id.as_str() != synced.state.account_id {
+        Err(err(
+            "that sign-in belongs to a different account than this device syncs with",
+        ))
+    } else {
+        HttpTransport::new(&url, t.access_token.clone())
+            .request_deletion()
+            .map(|d| DeletionView {
+                erase_after_ms: d.erase_after_unix_s.saturating_mul(1000),
+            })
+            .map_err(|e| err(account_error(&e)))
+    };
+    let _ = auth::logout(&url, &t.access_token);
+    state.sync.nudge();
+    result
+}
+
+/// Withdraws a pending account deletion.
+#[tauri::command(async)]
+pub fn sync_cancel_account_deletion(state: State<'_, AppState>) -> Result<(), CmdError> {
+    ask(&state.sync, Cmd::CancelDeletion)
 }

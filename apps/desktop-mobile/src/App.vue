@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import LibraryView from "./views/LibraryView.vue";
 import EditorView from "./views/EditorView.vue";
 import Toasts from "./components/Toasts.vue";
+import UpgradeDialog from "./components/UpgradeDialog.vue";
 import { useLibrary } from "./stores/library";
 import { useSettings } from "./stores/settings";
 import { useUi } from "./stores/ui";
@@ -96,6 +97,7 @@ onBeforeUnmount(() => {
   <EditorView v-if="lib.current" :key="lib.current.id" />
   <LibraryView v-else :native-kind="nativeKind" />
   <Toasts />
+  <UpgradeDialog v-if="sync.upgradeOpen" />
   <div v-if="lib.busy" class="fixed inset-0 z-[70] flex items-center justify-center bg-black/20 epaper:bg-white/70" role="alert" aria-busy="true">
     <div class="flex items-center gap-3 rounded-xl border border-line bg-surface px-5 py-4 text-sm shadow-lg"><LoaderCircle :size="18" class="animate-spin" />{{ lib.busy }}</div>
   </div>

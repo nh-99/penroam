@@ -62,6 +62,20 @@ use an account's storage; they never receive the recovery code or a content key.
 * Losing account access (provider account, session) and losing the decryption keys are
   different problems. Signing in again restores access to storage, not to keys.
 
+## Plans and billing (servers with `account.v1`)
+
+* The app never sends a price, a payment result or a provider id. It asks for a billing link
+  for an offer id the server listed, and the server alone decides what that offer costs and
+  whether the account has paid. A modified app can therefore not grant itself storage.
+* Billing links are opened only in the system browser and only if they are absolute
+  `https://` URLs without credentials (`BillingLink::validate`). A malicious server could still
+  send the user to a page of its choosing; it cannot make the app open anything but `https://`.
+* Account deletion needs an account session from a sign-in a few minutes old: a stolen device
+  or a copied refresh token is not enough to erase an account. Deletion erases the cloud copy
+  only; notes on devices stay.
+* Plan state reaches the server but tells it nothing about note content. The server learns
+  usage sizes and timing, as before.
+
 ## Key hierarchy
 
 ```text

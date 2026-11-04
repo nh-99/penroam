@@ -8,6 +8,7 @@ import NewNotebookDialog from "../components/NewNotebookDialog.vue";
 import PromptDialog from "../components/PromptDialog.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import SettingsDialog from "../components/SettingsDialog.vue";
+import CloudBanner from "../components/CloudBanner.vue";
 import Btn from "../components/ui/Btn.vue";
 import IconBtn from "../components/ui/IconBtn.vue";
 import type { Paper } from "../generated/Paper";
@@ -51,6 +52,7 @@ function recolor(nb: NotebookSummary) {
         <h1 class="mr-auto text-lg font-semibold">Trash</h1>
       </template>
     </header>
+    <CloudBanner v-if="!showTrash" />
 
     <main class="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
       <div v-if="lib.loadError" class="mx-auto mt-16 max-w-md text-center" role="alert">

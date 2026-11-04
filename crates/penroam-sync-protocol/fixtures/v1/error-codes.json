@@ -103,5 +103,10 @@
     "code": "service_unavailable",
     "http_status": 503,
     "retryable": true
+  },
+  {
+    "code": "reauth_required",
+    "http_status": 403,
+    "retryable": false
   }
 ]

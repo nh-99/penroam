@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: Penroam Sync Protocol
-  version: "1.1"
+  version: "1.3"
   description: |
-    HTTP mapping of the Penroam sync protocol (major 1, minor 1). The normative text is
+    HTTP mapping of the Penroam sync protocol (major 1, minor 3). The normative text is
     sync-protocol-v1.md in this directory; the Rust types are in the penroam-sync-protocol crate.
     This file is hand-written. A test in crates/penroam-sync-protocol checks that it lists
     every route the crate defines.
@@ -152,6 +152,50 @@ components:
       required: [applied_cursor]
       properties:
         applied_cursor: { $ref: "#/components/schemas/Cursor" }
+    AccountState:
+      type: object
+      required: [account_id, plan, storage, writable]
+      properties:
+        account_id: { $ref: "#/components/schemas/Id" }
+        plan:
+          type: object
+          required: [id, name, status]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            status: { type: string, description: "free, trialing, active, canceling, past_due, granted (open set)" }
+            renews_at_unix_s: { type: integer }
+            ends_at_unix_s: { type: integer }
+        storage:
+          type: object
+          required: [used_bytes, quota_bytes]
+          properties:
+            used_bytes: { type: integer }
+            quota_bytes: { type: [integer, "null"] }
+            free_quota_bytes: { type: integer }
+        writable: { type: boolean }
+        read_only_reason: { type: string, description: "over_quota, suspended, deletion_pending (open set)" }
+        offers:
+          type: array
+          maxItems: 8
+          items:
+            type: object
+            required: [id, name, price_label, quota_bytes]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              price_label: { type: string }
+              quota_bytes: { type: integer }
+        actions:
+          type: array
+          items: { type: string, description: "subscribe, manage_billing, request_deletion, cancel_deletion (open set)" }
+        deletion: { $ref: "#/components/schemas/DeletionState" }
+    DeletionState:
+      type: object
+      required: [requested_at_unix_s, erase_after_unix_s]
+      properties:
+        requested_at_unix_s: { type: integer }
+        erase_after_unix_s: { type: integer }
     UsageResponse:
       type: object
       required: [account_id, op_count, op_bytes, blob_count, blob_bytes]
@@ -540,4 +584,59 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionTokens" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/account:
+    get:
+      summary: Plan, storage allowance and available actions (account.v1)
+      responses:
+        "200":
+          description: Account state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountState" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/account/billing-link:
+    post:
+      summary: Server-made https link to the billing pages, opened in the system browser (account.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [subscribe, manage_billing] }
+                offer_id: { type: string }
+      responses:
+        "200":
+          description: Billing link
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expires_in_s]
+                properties:
+                  url: { type: string, format: uri, maxLength: 2048 }
+                  expires_in_s: { type: integer }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/account/deletion:
+    post:
+      summary: Request account deletion after a cooling-off period; needs a recent sign-in (account.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Pending deletion
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeletionState" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Withdraw a pending deletion request (account.v1)
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
         default: { $ref: "#/components/responses/Error" }

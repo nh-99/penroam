@@ -84,6 +84,12 @@ fn every_fixture_is_checked() {
         "auth-device-challenge.json",
         "auth-device-session-request.json",
         "auth-device-session.signing-bytes.hex",
+        "account-state.free.json",
+        "account-state.over-quota.json",
+        "account-state.past-due.json",
+        "account-billing-link-request.json",
+        "account-billing-link.json",
+        "account-deletion.json",
     ]
     .into_iter()
     .map(String::from)
@@ -245,6 +251,27 @@ fn auth_documents() {
             &meta.server_instance_id,
         ))
     );
+}
+
+#[test]
+fn account_documents() {
+    use penroam_sync_protocol::account::actions;
+    use penroam_sync_protocol::{AccountState, BillingLink, BillingLinkRequest, DeletionState};
+    for name in [
+        "account-state.free.json",
+        "account-state.over-quota.json",
+        "account-state.past-due.json",
+    ] {
+        let s: AccountState = roundtrip(name);
+        s.validate().unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+    let free: AccountState = roundtrip("account-state.free.json");
+    assert!(free.allows(actions::SUBSCRIBE));
+    let req: BillingLinkRequest = roundtrip("account-billing-link-request.json");
+    assert_eq!(req.offer_id.as_deref(), Some(free.offers[0].id.as_str()));
+    let link: BillingLink = roundtrip("account-billing-link.json");
+    link.validate().unwrap();
+    let _: DeletionState = roundtrip("account-deletion.json");
 }
 
 /// `docs/protocol/openapi.yaml` is hand-written; it must name every route.

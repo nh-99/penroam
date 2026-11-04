@@ -92,6 +92,19 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   server only grants that to active key-log members. The hosted Penroam Cloud server is a
   separate, private codebase that implements the same public protocol; nothing in this
   repository depends on it, and the development test server keeps its stub sign-in.
+* **Plan and storage (`account.v1`).** Servers that give accounts a storage allowance advertise
+  `account.v1`: the account's plan, allowance, whether uploads are accepted, what the user can do
+  next, and a server-made `https://` link to the server's own billing pages, which the app opens
+  in the system browser. No payment provider, price id or payment result passes through the
+  app; the server derives the plan from its provider's verified records. A read-only account
+  still downloads and exports, and nothing on the device is locked or deleted. Store-distributed
+  mobile builds show the plan and storage only: the backend drops offers and refuses billing
+  links there (`PURCHASES_ALLOWED` in `src-tauri/src/sync.rs`). A banner over the library and
+  the editor (`CloudBanner.vue`, text from `cloudNotice` in `src/platform/sync.ts`) warns at
+  90 % storage, when uploads pause, and after a failed payment; on desktop it opens the plan
+  picker or the billing portal. When the account accepts uploads again (focus after checkout),
+  the app syncs at once instead of waiting for the next attempt. Account deletion needs a fresh
+  browser sign-in and only ever erases the cloud copy.
 * **Sync engine (developer preview).** `penroam-sync` keeps its own state under
   `<library>/sync/`: an append-only operation log of every synced operation (local and remote),
   parked and quarantined envelopes, and the verified key log pin. One reconcile has three phases

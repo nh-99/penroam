@@ -1,0 +1,26 @@
+{
+  "account_id": "acct-fixture-0001",
+  "plan": {
+    "id": "free",
+    "name": "Free",
+    "status": "free"
+  },
+  "storage": {
+    "used_bytes": 2098,
+    "quota_bytes": 104857600,
+    "free_quota_bytes": 104857600
+  },
+  "writable": true,
+  "offers": [
+    {
+      "id": "cloud-monthly",
+      "name": "Penroam Cloud",
+      "price_label": "$3.99 / month",
+      "quota_bytes": 5368709120
+    }
+  ],
+  "actions": [
+    "subscribe",
+    "request_deletion"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "account_id": "acct-fixture-0001",
+  "plan": {
+    "id": "cloud",
+    "name": "Penroam Cloud",
+    "status": "past_due",
+    "ends_at_unix_s": 1794960000
+  },
+  "storage": {
+    "used_bytes": 851443712,
+    "quota_bytes": 5368709120,
+    "free_quota_bytes": 104857600
+  },
+  "writable": true,
+  "offers": [],
+  "actions": [
+    "manage_billing",
+    "request_deletion"
+  ]
+}

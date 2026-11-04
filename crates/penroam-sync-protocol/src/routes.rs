@@ -47,6 +47,16 @@ pub const AUTH_DEVICE_CHALLENGE: &str = "/v1/auth/device-challenge";
 /// `POST` signed challenge in, device session out.
 pub const AUTH_DEVICE_SESSION: &str = "/v1/auth/device-session";
 
+/// `GET` plan, storage allowance and available actions ([`crate::account::AccountState`]).
+/// Capability `account.v1` (protocol 1.3).
+pub const ACCOUNT: &str = "/v1/account";
+/// `POST` a [`crate::account::BillingLinkRequest`], get a [`crate::account::BillingLink`].
+/// Capability `account.v1`.
+pub const ACCOUNT_BILLING_LINK: &str = "/v1/account/billing-link";
+/// `POST` request account deletion (fresh account session) / `DELETE` withdraw the request.
+/// Capability `account.v1`.
+pub const ACCOUNT_DELETION: &str = "/v1/account/deletion";
+
 /// JSON control documents.
 pub const MEDIA_JSON: &str = "application/json";
 /// Framed batches (push bodies, framed pull bodies).
@@ -65,7 +75,7 @@ pub const HEADER_HAS_MORE: &str = "Penroam-Has-More";
 pub const HEADER_PROTOCOL: &str = "Penroam-Protocol";
 
 /// Every route, for documentation/compat tests.
-pub const ALL: [&str; 18] = [
+pub const ALL: [&str; 21] = [
     META,
     DEVICES,
     DEVICE,
@@ -84,6 +94,9 @@ pub const ALL: [&str; 18] = [
     AUTH_LOGOUT,
     AUTH_DEVICE_CHALLENGE,
     AUTH_DEVICE_SESSION,
+    ACCOUNT,
+    ACCOUNT_BILLING_LINK,
+    ACCOUNT_DELETION,
 ];
 
 #[cfg(test)]

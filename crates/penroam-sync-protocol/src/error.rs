@@ -17,6 +17,9 @@ pub enum ErrorCode {
     Forbidden,
     /// 403: the device has been revoked; requires re-enrollment.
     DeviceRevoked,
+    /// 403: the action needs a recent sign-in (account deletion). Sign in again and retry
+    /// with the new account session (protocol 1.3).
+    ReauthRequired,
     /// 404: unknown resource.
     NotFound,
     /// 409: generic state conflict.
@@ -58,7 +61,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// Every known code, in table order (used by fixtures and docs).
-    pub const ALL: [ErrorCode; 21] = [
+    pub const ALL: [ErrorCode; 22] = [
         Self::MalformedRequest,
         Self::Unauthenticated,
         Self::Forbidden,
@@ -80,6 +83,7 @@ impl ErrorCode {
         Self::QuotaExceeded,
         Self::InternalError,
         Self::ServiceUnavailable,
+        Self::ReauthRequired,
     ];
 
     /// HTTP status for this code.
@@ -87,7 +91,7 @@ impl ErrorCode {
         match self {
             Self::MalformedRequest => 400,
             Self::Unauthenticated => 401,
-            Self::Forbidden | Self::DeviceRevoked => 403,
+            Self::Forbidden | Self::DeviceRevoked | Self::ReauthRequired => 403,
             Self::NotFound => 404,
             Self::Conflict | Self::OpIdConflict | Self::RecoveryRequired => 409,
             Self::CursorExpired | Self::CheckpointRequired => 410,
@@ -122,6 +126,7 @@ impl ErrorCode {
             Self::Unauthenticated => "unauthenticated",
             Self::Forbidden => "forbidden",
             Self::DeviceRevoked => "device_revoked",
+            Self::ReauthRequired => "reauth_required",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
             Self::OpIdConflict => "op_id_conflict",
@@ -285,6 +290,7 @@ mod tests {
             (UpgradeRequired, 426, false),
             (RateLimited, 429, true),
             (QuotaExceeded, 507, false),
+            (ReauthRequired, 403, false),
             (InternalError, 500, true),
             (ServiceUnavailable, 503, true),
         ];

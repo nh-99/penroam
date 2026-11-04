@@ -15,6 +15,7 @@
 //! * request/response DTOs and the HTTP routes, media types and headers
 //!   ([`dto`], [`routes`]),
 //! * sign-in and session DTOs for servers with real accounts ([`auth`]),
+//! * account plan, storage allowance and billing-link DTOs ([`account`]),
 //! * keeping credentials out of logs: HTTP-library log targets to cap and a
 //!   line scrubber ([`redact`]),
 //! * normalized error codes and a deterministic retry policy ([`error`]),
@@ -28,6 +29,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod account;
 pub mod auth;
 pub mod base64url;
 pub mod canonical;
@@ -43,6 +45,10 @@ pub mod redact;
 pub mod routes;
 pub mod version;
 
+pub use account::{
+    AccountState, BillingLink, BillingLinkRequest, DeletionState, PlanOffer, PlanState,
+    StorageState,
+};
 pub use auth::{
     canonical_device_auth_bytes, AuthConfig, DeviceChallenge, DeviceChallengeRequest,
     DeviceSessionRequest, RefreshRequest, SessionRequest, SessionTokens,

@@ -33,6 +33,9 @@ pub mod capabilities {
     /// OpenID Connect sign-in and device sessions (`/v1/auth/*`, protocol
     /// 1.1; see [`crate::auth`]).
     pub const AUTH_V1: &str = "auth.v1";
+    /// Plan, storage allowance, billing link and deletion request (`/v1/account*`, protocol
+    /// 1.3; see [`crate::account`]).
+    pub const ACCOUNT_V1: &str = "account.v1";
 }
 
 /// `GET /v1/meta` response.

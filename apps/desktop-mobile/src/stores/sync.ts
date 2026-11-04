@@ -6,7 +6,7 @@ import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { hasHost } from "../platform/ipc";
 import { useSettings } from "./settings";
-import { onSyncChanged, onSyncStatus, syncApi, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
+import { cloudNotice, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
 
 export type SetupStep = "none" | "recovery" | "pairing" | "compare";
 
@@ -33,6 +33,19 @@ export const useSync = defineStore("sync", () => {
   /** The server checked in the setup form, and what it needs. */
   const server = ref<(ServerInfo & { url: string }) | null>(null);
   const error = ref<string | null>(null);
+  /** Plan and storage of the synced account; null when unknown or the server has no plans. */
+  const account = ref<AccountView | null>(null);
+  const accountError = ref<string | null>(null);
+  /** A browser step for the account is in progress (billing page, deletion sign-in). */
+  const accountBusy = ref(false);
+  /** The plan picker ("More cloud storage") is open. */
+  const upgradeOpen = ref(false);
+  /** Banner kinds the user closed in this run; a new kind shows again. */
+  const dismissedNotices = ref<string[]>([]);
+  const notice = computed(() => {
+    const n = cloudNotice(account.value);
+    return n && !dismissedNotices.value.includes(n.kind) ? n : null;
+  });
   const changeListeners = new Set<(c: SyncChanged) => void>();
   let unlisten: UnlistenFn[] = [];
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -57,6 +70,8 @@ export const useSync = defineStore("sync", () => {
     if (!available.value) return;
     unlisten.push(
       await onSyncStatus((s) => {
+        // uploads just hit the storage limit: fetch the plan so the banner can explain it
+        if (s?.phase === "quotaExceeded" && status.value?.phase !== "quotaExceeded") void refreshAccount();
         status.value = s;
         configured.value = s !== null;
         if (s === null) devices.value = [];
@@ -64,7 +79,76 @@ export const useSync = defineStore("sync", () => {
       }),
     );
     unlisten.push(await onSyncChanged((c) => changeListeners.forEach((l) => l(c))));
+    // coming back from the browser (checkout, billing portal): show the new plan
+    window.addEventListener("focus", onFocus);
     updatePolling();
+    // plan and storage for the banner (one request; servers without account.v1 answer null)
+    if (configured.value) void refreshAccount();
+  }
+
+  function onFocus() {
+    if (configured.value) void refreshAccount();
+  }
+
+  async function refreshAccount() {
+    if (!available.value || !configured.value) {
+      account.value = null;
+      return;
+    }
+    try {
+      const was = account.value;
+      account.value = await syncApi.account();
+      accountError.value = null;
+      // more storage (a new plan, deleted notebooks): upload the queued changes now rather than
+      // at the next scheduled attempt
+      if (was && !was.writable && account.value?.writable && status.value?.phase === "quotaExceeded") void syncApi.syncNow().catch(() => {});
+      // subscribed (no more offers): the picker has done its job
+      if (!account.value?.offers.length) upgradeOpen.value = false;
+    } catch (e) {
+      accountError.value = (e as Error).message ?? String(e);
+    }
+  }
+
+  async function accountStep<T>(f: () => Promise<T>): Promise<T | null> {
+    accountBusy.value = true;
+    accountError.value = null;
+    try {
+      return await f();
+    } catch (e) {
+      accountError.value = (e as Error).message ?? String(e);
+      return null;
+    } finally {
+      accountBusy.value = false;
+    }
+  }
+
+  /** Opens the checkout or the billing portal in the system browser (desktop builds). */
+  const openBilling = (action: "subscribe" | "manage_billing", offerId?: string) => accountStep(() => syncApi.openBilling(action, offerId));
+
+  /** Opens the plan picker; only when this build may sell plans and the server offers some. */
+  function showUpgrade() {
+    if (account.value?.purchasesAllowed && account.value.offers.length > 0) upgradeOpen.value = true;
+  }
+
+  function dismissNotice(kind: string) {
+    if (!dismissedNotices.value.includes(kind)) dismissedNotices.value.push(kind);
+  }
+
+  /** Signs in again in the browser, then requests deletion of the cloud copy. */
+  async function requestDeletion() {
+    signingIn.value = true;
+    try {
+      const r = await accountStep(() => syncApi.requestDeletion());
+      await refreshAccount();
+      return r;
+    } finally {
+      signingIn.value = false;
+    }
+  }
+
+  async function cancelDeletion() {
+    await accountStep(() => syncApi.cancelDeletion());
+    await refreshAccount();
   }
 
   function onChanged(cb: (c: SyncChanged) => void): () => void {
@@ -101,7 +185,10 @@ export const useSync = defineStore("sync", () => {
       configured.value = info.configured;
       status.value = info.status;
     }
-    if (configured.value && step.value === "none") devices.value = (await syncApi.devices().catch(() => null)) ?? devices.value;
+    if (configured.value && step.value === "none") {
+      devices.value = (await syncApi.devices().catch(() => null)) ?? devices.value;
+      await refreshAccount();
+    }
   }
 
   /** Checks a server address (setup form step 1). */
@@ -214,6 +301,8 @@ export const useSync = defineStore("sync", () => {
       status.value = null;
       devices.value = [];
       server.value = null;
+      account.value = null;
+      upgradeOpen.value = false;
     }
   };
   const diagnostics = () => run(() => syncApi.diagnostics());
@@ -221,6 +310,7 @@ export const useSync = defineStore("sync", () => {
   function dispose() {
     unlisten.forEach((u) => u());
     unlisten = [];
+    window.removeEventListener("focus", onFocus);
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
     started = false;
@@ -242,6 +332,17 @@ export const useSync = defineStore("sync", () => {
     signingIn,
     server,
     error,
+    account,
+    accountError,
+    accountBusy,
+    upgradeOpen,
+    notice,
+    showUpgrade,
+    dismissNotice,
+    refreshAccount,
+    openBilling,
+    requestDeletion,
+    cancelDeletion,
     awaiting,
     init,
     refresh,

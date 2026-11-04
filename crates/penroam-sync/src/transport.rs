@@ -477,6 +477,51 @@ mod http {
         }
     }
 
+    /// Account routes (capability `account.v1`). They are not part of [`SyncTransport`]: the
+    /// sync engine never needs them, only the account settings of an app do. Every response is
+    /// validated before it is returned; an invalid one is a [`TransportError::Protocol`].
+    impl HttpTransport {
+        /// `GET /v1/account`: plan, storage allowance and available actions.
+        pub fn account_state(&self) -> TResult<penroam_sync_protocol::AccountState> {
+            let s: penroam_sync_protocol::AccountState = self.get_json(routes::ACCOUNT)?;
+            s.validate()
+                .map_err(|e| TransportError::Protocol(format!("account state: {e}")))?;
+            Ok(s)
+        }
+
+        /// `POST /v1/account/billing-link`. The returned link is checked to be `https://`
+        /// ([`penroam_sync_protocol::BillingLink::validate`]); open it in the system browser.
+        pub fn billing_link(
+            &self,
+            req: &penroam_sync_protocol::BillingLinkRequest,
+        ) -> TResult<penroam_sync_protocol::BillingLink> {
+            let l: penroam_sync_protocol::BillingLink = self
+                .post_json(routes::ACCOUNT_BILLING_LINK, req)?
+                .ok_or_else(|| TransportError::Protocol("empty billing link response".into()))?;
+            l.validate()
+                .map_err(|e| TransportError::Protocol(format!("billing link: {e}")))?;
+            Ok(l)
+        }
+
+        /// `POST /v1/account/deletion`. Needs an account session from a recent sign-in;
+        /// otherwise the error code is `reauth_required`.
+        pub fn request_deletion(&self) -> TResult<penroam_sync_protocol::DeletionState> {
+            self.post_json(routes::ACCOUNT_DELETION, &serde_json::json!({}))?
+                .ok_or_else(|| TransportError::Protocol("empty deletion response".into()))
+        }
+
+        /// `DELETE /v1/account/deletion`: withdraw a pending deletion request.
+        pub fn cancel_deletion(&self) -> TResult<()> {
+            let r = self
+                .agent
+                .delete(self.url(routes::ACCOUNT_DELETION))
+                .header("Authorization", self.auth())
+                .call()
+                .map_err(net)?;
+            Self::finish(r, JSON_LIMIT).map(|_| ())
+        }
+    }
+
     impl SyncTransport for HttpTransport {
         fn meta(&mut self) -> TResult<ServerMeta> {
             let r = self.agent.get(self.url(routes::META)).call().map_err(net)?;

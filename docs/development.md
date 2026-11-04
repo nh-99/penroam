@@ -109,6 +109,13 @@ works against two kinds of server:
 * **The development test server**: you type an account name. It has a stub sign-in, no TLS and no
   hardening, so keep it on loopback.
 
+Once set up, servers with `account.v1` (Penroam Cloud) also get a **Penroam Cloud** panel in the
+sync settings: plan, storage used, why uploads are paused if they are, and **Delete account…**
+(a fresh browser sign-in confirms it). Desktop builds show the server's plans and **Manage plan
+and billing**, which open the server's payment pages in the system browser; the panel reloads
+when the window regains focus. Android and iOS builds never show prices or billing buttons. The
+development test server lists `account.v1` with a free plan and no actions.
+
 In developer mode, server addresses must be `https://`, or `http://` on this computer only
 (`PENROAM_SYNC_ALLOW_ANY_URL=1` allows any `http://` host, for development).
 
