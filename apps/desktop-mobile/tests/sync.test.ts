@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { codeGroups, describeStatus, formatAgo, statusIcon, type SyncStatus } from "../src/platform/sync";
+import { codeGroups, describeStatus, formatAgo, statusIcon, tapCounter, type SyncStatus } from "../src/platform/sync";
 import { conflictTitle, conflictValuePreview, resolvable } from "../src/platform/conflicts";
 
 const api = vi.hoisted(() => ({
@@ -84,6 +84,20 @@ describe("sync status wording", () => {
   });
 });
 
+describe("developer mode taps", () => {
+  it("toggles only on five taps within three seconds", () => {
+    const tap = tapCounter();
+    expect([0, 100, 200, 300].map(tap)).toEqual([false, false, false, false]);
+    expect(tap(400)).toBe(true);
+    // counting starts again
+    expect([500, 600, 700, 800].map(tap)).toEqual([false, false, false, false]);
+    expect(tap(900)).toBe(true);
+    // too slow: taps older than the window drop out
+    const slow = tapCounter();
+    expect([0, 1000, 2000, 3000, 4000].map(slow)).toEqual([false, false, false, false, false]);
+  });
+});
+
 describe("sync store", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -92,6 +106,40 @@ describe("sync store", () => {
     api.devices.mockResolvedValue([]);
   });
   afterEach(() => vi.useRealTimers());
+
+  it("asks for a server address only in a debug build with developer mode on", async () => {
+    const { useSync } = await import("../src/stores/sync");
+    const { useSettings } = await import("../src/stores/settings");
+    api.info.mockResolvedValue({
+      available: true,
+      configured: false,
+      status: null,
+      defaultServerUrl: "https://sync.penroam.ink",
+      devBuild: false,
+    });
+    const settings = useSettings();
+    settings.s.developerMode = true;
+    const s = useSync();
+    await s.init();
+    expect(s.defaultServerUrl).toBe("https://sync.penroam.ink");
+    expect(s.customServers).toBe(false); // release build: developer mode has no effect
+    s.dispose();
+    setActivePinia(createPinia());
+    api.info.mockResolvedValue({
+      available: true,
+      configured: false,
+      status: null,
+      defaultServerUrl: "https://sync.penroam.ink",
+      devBuild: true,
+    });
+    const dev = useSync();
+    const devSettings = useSettings();
+    devSettings.s.developerMode = false;
+    await dev.init();
+    expect(dev.customServers).toBe(false);
+    devSettings.s.developerMode = true;
+    expect(dev.customServers).toBe(true);
+  });
 
   it("does nothing more when sync is not available", async () => {
     const { useSync } = await import("../src/stores/sync");

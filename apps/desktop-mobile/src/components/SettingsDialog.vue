@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { getVersion } from "@tauri-apps/api/app";
 import { Monitor, Sun, Moon, Tablet, ShieldCheck } from "@lucide/vue";
 import Modal from "./ui/Modal.vue";
 import SyncSection from "./SyncSection.vue";
@@ -7,6 +8,9 @@ import { useSync } from "../stores/sync";
 import { useSettings, type ThemePref } from "../stores/settings";
 import { useLibrary } from "../stores/library";
 import type { PenOnlyMode } from "../editor/input";
+import { hasHost } from "../platform/ipc";
+import { tapCounter } from "../platform/sync";
+import { useUi } from "../stores/ui";
 
 const props = defineProps<{ nativeKind: string | null }>();
 const emit = defineEmits<{ close: [] }>();
@@ -28,6 +32,25 @@ const nativeLabel = computed(() =>
   props.nativeKind === "boox" ? "BOOX hardware pen (Onyx SDK)" : props.nativeKind === "ios-pencil" ? "Native Apple Pencil layer" : null,
 );
 const rec = computed(() => lib.recovery);
+
+const ui = useUi();
+const version = ref<string | null>(null);
+onMounted(async () => {
+  if (!hasHost()) return;
+  try {
+    version.value = await getVersion();
+  } catch {
+    /* no version: the line is not shown */
+  }
+});
+// Debug builds: five taps on the version turn developer mode (custom sync servers) on or off.
+const tap = tapCounter();
+function versionTapped() {
+  if (!sync.devBuild || !tap(Date.now())) return;
+  settings.s.developerMode = !settings.s.developerMode;
+  if (settings.s.developerMode) ui.success("Developer mode on: sync setup asks for a server address.");
+  else ui.success("Developer mode off.");
+}
 </script>
 
 <template>
@@ -85,6 +108,9 @@ const rec = computed(() => lib.recovery);
           </template>
         </p>
       </section>
+      <p v-if="version" class="text-center text-xs text-muted">
+        <button type="button" class="select-none px-2 py-1" @click="versionTapped">Penroam {{ version }}<template v-if="sync.devBuild && settings.s.developerMode"> · developer mode</template></button>
+      </p>
     </div>
   </Modal>
 </template>

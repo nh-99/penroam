@@ -5,12 +5,21 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { hasHost } from "../platform/ipc";
+import { useSettings } from "./settings";
 import { onSyncChanged, onSyncStatus, syncApi, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
 
 export type SetupStep = "none" | "recovery" | "pairing" | "compare";
 
+/** Penroam Cloud; the backend's value replaces this once known. */
+export const PENROAM_CLOUD_URL = "https://sync.penroam.ink";
+
 export const useSync = defineStore("sync", () => {
+  const settings = useSettings();
   const available = ref(false);
+  const defaultServerUrl = ref(PENROAM_CLOUD_URL);
+  const devBuild = ref(false);
+  /** The setup form may ask for a server address: debug build with developer mode on. */
+  const customServers = computed(() => devBuild.value && settings.s.developerMode);
   const configured = ref(false);
   const status = ref<SyncStatus | null>(null);
   const devices = ref<SyncDevice[]>([]);
@@ -38,6 +47,8 @@ export const useSync = defineStore("sync", () => {
       const info = await syncApi.info();
       available.value = info.available;
       configured.value = info.configured;
+      defaultServerUrl.value = info.defaultServerUrl;
+      devBuild.value = info.devBuild;
       status.value = info.status;
     } catch {
       available.value = false;
@@ -217,6 +228,9 @@ export const useSync = defineStore("sync", () => {
 
   return {
     available,
+    defaultServerUrl,
+    devBuild,
+    customServers,
     configured,
     status,
     devices,

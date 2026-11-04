@@ -101,7 +101,9 @@ async function confirmDisconnect() {
       <span class="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted epaper:border">developer preview</span>
     </h3>
     <p class="text-xs leading-relaxed text-muted">
-      Works with a Penroam sync server (you sign in through your web browser) or a local development test server. Notes are encrypted on this device before upload; the server stores ciphertext.
+      <template v-if="sync.customServers">Developer mode: works with any Penroam sync server (you sign in through your web browser) or a local development test server.</template>
+      <template v-else>Syncs through Penroam Cloud; you sign in through your web browser.</template>
+      Notes are encrypted on this device before upload; the server stores ciphertext.
     </p>
     <p v-if="sync.error" class="rounded-lg border border-danger/40 p-2 text-xs text-danger" role="alert">{{ sync.error }}</p>
 
@@ -142,15 +144,20 @@ async function confirmDisconnect() {
     <!-- not set up: 1. server, 2. sign in (or account name on a test server), 3. set up -->
     <div v-else-if="!sync.configured" class="space-y-2">
       <template v-if="!sync.server">
-        <label class="block text-xs">Server URL
-          <input v-model="serverUrl" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm" inputmode="url" autocomplete="off" @keydown.enter="sync.checkServer(serverUrl.trim())" />
-        </label>
-        <Btn variant="primary" :disabled="!serverUrl.trim() || sync.busy" @click="sync.checkServer(serverUrl.trim())">Continue</Btn>
+        <template v-if="sync.customServers">
+          <label class="block text-xs">Server URL (developer mode)
+            <input v-model="serverUrl" class="mt-1 w-full rounded-lg border border-line bg-surface px-2 py-1.5 text-sm" inputmode="url" autocomplete="off" @keydown.enter="sync.checkServer(serverUrl.trim())" />
+          </label>
+          <Btn variant="primary" :disabled="!serverUrl.trim() || sync.busy" @click="sync.checkServer(serverUrl.trim())">Continue</Btn>
+        </template>
+        <template v-else>
+          <Btn variant="primary" :disabled="sync.busy" @click="sync.checkServer(sync.defaultServerUrl)">Continue</Btn>
+        </template>
       </template>
       <template v-else>
         <p class="flex items-center gap-2 text-xs">
           <span class="min-w-0 flex-1 truncate">Server: <span class="font-mono">{{ sync.server.url }}</span></span>
-          <button class="touch-target rounded-lg px-2 text-accent underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.changeServer()">Change</button>
+          <button v-if="sync.customServers" class="touch-target rounded-lg px-2 text-accent underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.changeServer()">Change</button>
         </p>
         <template v-if="sync.server.signIn">
           <div v-if="!sync.server.signedInAccount" class="space-y-2">

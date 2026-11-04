@@ -94,8 +94,11 @@ Sessions used so far are in `tools/linux-e2e/sessions/`; see [`platforms/linux.m
 
 ## Sync (developer preview)
 
-The app's sync settings work against two kinds of server. The settings ask for the server
-address first:
+Sync goes to Penroam Cloud (`https://sync.penroam.ink`). Release builds accept no other
+server; the backend refuses any other address whatever the settings send. In **debug builds**,
+tap the version number at the bottom of the settings five times (within three seconds) to turn
+**developer mode** on or off. With it on, the setup form asks for a server address, and it
+works against two kinds of server:
 
 * **Servers that advertise `auth.v1`** (protocol §12a): **Sign in with your browser** opens the
   system browser for the server's identity provider (PKCE). Desktop gets the answer on a loopback
@@ -106,7 +109,7 @@ address first:
 * **The development test server**: you type an account name. It has a stub sign-in, no TLS and no
   hardening, so keep it on loopback.
 
-Server addresses must be `https://`, or `http://` on this computer only
+In developer mode, server addresses must be `https://`, or `http://` on this computer only
 (`PENROAM_SYNC_ALLOW_ANY_URL=1` allows any `http://` host, for development).
 
 ```bash

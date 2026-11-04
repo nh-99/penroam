@@ -225,15 +225,36 @@ fn ask<T>(slot: &SyncSlot, make: impl FnOnce(Reply<T>) -> Cmd) -> Result<T, CmdE
         .map_err(err)
 }
 
+/// The sync server of this app: Penroam Cloud.
+pub const DEFAULT_SERVER_URL: &str = "https://sync.penroam.ink";
+
+/// Debug builds may sync with any server (developer mode in the settings);
+/// release builds only with [`DEFAULT_SERVER_URL`].
+const CUSTOM_SERVERS: bool = cfg!(debug_assertions);
+
 /// Developer preview gate: debug builds, or `PENROAM_DEV_SYNC=1`.
 pub fn available() -> bool {
     cfg!(debug_assertions) || std::env::var("PENROAM_DEV_SYNC").is_ok_and(|v| v == "1")
 }
 
-/// Accepts `https://` URLs, and `http://` only on loopback unless
-/// `PENROAM_SYNC_ALLOW_ANY_URL=1` (tokens must never cross a network in clear).
+/// Release builds: only [`DEFAULT_SERVER_URL`]. Debug builds: `https://`
+/// URLs, and `http://` only on loopback unless `PENROAM_SYNC_ALLOW_ANY_URL=1`
+/// (tokens must never cross a network in clear).
 fn check_url(url: &str) -> Result<String, CmdError> {
+    check_url_with(url, CUSTOM_SERVERS)
+}
+
+fn check_url_with(url: &str, custom_servers: bool) -> Result<String, CmdError> {
     let u = url.trim().trim_end_matches('/').to_string();
+    // The settings only offer another server in debug builds; refuse it here
+    // too, whatever the WebView sends.
+    if !custom_servers {
+        return if u.eq_ignore_ascii_case(DEFAULT_SERVER_URL) {
+            Ok(DEFAULT_SERVER_URL.to_string())
+        } else {
+            Err(err("this version of Penroam syncs only with Penroam Cloud"))
+        };
+    }
     let any = std::env::var("PENROAM_SYNC_ALLOW_ANY_URL").is_ok_and(|v| v == "1");
     let rest = u
         .strip_prefix("http://")
@@ -745,6 +766,10 @@ pub struct SyncInfo {
     available: bool,
     configured: bool,
     status: Option<SyncStatus>,
+    /// The server new setups use unless developer mode picks another.
+    default_server_url: &'static str,
+    /// Debug build: the settings may offer developer mode (custom servers).
+    dev_build: bool,
 }
 
 /// Whether sync is available in this build, configured, and its status.
@@ -761,6 +786,8 @@ pub fn sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<SyncInfo,
         available: available(),
         configured,
         status,
+        default_server_url: DEFAULT_SERVER_URL,
+        dev_build: CUSTOM_SERVERS,
     })
 }
 
@@ -1068,5 +1095,36 @@ pub fn sync_disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             let _ = app.emit("sync://status", serde_json::Value::Null);
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_builds_sync_only_with_penroam_cloud() {
+        assert_eq!(
+            check_url_with("https://sync.penroam.ink/", false).unwrap(),
+            DEFAULT_SERVER_URL
+        );
+        assert_eq!(
+            check_url_with(" HTTPS://SYNC.PENROAM.INK ", false).unwrap(),
+            DEFAULT_SERVER_URL
+        );
+        for other in [
+            "https://sync-staging.penroam.ink",
+            "http://127.0.0.1:8787",
+            "https://sync.penroam.ink.evil.example",
+        ] {
+            assert!(check_url_with(other, false).is_err(), "{other}");
+        }
+    }
+
+    #[test]
+    fn debug_builds_accept_other_servers_but_not_plain_http_remotely() {
+        assert!(check_url_with("http://127.0.0.1:8787", true).is_ok());
+        assert!(check_url_with("https://sync-staging.penroam.ink", true).is_ok());
+        assert!(check_url_with("http://sync.example.com", true).is_err());
     }
 }

@@ -40,6 +40,29 @@ export interface SyncInfo {
   available: boolean;
   configured: boolean;
   status: SyncStatus | null;
+  /** The server new setups use (Penroam Cloud) unless developer mode picks another. */
+  defaultServerUrl: string;
+  /** Debug build: developer mode (custom servers) can be turned on. */
+  devBuild: boolean;
+}
+
+/** Taps on the version number that turn developer mode on or off. */
+export const DEV_MODE_TAPS = 5;
+/** All of them within this many milliseconds. */
+export const DEV_MODE_WINDOW_MS = 3000;
+
+/**
+ * Counts taps; returns `true` on the tap that completes `taps` taps within
+ * `windowMs`, then starts counting again.
+ */
+export function tapCounter(taps = DEV_MODE_TAPS, windowMs = DEV_MODE_WINDOW_MS): (now: number) => boolean {
+  let times: number[] = [];
+  return (now) => {
+    times = [...times.filter((t) => now - t < windowMs), now];
+    if (times.length < taps) return false;
+    times = [];
+    return true;
+  };
 }
 
 export interface SyncDevice {

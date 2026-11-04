@@ -25,6 +25,8 @@ interface Persisted {
   template: TemplateKind;
   sidebarOpen: boolean;
   epaperChosenAutomatically: boolean;
+  /** Developer mode (debug builds only): choose another sync server. */
+  developerMode: boolean;
 }
 
 const defaults: Persisted = {
@@ -42,6 +44,7 @@ const defaults: Persisted = {
   template: "ruled",
   sidebarOpen: true,
   epaperChosenAutomatically: false,
+  developerMode: false,
 };
 
 function load(): Persisted {
