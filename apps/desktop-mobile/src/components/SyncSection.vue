@@ -155,9 +155,10 @@ async function confirmDisconnect() {
         </template>
       </template>
       <template v-else>
-        <p class="flex items-center gap-2 text-xs">
+        <!-- the server address is an implementation detail; only developer mode shows it -->
+        <p v-if="sync.customServers" class="flex items-center gap-2 text-xs">
           <span class="min-w-0 flex-1 truncate">Server: <span class="font-mono">{{ sync.server.url }}</span></span>
-          <button v-if="sync.customServers" class="touch-target rounded-lg px-2 text-accent underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.changeServer()">Change</button>
+          <button class="touch-target rounded-lg px-2 text-accent underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.changeServer()">Change</button>
         </p>
         <template v-if="sync.server.signIn">
           <div v-if="!sync.server.signedInAccount" class="space-y-2">

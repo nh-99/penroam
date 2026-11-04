@@ -232,6 +232,17 @@ pub const DEFAULT_SERVER_URL: &str = "https://sync.penroam.ink";
 /// release builds only with [`DEFAULT_SERVER_URL`].
 const CUSTOM_SERVERS: bool = cfg!(debug_assertions);
 
+/// What the app says when the sync server cannot be reached. Release builds
+/// keep the address and the network error out of it (both are details the user
+/// cannot act on); debug builds show them.
+fn unreachable_message(detail: &str) -> String {
+    if CUSTOM_SERVERS {
+        format!("could not reach the server: {detail}")
+    } else {
+        "Could not reach Penroam Cloud. Check your internet connection and try again.".into()
+    }
+}
+
 /// Developer preview gate: debug builds, or `PENROAM_DEV_SYNC=1`.
 pub fn available() -> bool {
     cfg!(debug_assertions) || std::env::var("PENROAM_DEV_SYNC").is_ok_and(|v| v == "1")
@@ -369,7 +380,7 @@ fn uses_sign_in(url: &str) -> Result<bool, String> {
     HttpTransport::new(url, String::new())
         .meta()
         .map(|m| m.has_capability(capabilities::AUTH_V1))
-        .map_err(|e| e.to_string())
+        .map_err(|e| unreachable_message(&e.to_string()))
 }
 
 /// Why no token could be obtained.
@@ -925,8 +936,7 @@ pub struct ServerInfo {
 #[tauri::command(async)]
 pub fn sync_server_info(app: AppHandle, server_url: String) -> Result<ServerInfo, CmdError> {
     let url = check_url(&server_url)?;
-    let sign_in =
-        uses_sign_in(&url).map_err(|e| err(format!("could not reach the server: {e}")))?;
+    let sign_in = uses_sign_in(&url).map_err(err)?;
     let signed_in_account = if sign_in {
         let root = library_root(&app);
         let store = secrets(&app, &root)?;
