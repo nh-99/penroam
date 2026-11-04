@@ -1,11 +1,15 @@
-//! Sign-in and session DTOs (capability `auth.v1`, protocol 1.1).
+//! Sign-in and session DTOs (capability `auth.v1`, protocol 1.1; fixed loopback ports and the
+//! mobile redirect: 1.2).
 //!
 //! Sync servers that run real accounts advertise [`crate::dto::capabilities::AUTH_V1`]. The flow:
 //!
 //! 1. `GET /v1/auth/config` (no token) returns an [`AuthConfig`]: the OpenID Connect issuer and
 //!    the public client id the app uses. The client reads the issuer's discovery document itself
-//!    and signs in with the authorization-code flow plus PKCE in the **system browser**, with a
-//!    loopback redirect (RFC 8252 §7.3). The server never sees the user's password.
+//!    and signs in with the authorization-code flow plus PKCE in the **system browser**. Desktop
+//!    apps receive the answer on a loopback redirect (RFC 8252 §7.3): any port, or one of the
+//!    ports the provider has registered, for providers that cannot match any port. Mobile apps
+//!    use the private-use URI scheme redirect in [`AuthConfig::mobile_redirect_uri`]
+//!    (RFC 8252 §7.1). The server never sees the user's password.
 //! 2. `POST /v1/auth/session` exchanges the provider's ID token ([`SessionRequest`]) for an
 //!    **account session** ([`SessionTokens`] without `device_id`). It can register devices and
 //!    read and append the key log, but not push, pull or touch blobs.
@@ -36,8 +40,16 @@ pub const DEVICE_AUTH_DOMAIN: &[u8] = b"penroam/device-auth/v1\0";
 /// Redirect kind in [`AuthConfig::redirect`]: an `http://127.0.0.1:{any port}/callback` URI
 /// served by the app for the duration of one sign-in (RFC 8252 §7.3).
 pub const REDIRECT_LOOPBACK: &str = "loopback";
+/// Redirect kind in [`AuthConfig::redirect`]: `http://127.0.0.1:{port}/callback` with `port`
+/// taken from [`AuthConfig::loopback_ports`], the first one free on the device. For providers
+/// that require every redirect URI to be registered exactly, port included (protocol 1.2).
+pub const REDIRECT_LOOPBACK_PORTS: &str = "loopback-ports";
 /// Path of the loopback redirect URI.
 pub const LOOPBACK_CALLBACK_PATH: &str = "/callback";
+/// Most ports [`AuthConfig::loopback_ports`] may list.
+pub const MAX_LOOPBACK_PORTS: usize = 8;
+/// Longest accepted [`AuthConfig::mobile_redirect_uri`].
+pub const MAX_REDIRECT_URI_LEN: usize = 512;
 
 /// `GET /v1/auth/config` response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,8 +61,85 @@ pub struct AuthConfig {
     pub client_id: String,
     /// Scopes to request (always includes `openid`).
     pub scopes: Vec<String>,
-    /// Redirect kind; [`REDIRECT_LOOPBACK`] is the only one defined.
+    /// How desktop apps receive the answer: [`REDIRECT_LOOPBACK`] or
+    /// [`REDIRECT_LOOPBACK_PORTS`]. Clients refuse kinds they do not know.
     pub redirect: String,
+    /// With [`REDIRECT_LOOPBACK_PORTS`]: the registered loopback ports, tried in order. Empty
+    /// otherwise (protocol 1.2; older servers omit it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loopback_ports: Vec<u16>,
+    /// Redirect URI for the mobile apps, registered at the provider: a private-use URI scheme
+    /// in reverse domain-name form (RFC 8252 §7.1), e.g. `ink.penroam.app://callback`. The
+    /// operating system hands it to the app that claims the scheme. Absent: mobile apps cannot
+    /// sign in to this server (protocol 1.2; older servers omit it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mobile_redirect_uri: Option<String>,
+}
+
+impl AuthConfig {
+    /// Checks the redirect settings: a known [`Self::redirect`] kind, 1 to
+    /// [`MAX_LOOPBACK_PORTS`] distinct non-zero ports exactly when the kind needs them, and a
+    /// well-formed [`Self::mobile_redirect_uri`] (see [`check_mobile_redirect_uri`]). The error
+    /// names the problem.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match self.redirect.as_str() {
+            REDIRECT_LOOPBACK => {
+                if !self.loopback_ports.is_empty() {
+                    return Err("loopback_ports is only used with the loopback-ports redirect");
+                }
+            }
+            REDIRECT_LOOPBACK_PORTS => {
+                let p = &self.loopback_ports;
+                if p.is_empty() || p.len() > MAX_LOOPBACK_PORTS {
+                    return Err("loopback-ports needs 1 to 8 loopback_ports");
+                }
+                if p.contains(&0) {
+                    return Err("loopback port 0 is not a fixed port");
+                }
+                if p.iter().enumerate().any(|(i, x)| p[..i].contains(x)) {
+                    return Err("duplicate loopback port");
+                }
+            }
+            _ => return Err("unknown redirect kind"),
+        }
+        if let Some(uri) = &self.mobile_redirect_uri {
+            check_mobile_redirect_uri(uri)?;
+        }
+        Ok(())
+    }
+}
+
+/// Checks a mobile redirect URI: `scheme:/path` or `scheme://host/path` with a reverse
+/// domain-name scheme (letters, digits, `+ - .`, at least one dot, starting with a letter; not
+/// `http` or `https`), no query or fragment, at most [`MAX_REDIRECT_URI_LEN`] bytes.
+pub fn check_mobile_redirect_uri(uri: &str) -> Result<(), &'static str> {
+    if uri.len() > MAX_REDIRECT_URI_LEN {
+        return Err("mobile redirect URI too long");
+    }
+    let (scheme, rest) = uri
+        .split_once(':')
+        .ok_or("mobile redirect URI has no scheme")?;
+    let ok_scheme = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        && scheme.contains('.');
+    if !ok_scheme {
+        return Err(
+            "mobile redirect URI needs a reverse domain-name scheme (e.g. ink.penroam.app)",
+        );
+    }
+    if !rest.starts_with('/') || rest.len() < 2 {
+        return Err("mobile redirect URI needs a path after the scheme");
+    }
+    if rest.contains(['?', '#'])
+        || rest
+            .chars()
+            .any(|c| c.is_ascii_whitespace() || c.is_control())
+    {
+        return Err("mobile redirect URI must not carry a query, fragment or spaces");
+    }
+    Ok(())
 }
 
 /// `POST /v1/auth/session` request: the ID token the provider returned to the app.
@@ -168,6 +257,73 @@ pub fn canonical_device_auth_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cfg(redirect: &str, ports: Vec<u16>, mobile: Option<&str>) -> AuthConfig {
+        AuthConfig {
+            issuer: "https://idp.invalid/".into(),
+            client_id: "c".into(),
+            scopes: vec!["openid".into()],
+            redirect: redirect.into(),
+            loopback_ports: ports,
+            mobile_redirect_uri: mobile.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn redirect_settings_are_validated() {
+        assert!(cfg(REDIRECT_LOOPBACK, vec![], None).validate().is_ok());
+        assert!(cfg(REDIRECT_LOOPBACK, vec![1], None).validate().is_err());
+        assert!(cfg(REDIRECT_LOOPBACK_PORTS, vec![47011, 47012], None)
+            .validate()
+            .is_ok());
+        assert!(cfg(REDIRECT_LOOPBACK_PORTS, vec![], None)
+            .validate()
+            .is_err());
+        assert!(cfg(REDIRECT_LOOPBACK_PORTS, vec![0], None)
+            .validate()
+            .is_err());
+        assert!(cfg(REDIRECT_LOOPBACK_PORTS, vec![5, 5], None)
+            .validate()
+            .is_err());
+        assert!(cfg(REDIRECT_LOOPBACK_PORTS, (1..=9).collect(), None)
+            .validate()
+            .is_err());
+        assert!(cfg("custom", vec![], None).validate().is_err());
+        for ok in ["ink.penroam.app://callback", "ink.penroam.app:/callback"] {
+            assert!(
+                cfg(REDIRECT_LOOPBACK, vec![], Some(ok)).validate().is_ok(),
+                "{ok}"
+            );
+        }
+        for bad in [
+            "https://penroam.ink/callback",
+            "penroam://callback",
+            "ink.penroam.app:callback",
+            "ink.penroam.app:/",
+            "ink.penroam.app://callback?x=1",
+            "ink.penroam.app://call back",
+            "1nk.penroam.app://callback",
+            "ink_penroam.app://callback",
+        ] {
+            assert!(
+                cfg(REDIRECT_LOOPBACK, vec![], Some(bad))
+                    .validate()
+                    .is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn older_config_without_new_fields_still_parses() {
+        let c: AuthConfig = serde_json::from_str(
+            r#"{"issuer":"https://i/","client_id":"c","scopes":["openid"],"redirect":"loopback"}"#,
+        )
+        .unwrap();
+        assert!(c.loopback_ports.is_empty() && c.mobile_redirect_uri.is_none());
+        let back = serde_json::to_value(&c).unwrap();
+        assert!(back.get("loopback_ports").is_none() && back.get("mobile_redirect_uri").is_none());
+    }
 
     #[test]
     fn device_auth_bytes_layout() {

@@ -239,7 +239,16 @@ components:
         issuer: { type: string, format: uri }
         client_id: { type: string }
         scopes: { type: array, items: { type: string } }
-        redirect: { type: string, enum: [loopback] }
+        redirect: { type: string, enum: [loopback, loopback-ports] }
+        loopback_ports:
+          description: With redirect loopback-ports, the registered ports, tried in order (1.2).
+          type: array
+          minItems: 1
+          maxItems: 8
+          items: { type: integer, minimum: 1, maximum: 65535 }
+        mobile_redirect_uri:
+          description: Private-use URI scheme redirect for the mobile apps, e.g. ink.penroam.app://callback (1.2).
+          type: string
     SessionTokens:
       type: object
       required: [account_id, access_token, expires_in_s, refresh_token]

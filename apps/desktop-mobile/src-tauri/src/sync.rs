@@ -5,7 +5,10 @@
 //! Sign-in depends on the server:
 //! * Servers that advertise `auth.v1` (protocol §12a): the user signs in with
 //!   the server's identity provider in the **system browser**
-//!   ([`sync_sign_in`], PKCE with a loopback redirect). The account session's
+//!   ([`sync_sign_in`], PKCE). Desktop receives the answer on a loopback
+//!   redirect; Android and iOS receive it as an `ink.penroam.app:` link that
+//!   the operating system hands to the app ([`deliver_sign_in_link`]), and
+//!   only if the server offers a mobile redirect. The account session's
 //!   refresh token is kept in the OS keychain next to the device keys; the
 //!   worker trades it for a device session once this device is a key-log
 //!   member, and keeps that one in the keychain too. Refresh tokens rotate on
@@ -64,6 +67,92 @@ const DEBOUNCE: Duration = Duration::from_millis(1500);
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 /// Pause between attempts while the sign-in has ended (the user must act).
 const SIGNED_OUT_RETRY: Duration = Duration::from_secs(60);
+
+/// URI scheme this app claims for the mobile sign-in redirect (its identifier; registered in
+/// `tauri.conf.json > plugins > deep-link`).
+#[cfg(mobile)]
+const APP_SCHEME: &str = "ink.penroam.app";
+
+/// Where links for a waiting mobile sign-in go. One sign-in at a time: a new one replaces the
+/// sender, and the old one runs into its timeout.
+#[cfg(mobile)]
+static SIGN_IN_LINKS: Mutex<Option<Sender<String>>> = Mutex::new(None);
+
+/// Called with every link the operating system opens the app with. Links in the app's scheme
+/// go to the waiting sign-in, if any; the sign-in itself checks that the link is its answer.
+/// A link that arrives with no sign-in waiting (the app was restarted meanwhile) is dropped:
+/// its code is useless without the attempt's PKCE verifier.
+#[cfg(mobile)]
+pub fn deliver_sign_in_link(url: &str) {
+    let ours = url
+        .split_once(':')
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case(APP_SCHEME));
+    if !ours {
+        return;
+    }
+    if let Ok(slot) = SIGN_IN_LINKS.lock() {
+        if let Some(tx) = slot.as_ref() {
+            let _ = tx.send(url.to_string());
+        }
+    }
+}
+
+/// Desktop: loopback redirect (any port, or the first free registered port).
+#[cfg(desktop)]
+fn browser_sign_in(
+    app: &AppHandle,
+    cfg: &penroam_sync_protocol::AuthConfig,
+    disc: &auth::Discovery,
+) -> Result<String, CmdError> {
+    let login = auth::BrowserLogin::start(cfg, disc).map_err(|e| err(e.to_string()))?;
+    app.opener()
+        .open_url(login.authorize_url(), None::<&str>)
+        .map_err(|e| err(format!("could not open the browser: {e}")))?;
+    login
+        .finish(SIGN_IN_TIMEOUT)
+        .map_err(|e| err(e.to_string()))
+}
+
+/// Mobile: the answer arrives as an `ink.penroam.app:` link ([`deliver_sign_in_link`]).
+#[cfg(mobile)]
+fn browser_sign_in(
+    app: &AppHandle,
+    cfg: &penroam_sync_protocol::AuthConfig,
+    disc: &auth::Discovery,
+) -> Result<String, CmdError> {
+    let login = match auth::AppRedirectLogin::start(cfg, disc, APP_SCHEME) {
+        Ok(l) => l,
+        Err(auth::AuthError::NotSupported) => {
+            return Err(err(
+                "this server does not offer sign-in from phones and tablets yet",
+            ))
+        }
+        Err(e) => return Err(err(e.to_string())),
+    };
+    let (tx, rx) = mpsc::channel();
+    if let Ok(mut slot) = SIGN_IN_LINKS.lock() {
+        *slot = Some(tx);
+    }
+    let result = (|| {
+        app.opener()
+            .open_url(login.authorize_url(), None::<&str>)
+            .map_err(|e| err(format!("could not open the browser: {e}")))?;
+        let deadline = Instant::now() + SIGN_IN_TIMEOUT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left) {
+                // Another link in our scheme (not this sign-in's answer): keep waiting.
+                Ok(link) if !login.is_callback(&link) => continue,
+                Ok(link) => return login.finish(&link).map_err(|e| err(e.to_string())),
+                Err(_) => return Err(err(auth::AuthError::Timeout.to_string())),
+            }
+        }
+    })();
+    if let Ok(mut slot) = SIGN_IN_LINKS.lock() {
+        *slot = None;
+    }
+    result
+}
 
 /// Messages to the worker thread. Variants with a [`Reply`] are answered on
 /// that channel.
@@ -845,13 +934,7 @@ pub fn sync_sign_in(
     }
     let cfg = auth::auth_config(&url).map_err(|e| err(e.to_string()))?;
     let disc = auth::discover(&cfg.issuer).map_err(|e| err(e.to_string()))?;
-    let login = auth::BrowserLogin::start(&cfg, &disc).map_err(|e| err(e.to_string()))?;
-    app.opener()
-        .open_url(login.authorize_url(), None::<&str>)
-        .map_err(|e| err(format!("could not open the browser: {e}")))?;
-    let id_token = login
-        .finish(SIGN_IN_TIMEOUT)
-        .map_err(|e| err(e.to_string()))?;
+    let id_token = browser_sign_in(&app, &cfg, &disc)?;
     let t = auth::session_from_id_token(&url, &id_token).map_err(|e| err(e.to_string()))?;
     let root = library_root(&app);
     let configured = state.sync.tx.lock().map(|g| g.is_some()).unwrap_or(false);

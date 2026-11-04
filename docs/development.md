@@ -98,7 +98,9 @@ The app's sync settings work against two kinds of server. The settings ask for t
 address first:
 
 * **Servers that advertise `auth.v1`** (protocol §12a): **Sign in with your browser** opens the
-  system browser for the server's identity provider (PKCE, loopback redirect). The session is kept
+  system browser for the server's identity provider (PKCE). Desktop gets the answer on a loopback
+  redirect; Android and iOS get it as an `ink.penroam.app:` link, which works only if the server
+  sets a mobile redirect. The session is kept
   in the OS keychain next to the device keys. When it ends, the status says so and offers
   **Sign in again**; queued changes stay on the device.
 * **The development test server**: you type an account name. It has a stub sign-in, no TLS and no

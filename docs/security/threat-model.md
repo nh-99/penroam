@@ -44,9 +44,13 @@ and the number of notebooks are visible.
 Sign-in and encryption are separate. The identity provider and the sync server decide who may
 use an account's storage; they never receive the recovery code or a content key.
 
-* The app signs in in the system browser (authorization code + PKCE, loopback redirect), checks
-  `state` and the ID token's `nonce`, and gives the ID token to the sync server, which verifies
-  it. No password passes through the app.
+* The app signs in in the system browser (authorization code + PKCE), checks `state` and the
+  ID token's `nonce`, and gives the ID token to the sync server, which verifies it. No password
+  passes through the app. Desktop receives the code on a loopback redirect; with registered
+  fixed ports, another local program could hold the port first and receive the code. Mobile
+  receives it as an `ink.penroam.app:` link, and another app could claim that scheme. Neither
+  can redeem the code, because only the app holds the PKCE verifier; the real sign-in then
+  times out and the user tries again.
 * An account session only registers devices and reads/appends the key log. Pushing, pulling,
   blobs and checkpoints need a device session, which the server issues only to a device that
   signs a fresh challenge with a key that is an active member of the key log. A stolen account

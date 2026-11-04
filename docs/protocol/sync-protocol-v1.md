@@ -44,8 +44,8 @@ The local-format numbers are copied into the protocol crate on purpose, because 
   * `MalformedRange`: an advertised range has min > max.
 
   Every `Incompatible` maps to `upgrade_required`. The client stops syncing, keeps its outbox and local data, and shows an actionable state. It never "tries anyway".
-* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a). Clients ignore unknown capabilities.
-* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens.
+* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2). Clients ignore unknown capabilities.
+* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind.
 * Clients must call `Limits::validate()` on advertised limits. They refuse values that are 0 or above the hard maxima.
 * Op schema: servers relay payloads whose `op_schema_version` is newer than they know, because the payload is opaque to them. A client that cannot apply a newer schema calls `EnvelopeHeader::check_op_schema_supported()`. On failure it pauses with `upgrade_required` and keeps the ciphertext. It never drops the operation.
 * Unknown `ErrorCode` strings deserialize to `unknown`, which is treated as not retryable.
@@ -340,14 +340,14 @@ Changing a committed fixture is a wire-visible change. It needs an explicit vers
 * New capabilities in 1.0: `keylog.v1`, `blobs.v1`, `checkpoints.v1`. Clients use these routes only when the
   capability is listed.
 
-## 12a. Sign-in and sessions (`auth.v1`, protocol 1.1)
+## 12a. Sign-in and sessions (`auth.v1`, protocol 1.1; redirect options 1.2)
 
 Servers with real accounts list `auth.v1`. Types are in `penroam_sync_protocol::auth`; the
 client side is `penroam_sync::auth`.
 
 | Route | Token | Request | Response |
 |---|---|---|---|
-| `GET /v1/auth/config` | none | — | `AuthConfig { issuer, client_id, scopes, redirect: "loopback" }` |
+| `GET /v1/auth/config` | none | — | `AuthConfig { issuer, client_id, scopes, redirect, loopback_ports?, mobile_redirect_uri? }` |
 | `POST /v1/auth/session` | none | `SessionRequest { id_token }` | `SessionTokens` (account session) |
 | `POST /v1/auth/refresh` | none | `RefreshRequest { refresh_token }` | `SessionTokens` (same scope) |
 | `POST /v1/auth/logout` | account or device | — | 204 |
@@ -359,9 +359,20 @@ opaque; clients store them in the keychain and never log them.
 
 1. **Provider sign-in (client).** Fetch `{issuer}/.well-known/openid-configuration`; its
    `issuer` must equal `AuthConfig.issuer`. Run the authorization-code flow with PKCE `S256`
-   (RFC 7636) in the **system browser**, never an embedded web view, with a loopback redirect
-   `http://127.0.0.1:{port}/callback` on a port chosen per attempt (RFC 8252 §7.3). Check
-   `state` on the callback and the ID token's `nonce` after the code exchange.
+   (RFC 7636) in the **system browser**, never an embedded web view. Check `state` on the
+   callback and the ID token's `nonce` after the code exchange. Clients must refuse settings
+   that fail `AuthConfig::validate()`. How the answer comes back:
+   * **Desktop, `redirect: "loopback"`:** `http://127.0.0.1:{port}/callback` on a port chosen
+     per attempt (RFC 8252 §7.3). The provider must accept any port.
+   * **Desktop, `redirect: "loopback-ports"` (1.2):** the same URI on the first free port of
+     `loopback_ports` (1 to 8 distinct ports, tried in order), for providers that require every
+     redirect URI to be registered exactly. If all are busy, the sign-in fails; it never falls
+     back to another port.
+   * **Mobile (1.2):** `mobile_redirect_uri`, a private-use URI scheme in reverse domain-name
+     form (RFC 8252 §7.1), e.g. `ink.penroam.app://callback`. The operating system hands the
+     link to the app that claims the scheme; the app only accepts its own scheme. Without
+     `mobile_redirect_uri` the mobile apps cannot sign in to that server. Fixture:
+     `auth-config.loopback-ports.json`.
 2. **Session exchange (server).** The server verifies the ID token's signature against the
    issuer's JWKS, `iss`, `aud` (= `client_id`), `exp` and `iat`, maps `(iss, sub)` to an
    account and returns an **account session**. An account session may use `/v1/devices`

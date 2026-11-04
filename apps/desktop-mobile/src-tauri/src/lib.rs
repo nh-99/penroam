@@ -44,13 +44,27 @@ pub struct AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     bench::mark_start();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_native_ink::init())
         // used from Rust only (system-browser sign-in); the WebView gets no opener permission
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+    // Mobile sign-in: the identity provider answers with an `ink.penroam.app:` link, which
+    // the operating system hands to this app (RFC 8252 §7.1). Desktop uses a loopback listener.
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
+    builder
         .setup(|app| {
+            #[cfg(mobile)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                app.deep_link().on_open_url(|event| {
+                    for url in event.urls() {
+                        sync::deliver_sign_in_link(url.as_str());
+                    }
+                });
+            }
             let root = std::env::var("PENROAM_LIBRARY_DIR")
                 .map(std::path::PathBuf::from)
                 .or_else(|_| app.path().app_data_dir().map(|d| d.join("library")))?;

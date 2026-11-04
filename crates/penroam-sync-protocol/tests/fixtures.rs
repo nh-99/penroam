@@ -75,6 +75,7 @@ fn every_fixture_is_checked() {
         "error.rate-limited.json",
         "error.upgrade-required.json",
         "auth-config.json",
+        "auth-config.loopback-ports.json",
         "auth-session-request.json",
         "auth-refresh-request.json",
         "auth-session-tokens.account.json",
@@ -215,6 +216,14 @@ fn auth_documents() {
     let cfg: AuthConfig = roundtrip("auth-config.json");
     assert!(cfg.scopes.iter().any(|s| s == "openid"));
     assert_eq!(cfg.redirect, penroam_sync_protocol::auth::REDIRECT_LOOPBACK);
+    cfg.validate().unwrap();
+    let fixed: AuthConfig = roundtrip("auth-config.loopback-ports.json");
+    fixed.validate().unwrap();
+    assert_eq!(
+        fixed.redirect,
+        penroam_sync_protocol::auth::REDIRECT_LOOPBACK_PORTS
+    );
+    assert_eq!(fixed.loopback_ports, [47011, 47012, 47013]);
     let _: SessionRequest = roundtrip("auth-session-request.json");
     let _: RefreshRequest = roundtrip("auth-refresh-request.json");
     let acct: SessionTokens = roundtrip("auth-session-tokens.account.json");

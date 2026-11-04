@@ -3,9 +3,12 @@
 //! The app never handles the user's password. [`BrowserLogin`] runs the OpenID Connect
 //! authorization-code flow with PKCE (RFC 7636, `S256`) in the **system browser** and receives
 //! the answer on a one-shot loopback redirect `http://127.0.0.1:{port}/callback` (RFC 8252
-//! §7.3). It checks `state` (stops a forged callback) and the ID token's `nonce` (stops an
-//! injected token), then hands the ID token to the sync server, which verifies the signature,
-//! issuer, audience and expiry and returns an **account session**.
+//! §7.3): any port, or the first free one of the ports the server lists for providers that
+//! need exact redirect URIs. On mobile, [`AppRedirectLogin`] uses the server's private-use
+//! URI scheme redirect instead (RFC 8252 §7.1): the operating system hands the answer to the
+//! app as a link. Both check `state` (stops a forged callback) and the ID token's `nonce`
+//! (stops an injected token), then hand the ID token to the sync server, which verifies the
+//! signature, issuer, audience and expiry and returns an **account session**.
 //!
 //! A device that is an active member of the key log then gets a **device session** from
 //! [`device_session`]: it signs the server's one-time challenge with its Ed25519 key over
@@ -19,7 +22,9 @@
 use crate::crypto::DeviceKeys;
 use crate::transport::TransportError;
 use ed25519_dalek::Signer;
-use penroam_sync_protocol::auth::{LOOPBACK_CALLBACK_PATH, REDIRECT_LOOPBACK};
+use penroam_sync_protocol::auth::{
+    check_mobile_redirect_uri, LOOPBACK_CALLBACK_PATH, REDIRECT_LOOPBACK, REDIRECT_LOOPBACK_PORTS,
+};
 use penroam_sync_protocol::routes;
 use penroam_sync_protocol::{
     base64url, canonical_device_auth_bytes, AccountId, AuthConfig, DeviceChallenge,
@@ -121,19 +126,16 @@ fn post<B: serde::Serialize, T: serde::de::DeserializeOwned>(
         .ok_or_else(|| TransportError::Protocol("empty response".into()))
 }
 
-/// `GET /v1/auth/config`. Call only when `/v1/meta` lists `auth.v1`.
+/// `GET /v1/auth/config`. Call only when `/v1/meta` lists `auth.v1`. Refuses settings that
+/// fail [`AuthConfig::validate`] (unknown redirect kind, bad ports or mobile redirect).
 pub fn auth_config(server_url: &str) -> AuthResult<AuthConfig> {
     let r = agent()
         .get(format!("{}{}", base(server_url), routes::AUTH_CONFIG))
         .call()
         .map_err(net)?;
     let cfg: AuthConfig = read_json(r)?.ok_or(AuthError::NotSupported)?;
-    if cfg.redirect != REDIRECT_LOOPBACK {
-        return Err(AuthError::Provider(format!(
-            "unsupported redirect kind {:?}",
-            cfg.redirect
-        )));
-    }
+    cfg.validate()
+        .map_err(|e| AuthError::Provider(format!("server sign-in settings: {e}")))?;
     Ok(cfg)
 }
 
@@ -217,10 +219,9 @@ fn dec(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// One sign-in attempt: a loopback listener plus the secrets (`state`, `nonce`, PKCE verifier)
-/// that only this attempt knows.
-pub struct BrowserLogin {
-    listener: TcpListener,
+/// The secrets (`state`, `nonce`, PKCE verifier) and endpoints of one sign-in attempt, shared
+/// by both ways the answer can come back.
+struct Attempt {
     redirect_uri: String,
     authorize_url: String,
     token_endpoint: String,
@@ -228,14 +229,6 @@ pub struct BrowserLogin {
     state: String,
     nonce: String,
     verifier: String,
-}
-
-impl std::fmt::Debug for BrowserLogin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BrowserLogin")
-            .field("redirect_uri", &self.redirect_uri)
-            .finish_non_exhaustive()
-    }
 }
 
 /// What the provider's token endpoint returns (only the field we use).
@@ -249,13 +242,8 @@ struct IdClaims {
     nonce: Option<String>,
 }
 
-impl BrowserLogin {
-    /// Binds the loopback listener and builds the authorization URL. Open
-    /// [`Self::authorize_url`] in the system browser, then call [`Self::finish`].
-    pub fn start(cfg: &AuthConfig, discovery: &Discovery) -> AuthResult<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let port = listener.local_addr()?.port();
-        let redirect_uri = format!("http://127.0.0.1:{port}{LOOPBACK_CALLBACK_PATH}");
+impl Attempt {
+    fn new(cfg: &AuthConfig, discovery: &Discovery, redirect_uri: String) -> AuthResult<Self> {
         let state = random_token()?;
         let nonce = random_token()?;
         let verifier = random_token()?;
@@ -282,7 +270,6 @@ impl BrowserLogin {
             enc(&pkce_challenge(&verifier)),
         );
         Ok(Self {
-            listener,
             redirect_uri,
             authorize_url,
             token_endpoint: discovery.token_endpoint.clone(),
@@ -293,26 +280,42 @@ impl BrowserLogin {
         })
     }
 
-    /// The URL to open in the system browser.
-    pub fn authorize_url(&self) -> &str {
-        &self.authorize_url
+    /// Reads the callback's query string: checks `state` first (a callback for another attempt
+    /// is refused whatever else it says), then returns the code or the provider's refusal.
+    fn code_from_query(&self, query: &str) -> AuthResult<String> {
+        let mut code = None;
+        let mut state = None;
+        let mut error = None;
+        for kv in query.split('&') {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+            let v = dec(v);
+            match k {
+                "code" => code = v,
+                "state" => state = v,
+                "error" => error = v,
+                _ => {}
+            }
+        }
+        if state.as_deref() != Some(self.state.as_str()) {
+            return Err(AuthError::StateMismatch);
+        }
+        if let Some(e) = error {
+            return Err(AuthError::Denied(e));
+        }
+        match code {
+            Some(c) if !c.is_empty() => Ok(c),
+            _ => Err(AuthError::Provider("callback without code".into())),
+        }
     }
 
-    /// The loopback redirect URI registered for this attempt.
-    pub fn redirect_uri(&self) -> &str {
-        &self.redirect_uri
-    }
-
-    /// Waits for the browser to come back (at most `timeout`), checks `state`, exchanges the
-    /// code at the provider and checks the ID token's `nonce`. Returns the ID token for
-    /// [`session_from_id_token`].
-    pub fn finish(self, timeout: Duration) -> AuthResult<String> {
-        let code = self.wait_for_code(timeout)?;
+    /// Exchanges the code at the provider (with the PKCE verifier) and checks the ID token's
+    /// `nonce`. Returns the ID token.
+    fn exchange(&self, code: &str) -> AuthResult<String> {
         let r = agent()
             .post(&self.token_endpoint)
             .send_form([
                 ("grant_type", "authorization_code"),
-                ("code", code.as_str()),
+                ("code", code),
                 ("redirect_uri", self.redirect_uri.as_str()),
                 ("client_id", self.client_id.as_str()),
                 ("code_verifier", self.verifier.as_str()),
@@ -334,6 +337,80 @@ impl BrowserLogin {
             return Err(AuthError::NonceMismatch);
         }
         Ok(id_token)
+    }
+}
+
+/// Binds the loopback listener the server's redirect kind asks for: any free port, or the first
+/// free one of the registered ports.
+fn bind_loopback(cfg: &AuthConfig) -> AuthResult<TcpListener> {
+    match cfg.redirect.as_str() {
+        REDIRECT_LOOPBACK => Ok(TcpListener::bind("127.0.0.1:0")?),
+        REDIRECT_LOOPBACK_PORTS => {
+            for port in &cfg.loopback_ports {
+                // Busy (another program, or a sign-in already waiting): try the next one.
+                if let Ok(l) = TcpListener::bind(("127.0.0.1", *port)) {
+                    return Ok(l);
+                }
+            }
+            Err(AuthError::Io(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                format!(
+                    "none of the sign-in ports {:?} is free on this device",
+                    cfg.loopback_ports
+                ),
+            )))
+        }
+        other => Err(AuthError::Provider(format!(
+            "unsupported redirect kind {other:?}"
+        ))),
+    }
+}
+
+/// One desktop sign-in attempt: a loopback listener plus the attempt's secrets.
+pub struct BrowserLogin {
+    listener: TcpListener,
+    attempt: Attempt,
+}
+
+impl std::fmt::Debug for BrowserLogin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowserLogin")
+            .field("redirect_uri", &self.attempt.redirect_uri)
+            .finish_non_exhaustive()
+    }
+}
+
+impl BrowserLogin {
+    /// Binds the loopback listener ([`REDIRECT_LOOPBACK`]: any port;
+    /// [`REDIRECT_LOOPBACK_PORTS`]: the first free registered port) and builds the
+    /// authorization URL. Open [`Self::authorize_url`] in the system browser, then call
+    /// [`Self::finish`]. Fails with [`AuthError::Io`] when every registered port is busy.
+    pub fn start(cfg: &AuthConfig, discovery: &Discovery) -> AuthResult<Self> {
+        let listener = bind_loopback(cfg)?;
+        let port = listener.local_addr()?.port();
+        let redirect_uri = format!("http://127.0.0.1:{port}{LOOPBACK_CALLBACK_PATH}");
+        Ok(Self {
+            listener,
+            attempt: Attempt::new(cfg, discovery, redirect_uri)?,
+        })
+    }
+
+    /// The URL to open in the system browser.
+    pub fn authorize_url(&self) -> &str {
+        &self.attempt.authorize_url
+    }
+
+    /// The loopback redirect URI used by this attempt.
+    pub fn redirect_uri(&self) -> &str {
+        &self.attempt.redirect_uri
+    }
+
+    /// Waits for the browser to come back (at most `timeout`), checks `state`, exchanges the
+    /// code at the provider and checks the ID token's `nonce`. Returns the ID token for
+    /// [`session_from_id_token`].
+    pub fn finish(self, timeout: Duration) -> AuthResult<String> {
+        let code = self.wait_for_code(timeout)?;
+        self.attempt.exchange(&code)
     }
 
     /// Serves the loopback listener until the callback request arrives. Other paths (a
@@ -400,41 +477,98 @@ impl BrowserLogin {
             respond("404 Not Found", "Not found.");
             return None;
         }
-        let mut code = None;
-        let mut state = None;
-        let mut error = None;
-        for kv in query.split('&') {
-            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
-            let v = dec(v);
-            match k {
-                "code" => code = v,
-                "state" => state = v,
-                "error" => error = v,
-                _ => {}
-            }
-        }
-        if state.as_deref() != Some(self.state.as_str()) {
-            respond(
+        let result = self.attempt.code_from_query(query);
+        match &result {
+            Ok(_) => respond("200 OK", "Signed in to Penroam. You can close this tab."),
+            Err(AuthError::StateMismatch) => respond(
                 "400 Bad Request",
                 "This sign-in link is not for this attempt.",
-            );
-            return Some(Err(AuthError::StateMismatch));
-        }
-        if let Some(e) = error {
-            respond("200 OK", "Sign-in was cancelled. You can close this tab.");
-            return Some(Err(AuthError::Denied(e)));
-        }
-        match code {
-            Some(c) if !c.is_empty() => {
-                respond("200 OK", "Signed in to Penroam. You can close this tab.");
-                Some(Ok(c))
+            ),
+            Err(AuthError::Denied(_)) => {
+                respond("200 OK", "Sign-in was cancelled. You can close this tab.")
             }
-            _ => {
-                respond("400 Bad Request", "The sign-in answer had no code.");
-                Some(Err(AuthError::Provider("callback without code".into())))
-            }
+            Err(_) => respond("400 Bad Request", "The sign-in answer had no code."),
         }
+        Some(result)
     }
+}
+
+/// One mobile sign-in attempt: the answer comes back as a link to the server's
+/// [`AuthConfig::mobile_redirect_uri`], which the operating system hands to the app that claims
+/// its scheme (RFC 8252 §7.1). The app opens [`Self::authorize_url`] in the system browser and
+/// passes the link it receives to [`Self::finish`]. PKCE matters most here: another app that
+/// claims the same scheme could see the link, but cannot redeem the code without the verifier.
+pub struct AppRedirectLogin {
+    attempt: Attempt,
+}
+
+impl std::fmt::Debug for AppRedirectLogin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppRedirectLogin")
+            .field("redirect_uri", &self.attempt.redirect_uri)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AppRedirectLogin {
+    /// Builds the attempt. `app_scheme` is the URI scheme this app claims (e.g.
+    /// `ink.penroam.app`); the server's mobile redirect must use it, or the operating system
+    /// would deliver the answer to another app. Fails with [`AuthError::NotSupported`] when
+    /// the server has no mobile redirect.
+    pub fn start(cfg: &AuthConfig, discovery: &Discovery, app_scheme: &str) -> AuthResult<Self> {
+        let uri = cfg
+            .mobile_redirect_uri
+            .clone()
+            .ok_or(AuthError::NotSupported)?;
+        check_mobile_redirect_uri(&uri).map_err(|e| AuthError::Provider(e.to_string()))?;
+        let scheme = uri.split_once(':').map(|(s, _)| s).unwrap_or_default();
+        if !scheme.eq_ignore_ascii_case(app_scheme) {
+            return Err(AuthError::Provider(format!(
+                "the server's mobile sign-in returns to {scheme:?}, not to this app"
+            )));
+        }
+        Ok(Self {
+            attempt: Attempt::new(cfg, discovery, uri)?,
+        })
+    }
+
+    /// The URL to open in the system browser.
+    pub fn authorize_url(&self) -> &str {
+        &self.attempt.authorize_url
+    }
+
+    /// The redirect URI used by this attempt.
+    pub fn redirect_uri(&self) -> &str {
+        &self.attempt.redirect_uri
+    }
+
+    /// `true` if `url` is an answer for this kind of attempt (same redirect URI), so the app can
+    /// route incoming links. Does not check `state`; [`Self::finish`] does.
+    pub fn is_callback(&self, url: &str) -> bool {
+        callback_base(url).eq_ignore_ascii_case(&self.attempt.redirect_uri)
+    }
+
+    /// Takes the link the app received: checks that it is the redirect URI, checks `state`,
+    /// exchanges the code and checks the ID token's `nonce`. Returns the ID token for
+    /// [`session_from_id_token`].
+    pub fn finish(self, url: &str) -> AuthResult<String> {
+        if !self.is_callback(url) {
+            return Err(AuthError::StateMismatch);
+        }
+        let without_fragment = url.split('#').next().unwrap_or_default();
+        let query = without_fragment
+            .split_once('?')
+            .map(|(_, q)| q)
+            .unwrap_or_default();
+        let code = self.attempt.code_from_query(query)?;
+        self.attempt.exchange(&code)
+    }
+}
+
+/// The part of a link before its query and fragment.
+fn callback_base(url: &str) -> &str {
+    let end = url.find(['?', '#']).unwrap_or(url.len());
+    &url[..end]
 }
 
 /// `POST /v1/auth/session`: exchanges a verified-by-the-server ID token for an account session.
@@ -534,6 +668,8 @@ mod tests {
                 client_id: "penroam-app".into(),
                 scopes: vec!["email".into()],
                 redirect: REDIRECT_LOOPBACK.into(),
+                loopback_ports: vec![],
+                mobile_redirect_uri: None,
             },
             &Discovery {
                 issuer: "https://idp.invalid".into(),
@@ -559,9 +695,15 @@ mod tests {
         assert!(u.starts_with("https://idp.invalid/auth?response_type=code&client_id=penroam-app"));
         assert!(u.contains("scope=openid%20email"));
         assert!(u.contains("code_challenge_method=S256"));
-        assert!(u.contains(&format!("code_challenge={}", pkce_challenge(&l.verifier))));
-        assert!(!u.contains(&l.verifier), "verifier must not leave the app");
-        assert!(!format!("{l:?}").contains(&l.state));
+        assert!(u.contains(&format!(
+            "code_challenge={}",
+            pkce_challenge(&l.attempt.verifier)
+        )));
+        assert!(
+            !u.contains(&l.attempt.verifier),
+            "verifier must not leave the app"
+        );
+        assert!(!format!("{l:?}").contains(&l.attempt.state));
     }
 
     #[test]
@@ -580,7 +722,11 @@ mod tests {
     fn callback_returns_code_and_ignores_other_paths() {
         let l = login();
         let root = l.redirect_uri().replace("/callback", "/favicon.ico");
-        let url = format!("{}?code=c%2Fd&state={}", l.redirect_uri(), enc(&l.state));
+        let url = format!(
+            "{}?code=c%2Fd&state={}",
+            l.redirect_uri(),
+            enc(&l.attempt.state)
+        );
         let t = std::thread::spawn(move || (get(&root), get(&url)));
         assert_eq!(l.wait_for_code(Duration::from_secs(5)).unwrap(), "c/d");
         assert_eq!(t.join().unwrap(), (404, 200));
@@ -592,7 +738,7 @@ mod tests {
         let url = format!(
             "{}?error=access_denied&state={}",
             l.redirect_uri(),
-            enc(&l.state)
+            enc(&l.attempt.state)
         );
         let t = std::thread::spawn(move || get(&url));
         assert!(matches!(
@@ -604,6 +750,159 @@ mod tests {
         assert!(matches!(
             l.wait_for_code(Duration::from_millis(100)),
             Err(AuthError::Timeout)
+        ));
+    }
+
+    fn disc(token_endpoint: String) -> Discovery {
+        Discovery {
+            issuer: "https://idp.invalid".into(),
+            authorization_endpoint: "https://idp.invalid/auth".into(),
+            token_endpoint,
+        }
+    }
+
+    fn cfg(redirect: &str, ports: Vec<u16>, mobile: Option<&str>) -> AuthConfig {
+        AuthConfig {
+            issuer: "https://idp.invalid".into(),
+            client_id: "penroam-app".into(),
+            scopes: vec!["openid".into()],
+            redirect: redirect.into(),
+            loopback_ports: ports,
+            mobile_redirect_uri: mobile.map(Into::into),
+        }
+    }
+
+    fn free_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    #[test]
+    fn fixed_ports_skip_a_busy_one() {
+        let busy = TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = busy.local_addr().unwrap().port();
+        let free = free_port();
+        let l = BrowserLogin::start(
+            &cfg(REDIRECT_LOOPBACK_PORTS, vec![taken, free], None),
+            &disc("http://127.0.0.1:9/token".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            l.redirect_uri(),
+            format!("http://127.0.0.1:{free}/callback")
+        );
+        assert!(l.authorize_url().contains(&format!(
+            "redirect_uri=http%3A%2F%2F127.0.0.1%3A{free}%2Fcallback"
+        )));
+        // every registered port busy: a clear error, not a random port
+        let err = BrowserLogin::start(
+            &cfg(REDIRECT_LOOPBACK_PORTS, vec![taken], None),
+            &disc("http://127.0.0.1:9/token".into()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, AuthError::Io(e) if e.kind() == std::io::ErrorKind::AddrInUse),
+            "{err}"
+        );
+        drop(busy);
+    }
+
+    /// A one-request token endpoint that answers with an ID token carrying `nonce`, and
+    /// returns the form it received.
+    fn token_endpoint(nonce: String) -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/token", listener.local_addr().unwrap());
+        let h = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut len = 0usize;
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap() > 2 {
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap();
+                }
+                line.clear();
+            }
+            let mut body = vec![0u8; len];
+            reader.read_exact(&mut body).unwrap();
+            let claims = base64url::encode(format!(r#"{{"nonce":"{nonce}"}}"#).as_bytes());
+            let json = format!(r#"{{"id_token":"e30.{claims}.c2ln"}}"#);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+                json.len()
+            )
+            .unwrap();
+            String::from_utf8(body).unwrap()
+        });
+        (url, h)
+    }
+
+    #[test]
+    fn mobile_sign_in_round_trip() {
+        let uri = "ink.penroam.app://callback";
+        let c = cfg(REDIRECT_LOOPBACK_PORTS, vec![47011], Some(uri));
+        // the endpoint is created after the attempt, which knows the nonce
+        let probe = AppRedirectLogin::start(&c, &disc(String::new()), "ink.penroam.app").unwrap();
+        let (endpoint, server) = token_endpoint(probe.attempt.nonce.clone());
+        let l = AppRedirectLogin {
+            attempt: Attempt {
+                token_endpoint: endpoint,
+                ..probe.attempt
+            },
+        };
+        assert_eq!(l.redirect_uri(), uri);
+        assert!(l
+            .authorize_url()
+            .contains("redirect_uri=ink.penroam.app%3A%2F%2Fcallback"));
+        let link = format!("{uri}?code=the-code&state={}", enc(&l.attempt.state));
+        assert!(l.is_callback(&link));
+        assert!(!l.is_callback("ink.penroam.app://other?code=x"));
+        let verifier = l.attempt.verifier.clone();
+        let id_token = l.finish(&link).unwrap();
+        assert!(id_token.starts_with("e30."));
+        let form = server.join().unwrap();
+        assert!(form.contains("code=the-code"));
+        assert!(form.contains(&format!("code_verifier={verifier}")));
+        assert!(form.contains("redirect_uri=ink.penroam.app%3A%2F%2Fcallback"));
+    }
+
+    #[test]
+    fn mobile_sign_in_refusals() {
+        let d = disc("http://127.0.0.1:9/token".into());
+        assert!(matches!(
+            AppRedirectLogin::start(&cfg(REDIRECT_LOOPBACK, vec![], None), &d, "ink.penroam.app"),
+            Err(AuthError::NotSupported)
+        ));
+        let other = cfg(
+            REDIRECT_LOOPBACK,
+            vec![],
+            Some("com.example.other://callback"),
+        );
+        assert!(matches!(
+            AppRedirectLogin::start(&other, &d, "ink.penroam.app"),
+            Err(AuthError::Provider(_))
+        ));
+        let c = cfg(REDIRECT_LOOPBACK, vec![], Some("ink.penroam.app:/callback"));
+        let l = AppRedirectLogin::start(&c, &d, "ink.penroam.app").unwrap();
+        assert!(matches!(
+            l.finish("ink.penroam.app:/callback?code=x&state=forged"),
+            Err(AuthError::StateMismatch)
+        ));
+        let l = AppRedirectLogin::start(&c, &d, "ink.penroam.app").unwrap();
+        let denied = format!(
+            "ink.penroam.app:/callback?error=access_denied&state={}",
+            enc(&l.attempt.state)
+        );
+        assert!(matches!(l.finish(&denied), Err(AuthError::Denied(e)) if e == "access_denied"));
+        let l = AppRedirectLogin::start(&c, &d, "ink.penroam.app").unwrap();
+        assert!(!format!("{l:?}").contains(&l.attempt.state));
+        assert!(matches!(
+            l.finish("https://evil.invalid/callback?code=x"),
+            Err(AuthError::StateMismatch)
         ));
     }
 }

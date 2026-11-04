@@ -1,0 +1,15 @@
+{
+  "issuer": "https://login.example.invalid/",
+  "client_id": "penroam-app",
+  "scopes": [
+    "openid",
+    "email"
+  ],
+  "redirect": "loopback-ports",
+  "loopback_ports": [
+    47011,
+    47012,
+    47013
+  ],
+  "mobile_redirect_uri": "ink.penroam.app://callback"
+}

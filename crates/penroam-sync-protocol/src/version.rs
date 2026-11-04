@@ -14,7 +14,7 @@ use crate::error::ErrorCode;
 pub const PROTOCOL_MAJOR: u16 = 1;
 /// Sync protocol minor version. Minors within a major are additive; new
 /// behaviour is gated by capabilities, never assumed from the minor number.
-pub const PROTOCOL_MINOR: u16 = 1;
+pub const PROTOCOL_MINOR: u16 = 2;
 /// Version of the opaque remote container (the envelope header + framing).
 pub const ENVELOPE_VERSION: u16 = 1;
 
@@ -76,7 +76,7 @@ pub struct ProtocolRange {
 }
 
 impl ProtocolRange {
-    /// The range this client implementation speaks: `1.0` through `1.1`.
+    /// The range this client implementation speaks: `1.0` through `1.2`.
     pub const CLIENT: ProtocolRange = ProtocolRange {
         min: ProtocolVersion::new(PROTOCOL_MAJOR, 0),
         max: ProtocolVersion::CURRENT,
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn server_requires_newer_minor() {
-        let err = negotiate(ProtocolRange::CLIENT, &meta((1, 2), (1, 4))).unwrap_err();
+        let err = negotiate(ProtocolRange::CLIENT, &meta((1, 3), (1, 4))).unwrap_err();
         assert!(matches!(err, Incompatible::ClientTooOld { .. }));
     }
 

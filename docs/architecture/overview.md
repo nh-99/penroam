@@ -85,7 +85,9 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   [`../protocol/openapi.yaml`](../protocol/openapi.yaml).
 * **Sign-in (`auth.v1`).** Servers with real accounts advertise `auth.v1`. `penroam_sync::auth`
   signs in with the server's OpenID Connect provider in the system browser (authorization code
-  + PKCE, loopback redirect, `state` and `nonce` checks), exchanges the ID token for an account
+  + PKCE, `state` and `nonce` checks; desktop gets the answer on a loopback redirect, on any
+  port or on one of a few registered ports, and Android and iOS get it as an `ink.penroam.app:`
+  link), exchanges the ID token for an account
   session, and gets a device session by signing a server challenge with the device key; the
   server only grants that to active key-log members. The hosted Penroam Cloud server is a
   separate, private codebase that implements the same public protocol; nothing in this

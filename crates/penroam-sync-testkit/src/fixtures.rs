@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use penroam_sync_protocol::auth::REDIRECT_LOOPBACK;
+use penroam_sync_protocol::auth::{REDIRECT_LOOPBACK, REDIRECT_LOOPBACK_PORTS};
 use penroam_sync_protocol::base64url;
 use penroam_sync_protocol::contract::{error_code_table, to_fixture_json, InvalidEnvelopeCase};
 use penroam_sync_protocol::envelope::sha256_hex;
@@ -340,6 +340,20 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
             client_id: "penroam-app".into(),
             scopes: vec!["openid".into(), "email".into(), "offline_access".into()],
             redirect: REDIRECT_LOOPBACK.into(),
+            loopback_ports: vec![],
+            mobile_redirect_uri: None,
+        }),
+    );
+    // A provider that needs every redirect URI registered exactly (protocol 1.2).
+    json(
+        "auth-config.loopback-ports.json",
+        to_fixture_json(&AuthConfig {
+            issuer: "https://login.example.invalid/".into(),
+            client_id: "penroam-app".into(),
+            scopes: vec!["openid".into(), "email".into()],
+            redirect: REDIRECT_LOOPBACK_PORTS.into(),
+            loopback_ports: vec![47011, 47012, 47013],
+            mobile_redirect_uri: Some("ink.penroam.app://callback".into()),
         }),
     );
     json(
