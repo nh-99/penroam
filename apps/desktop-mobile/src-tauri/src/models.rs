@@ -32,7 +32,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Keys allowed to sign the model catalog, as `(key id, base64url public key)`. Add the new key
 /// here one release before rotating to it.
-const TRUSTED_KEYS: &[(&str, &str)] = &[];
+const TRUSTED_KEYS: &[(&str, &str)] = &[("2026-1", "CwmqLZRfSj2bwYzweSYu3T_AOxofZ8yeq68HCeTHaYk")];
 
 /// Lets the app settle before a first-run download competes with opening the library.
 const FIRST_RUN_DELAY: Duration = Duration::from_secs(5);

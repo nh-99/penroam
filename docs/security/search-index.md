@@ -62,9 +62,7 @@ search. Model format: [`../formats/handwriting-model.md`](../formats/handwriting
 
 ### Getting a model, and what that reveals
 
-A model gets onto a device in one of two ways. Downloads need a catalog key built into the app;
-a build without one (see `TRUSTED_KEYS` in `src-tauri/src/models.rs`) makes no model requests, and
-only the second way exists.
+A model gets onto a device in one of two ways.
 
 * **Downloaded** from Penroam Cloud. This happens without asking only on a device with no
   recognizer of its own (Linux, Android, BOOX), once, shortly after the first launch with
