@@ -484,7 +484,7 @@ fn newer_operation_schema_pauses_without_losing_anything() {
         notebook_id: penroam_sync_protocol::NotebookRoutingId::new("nb-future").unwrap(),
         depends_on: vec![],
         key_epoch: 1,
-        op_schema_version: 2,
+        op_schema_version: penroam_core::operation::OP_SCHEMA_VERSION + 1,
         ciphertext_sha256: penroam_sync::crypto::sha256_hex(&ct),
         ciphertext_length: ct.len() as u64,
         signature: String::new(),
@@ -937,42 +937,113 @@ fn reconnecting_brings_back_notebooks_permanently_deleted_here() {
 }
 
 #[test]
-fn a_notebook_deleted_here_is_offered_back_and_stays_back() {
+fn a_permanent_delete_reaches_every_device_and_can_be_restored() {
     let s = server();
-    let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-purge-offer");
-    // connected, so the move to trash syncs; the purge itself does not
+    let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-purge-everywhere");
+    let written = a.engine.store.state.next_seq;
     b.lib.delete_notebook(nb).unwrap();
     b.lib.purge_notebook(nb).unwrap();
     settle(&mut [&mut a, &mut b]);
-    a.lib.restore_notebook(nb).unwrap();
+    assert!(a.lib.notebook(nb).is_err(), "erased on the other device");
+    assert_eq!(
+        a.engine.store.state.next_seq, written,
+        "and not sent back out"
+    );
+    assert_eq!(a.status().phase, Phase::Idle);
+    assert_eq!(b.status().phase, Phase::Idle);
+
+    // it stays gone, and stays recoverable, past a restart
+    let mut a = a.restart();
+    settle(&mut [&mut a, &mut b]);
+    assert!(a.lib.notebook(nb).is_err());
+    for c in [&mut a, &mut b] {
+        let offered = c.engine.erased_notebooks(&c.lib).unwrap();
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].title, "Field notes");
+        assert!(offered[0].in_trash);
+    }
+
+    // restoring from a device that received the delete, not the one that made it
+    a.engine.restore_erased(&mut a.lib, nb).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut a.lib, nb), 1);
+    assert_eq!(ink_count(&mut b.lib, nb), 1, "back on every device");
+    assert!(a.lib.notebook(nb).unwrap().deleted_at.is_none());
+    assert!(a.engine.erased_notebooks(&a.lib).unwrap().is_empty());
+    assert!(b.engine.erased_notebooks(&b.lib).unwrap().is_empty());
+
+    let mut b = b.restart();
+    add(&mut a.lib, nb, p, vec![stroke(3, 3.0, "#1d4ed8")]);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut b.lib, nb), 2);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+}
+
+#[test]
+fn a_permanent_delete_made_offline_is_queued_and_keeps_edits_from_elsewhere() {
+    let s = server();
+    let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-purge-offline");
+    b.offline(true);
+    b.lib.delete_notebook(nb).unwrap();
+    b.lib.purge_notebook(nb).unwrap();
+    let _ = b.sync();
+    add(&mut a.lib, nb, p, vec![stroke(2, 2.0, "#b91c1c")]);
+    a.sync().unwrap();
+    assert_eq!(
+        ink_count(&mut a.lib, nb),
+        2,
+        "the delete hasn't arrived yet"
+    );
+
+    b.offline(false);
+    settle(&mut [&mut a, &mut b]);
+    assert!(a.lib.notebook(nb).is_err(), "the queued delete went out");
+
+    a.engine.restore_erased(&mut a.lib, nb).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut a.lib, nb), 2, "the edit survived the delete");
+    assert_eq!(ink_count(&mut b.lib, nb), 2);
+}
+
+#[test]
+fn restoring_right_after_a_delete_is_not_undone_by_the_queued_delete() {
+    let s = server();
+    let (mut a, mut b, nb, _) = two_devices_with_a_notebook(&s, "acct-purge-undo");
+    b.lib.delete_notebook(nb).unwrap();
+    b.lib.purge_notebook(nb).unwrap();
+    // nothing synced in between: the purge is still only in b's journal
+    b.engine.restore_erased(&mut b.lib, nb).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut a.lib, nb), 1);
+    assert_eq!(ink_count(&mut b.lib, nb), 1);
+}
+
+#[test]
+fn deleting_a_notebook_before_its_asset_uploaded_does_not_stop_sync() {
+    let s = server();
+    let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-purge-asset");
+    b.offline(true);
+    b.lib
+        .add_asset(nb, b"%PDF-1.4 tiny", "application/pdf", None)
+        .unwrap();
+    let _ = b.sync();
+    b.lib.delete_notebook(nb).unwrap();
+    b.lib.purge_notebook(nb).unwrap();
+    b.offline(false);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(b.status().phase, Phase::Idle);
+    assert!(a.lib.notebook(nb).is_err());
+
+    a.engine.restore_erased(&mut a.lib, nb).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(
+        ink_count(&mut a.lib, nb),
+        1,
+        "the notes come back regardless"
+    );
     add(&mut a.lib, nb, p, vec![stroke(2, 2.0, "#b91c1c")]);
     settle(&mut [&mut a, &mut b]);
-    assert!(
-        b.lib.notebook(nb).is_err(),
-        "a purge holds until it is undone"
-    );
-
-    let offered = b.engine.erased_notebooks(&b.lib).unwrap();
-    assert_eq!(offered.len(), 1);
-    assert_eq!(offered[0].notebook_id, nb);
-    assert_eq!(offered[0].title, "Field notes");
-    assert!(!offered[0].in_trash);
-
-    let mut c = b;
-    c.engine.restore_erased(&mut c.lib, nb).unwrap();
-    c.sync().unwrap();
-    assert_eq!(
-        ink_count(&mut c.lib, nb),
-        2,
-        "installed from what it already held"
-    );
-    assert!(c.engine.erased_notebooks(&c.lib).unwrap().is_empty());
-
-    let mut c = c.restart();
-    add(&mut a.lib, nb, p, vec![stroke(3, 3.0, "#1d4ed8")]);
-    settle(&mut [&mut a, &mut c]);
-    assert_eq!(ink_count(&mut c.lib, nb), 3);
-    assert_eq!(view(&mut a.lib), view(&mut c.lib));
+    assert_eq!(ink_count(&mut b.lib, nb), 2);
 }
 
 #[test]
@@ -1043,4 +1114,52 @@ fn a_rename_needs_a_usable_label_and_an_active_device() {
     // none of those may leave a bad entry behind
     a.sync().unwrap();
     assert_eq!(a.status().phase, Phase::Idle);
+}
+
+#[test]
+fn a_notebook_is_offered_back_after_its_purge_leaves_the_journal() {
+    let s = server();
+    let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-purge-checkpoint");
+    b.lib.delete_notebook(nb).unwrap();
+    b.lib.purge_notebook(nb).unwrap();
+    // an older version kept these to itself: the account never heard of them
+    let seq = b.lib.last_seq();
+    b.engine.store.state.ingested_lib_seq = seq;
+    b.engine.store.save().unwrap();
+    b.lib.mark_uploaded(seq).unwrap();
+    settle(&mut [&mut a, &mut b]);
+
+    // every install checkpoints, and the journal lets go of what two have
+    // covered; the purge goes with it, so nothing here records it any more
+    for title in ["one", "two", "three", "four"] {
+        a.lib
+            .create_notebook(title, PageDefaults::default(), None)
+            .unwrap();
+        settle(&mut [&mut a, &mut b]);
+    }
+    // an older version wrote assets before it dropped the install
+    let leftover = b.root.join("notebooks").join(nb.to_string()).join("assets");
+    std::fs::create_dir_all(leftover).unwrap();
+    let mut b = b.restart();
+    assert!(
+        !b.lib.is_purged(nb),
+        "the journal no longer holds the purge"
+    );
+    assert!(b.lib.notebook(nb).is_err());
+
+    let offered = b.engine.erased_notebooks(&b.lib).unwrap();
+    assert_eq!(offered.len(), 1, "still in the account, so still offered");
+    assert_eq!(offered[0].notebook_id, nb);
+    assert_eq!(offered[0].page_count, 1);
+    assert!(!offered[0].in_trash);
+
+    b.engine.restore_erased(&mut b.lib, nb).unwrap();
+    b.sync().unwrap();
+    assert_eq!(ink_count(&mut b.lib, nb), 1);
+    assert!(b.engine.erased_notebooks(&b.lib).unwrap().is_empty());
+
+    let mut b = b.restart();
+    add(&mut a.lib, nb, p, vec![stroke(2, 2.0, "#b91c1c")]);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut b.lib, nb), 2, "and it keeps receiving edits");
 }

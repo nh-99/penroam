@@ -19,7 +19,7 @@ pub const PROTOCOL_MINOR: u16 = 4;
 pub const ENVELOPE_VERSION: u16 = 1;
 
 /// Current semantic operation payload schema (inside the ciphertext).
-pub const OP_SCHEMA_VERSION: u16 = 1;
+pub const OP_SCHEMA_VERSION: u16 = 2;
 /// Oldest semantic operation payload schema this client can still apply.
 pub const OP_SCHEMA_MIN_SUPPORTED: u16 = 1;
 

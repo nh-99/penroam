@@ -143,6 +143,11 @@ export const useLibrary = defineStore("library", () => {
       void loadThumbs();
       void refresh();
     } catch (e) {
+      if (e instanceof CommandError && e.code === "notFound" && current.value?.id === nb.id) {
+        close();
+        ui.info("This notebook was deleted on another device. You can restore it from the trash.");
+        return;
+      }
       console.warn("reload after sync", e);
     }
   }

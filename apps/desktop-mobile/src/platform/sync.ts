@@ -78,6 +78,8 @@ export interface ErasedNotebook {
   notebookId: string;
   title: string;
   inTrash: boolean;
+  cover: string;
+  pageCount: number;
 }
 
 export type ConflictKind =

@@ -791,17 +791,23 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
         match &result {
             Ok(report) => {
                 // remote changes: re-index only the pages that were reinstalled
-                for nb in &report.installed_notebooks {
+                let changed: Vec<Uuid> = report
+                    .installed_notebooks
+                    .iter()
+                    .chain(&report.erased_notebooks)
+                    .copied()
+                    .collect();
+                for nb in &changed {
                     state.search.notebook_changed(*nb);
                 }
                 for (nb, page) in &report.installed_pages {
                     state.search.page_changed(*nb, *page);
                 }
-                if !report.installed_notebooks.is_empty() {
+                if !changed.is_empty() {
                     let _ = app.emit(
                         "sync://changed",
                         Changed {
-                            notebook_ids: report.installed_notebooks.clone(),
+                            notebook_ids: changed,
                             pages: report.installed_pages.clone(),
                         },
                     );
@@ -1136,7 +1142,7 @@ pub fn sync_rename_device(
     ask(&state.sync, |r| Cmd::Rename(device_id, label, r))
 }
 
-/// Notebooks in the account that were permanently deleted on this device.
+/// Notebooks the account holds that are not on this device.
 #[tauri::command(async)]
 pub fn sync_erased_notebooks(state: State<'_, AppState>) -> Result<Vec<ErasedNotebook>, CmdError> {
     ask(&state.sync, Cmd::Erased)

@@ -17,7 +17,7 @@ Each number is independent. None is derived from another.
 |---|---|---|
 | `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 3 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
 | `ENVELOPE_VERSION` | 1 | Opaque remote container: envelope header, canonical bytes, framing |
-| `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 1 (1) | Encrypted semantic operation payload |
+| `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 2 (1) | Encrypted semantic operation payload |
 | `FILE_FORMAT_VERSION` | 1 | Local `.prp` page file |
 | `JOURNAL_FORMAT_VERSION` | 1 | Local operation journal |
 | `ARCHIVE_FORMAT_VERSION` | 2 | `.penroam` archive |
@@ -28,7 +28,7 @@ The local-format numbers are copied into the protocol crate on purpose, because 
 
 ```json
 { "protocol": {"major": 1, "minor": 3}, "envelope_version": 1,
-  "op_schema": {"min": 1, "max": 1},
+  "op_schema": {"min": 1, "max": 2},
   "formats": {"file_format": 1, "journal_format": 1, "archive_format": 2, "notebook_schema": 2, "page_schema": 1},
   "git_sha": null }
 ```

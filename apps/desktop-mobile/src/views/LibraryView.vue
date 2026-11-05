@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { BookPlus, Import, Settings, Trash, ArchiveArrowUp, NotebookPen, TriangleAlert, ArrowLeft, Search } from "@lucide/vue";
+import { BookPlus, Import, Settings, Trash, ArchiveArrowUp, NotebookPen, TriangleAlert, ArrowLeft, Search, Cloud, LoaderCircle } from "@lucide/vue";
 import logoUrl from "../assets/logo.png";
 import { useLibrary } from "../stores/library";
 import { COVERS } from "../editor/covers";
 import NotebookCard from "../components/NotebookCard.vue";
+import CloudNotebookCard from "../components/CloudNotebookCard.vue";
 import NewNotebookDialog from "../components/NewNotebookDialog.vue";
 import PromptDialog from "../components/PromptDialog.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
@@ -12,6 +13,7 @@ import SettingsDialog from "../components/SettingsDialog.vue";
 import CloudBanner from "../components/CloudBanner.vue";
 import SearchPanel from "../components/SearchPanel.vue";
 import { useSearch } from "../stores/search";
+import { useSync } from "../stores/sync";
 import { useUi } from "../stores/ui";
 import { highlightRects, type SearchHit } from "../platform/search";
 import { modKey } from "../platform/device";
@@ -31,8 +33,21 @@ const purging = ref<NotebookSummary | null>(null);
 
 const list = computed(() => (showTrash.value ? lib.trashed : lib.live));
 const search = useSearch();
+const sync = useSync();
 const ui = useUi();
 const mod = modKey();
+
+// with sync the account keeps a deleted notebook, so this isn't final and the dialog must not say so
+const purgeMessage = computed(() => {
+  const title = purging.value?.title;
+  return sync.configured
+    ? `“${title}” will be removed from all your devices. It stays in your account, so you can restore it from the trash.`
+    : `“${title}” and all its pages will be permanently removed from this device. This cannot be undone.`;
+});
+
+function download(id: string) {
+  sync.download(id).catch((e) => ui.error(`Could not download the notebook: ${(e as Error).message ?? e}`));
+}
 
 function openHit(h: SearchHit) {
   search.panelOpen = false;
@@ -70,7 +85,7 @@ function recolor(nb: NotebookSummary) {
         <IconBtn label="Search notebooks" :shortcut="`${mod}+K`" @click="search.panelOpen = true"><Search :size="20" /></IconBtn>
         <Btn variant="primary" @click="showNew = true"><BookPlus :size="18" /><span class="hidden sm:inline">New notebook</span></Btn>
         <IconBtn label="Import .penroam notebook" @click="lib.importNotebook()"><Import :size="20" /></IconBtn>
-        <IconBtn :label="`Trash (${lib.trashed.length})`" @click="showTrash = true"><Trash :size="20" /></IconBtn>
+        <IconBtn :label="`Trash (${lib.trashed.length + sync.cloudTrash.length})`" @click="showTrash = true"><Trash :size="20" /></IconBtn>
         <IconBtn label="Settings" @click="showSettings = true"><Settings :size="20" /></IconBtn>
       </template>
       <template v-else>
@@ -89,7 +104,7 @@ function recolor(nb: NotebookSummary) {
       </div>
 
       <template v-else-if="!showTrash">
-        <div v-if="lib.loaded && list.length === 0" class="mx-auto mt-16 max-w-md text-center">
+        <div v-if="lib.loaded && list.length === 0 && sync.cloudNotebooks.length === 0" class="mx-auto mt-16 max-w-md text-center">
           <NotebookPen :size="40" class="mx-auto mb-4 text-muted" />
           <h2 class="text-lg font-semibold">Your shelf is empty</h2>
           <p class="mt-2 text-sm leading-relaxed text-muted">Create a notebook to start writing by hand or typing on the same page. Everything stays on this device; nothing needs an account.</p>
@@ -102,11 +117,13 @@ function recolor(nb: NotebookSummary) {
           <NotebookCard v-for="nb in list" :key="nb.id" :nb="nb" :cover="lib.covers[nb.id]"
             @open="lib.open(nb.id)" @rename="renaming = nb" @recolor="recolor(nb)"
             @export="lib.exportNotebook(nb.id, nb.title)" @export-pdf="lib.exportPdf(nb.id, nb.title)" @trash="lib.trash(nb.id)" />
+          <CloudNotebookCard v-for="nb in sync.cloudNotebooks" :key="nb.notebookId" :nb="nb"
+            :downloading="sync.downloading.includes(nb.notebookId)" @download="download(nb.notebookId)" />
         </div>
       </template>
 
       <template v-else>
-        <p v-if="list.length === 0" class="mt-16 text-center text-sm text-muted">The trash is empty.</p>
+        <p v-if="list.length === 0 && sync.cloudTrash.length === 0" class="mt-16 text-center text-sm text-muted">The trash is empty.</p>
         <ul v-else class="mx-auto max-w-2xl divide-y divide-line rounded-xl border border-line bg-surface">
           <li v-for="nb in list" :key="nb.id" class="flex items-center gap-3 px-4 py-3">
             <span class="h-8 w-2 rounded-full" :style="{ background: nb.cover }" aria-hidden="true" />
@@ -115,7 +132,17 @@ function recolor(nb: NotebookSummary) {
               <p class="text-xs text-muted">{{ nb.pageCount }} pages · deleted {{ new Date(nb.deletedAt!).toLocaleString() }}</p>
             </div>
             <Btn variant="outline" @click="lib.restore(nb.id)"><ArchiveArrowUp :size="16" />Restore</Btn>
-            <Btn variant="ghost" class="text-danger" @click="purging = nb">Delete forever</Btn>
+            <Btn variant="ghost" class="text-danger" @click="purging = nb">{{ sync.configured ? "Delete from devices" : "Delete forever" }}</Btn>
+          </li>
+          <li v-for="nb in sync.cloudTrash" :key="nb.notebookId" class="flex items-center gap-3 px-4 py-3">
+            <span class="h-8 w-2 rounded-full opacity-40" :style="{ background: nb.cover }" aria-hidden="true" />
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-sm font-medium text-muted">{{ nb.title }}</p>
+              <p class="flex items-center gap-1 text-xs text-muted"><Cloud :size="12" aria-hidden="true" />{{ nb.pageCount }} pages · only in your account</p>
+            </div>
+            <Btn variant="outline" :disabled="sync.downloading.includes(nb.notebookId)" @click="download(nb.notebookId)">
+              <LoaderCircle v-if="sync.downloading.includes(nb.notebookId)" :size="16" class="animate-spin" /><ArchiveArrowUp v-else :size="16" />Restore
+            </Btn>
           </li>
         </ul>
       </template>
@@ -126,8 +153,8 @@ function recolor(nb: NotebookSummary) {
     <SearchPanel v-if="search.panelOpen" @close="search.panelOpen = false" @open="openHit" />
     <PromptDialog v-if="renaming" title="Rename notebook" label="Title" :value="renaming.title" confirm="Rename"
       @close="renaming = null" @submit="(t) => { lib.rename(renaming!.id, t); renaming = null; }" />
-    <ConfirmDialog v-if="purging" title="Delete forever?" danger confirm="Delete forever"
-      :message="`“${purging.title}” and all its pages will be permanently removed from this device. This cannot be undone.`"
+    <ConfirmDialog v-if="purging" :title="sync.configured ? 'Delete from all devices?' : 'Delete forever?'" danger :confirm="sync.configured ? 'Delete from devices' : 'Delete forever'"
+      :message="purgeMessage"
       @close="purging = null" @confirm="() => { lib.purge(purging!.id); purging = null; }" />
   </div>
 </template>
