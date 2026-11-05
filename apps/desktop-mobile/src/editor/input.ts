@@ -5,7 +5,10 @@ import { toDoc, type ViewTransform } from "./viewport";
 export type PointerKind = "pen" | "mouse" | "touch";
 
 export const FLAG_COALESCED = 2;
-/** Contacts wider than this (CSS px) are treated as a palm. */
+/**
+ * Contacts wider than this (CSS px) are treated as a palm. Not valid on iOS, where WebKit reports
+ * twice the touch radius and ordinary fingertips exceed it; see `EditorSettings.palmContactPx`.
+ */
 export const PALM_CONTACT_PX = 40;
 
 export interface RawSample {
@@ -62,11 +65,11 @@ export type PenOnlyMode = "auto" | "on" | "off";
  */
 export function classifyPointer(
   e: { pointerType: string; button: number; width: number; height: number },
-  state: { penOnly: PenOnlyMode; penSeen: boolean; penDown: boolean; drawingActive: boolean; touches: number },
+  state: { penOnly: PenOnlyMode; penSeen: boolean; penDown: boolean; drawingActive: boolean; touches: number; palmPx?: number },
 ): "draw" | "navigate" | "ignore" {
   if (e.pointerType === "touch") {
     if (state.penDown) return "ignore";
-    if (Math.max(e.width, e.height) > PALM_CONTACT_PX) return "ignore";
+    if (Math.max(e.width, e.height) > (state.palmPx ?? PALM_CONTACT_PX)) return "ignore";
     const penOnly = state.penOnly === "on" || (state.penOnly === "auto" && state.penSeen);
     if (penOnly || state.touches > 0) return "navigate";
     return state.drawingActive ? "navigate" : "draw";

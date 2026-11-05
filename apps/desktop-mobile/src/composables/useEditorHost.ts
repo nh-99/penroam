@@ -1,10 +1,12 @@
 import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, type Ref } from "vue";
 import { InkEditor, type EditorState } from "../editor/engine";
+import { PALM_CONTACT_PX } from "../editor/input";
 import { PdfCache, PdfPageRenderer } from "../editor/pdf";
 import { PageRenderer } from "../editor/renderer";
 import type { Page } from "../generated/Page";
 import { PageSession, errorMessage } from "../editor/session";
 import { api } from "../platform/ipc";
+import { isIOS } from "../platform/device";
 import { detectNativeInk, type NativeInkSurface } from "../platform/nativeInk";
 import { registerFlusher } from "../platform/lifecycle";
 import { useLibrary } from "../stores/library";
@@ -48,6 +50,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       penOnly: s.penOnly,
       mono: settings.effectiveTheme() === "epaper",
       useNativeInk: s.useNativeInk,
+      // iPad fingertips exceed the size limit; palms are rejected by the Pencil-down rules instead
+      palmContactPx: isIOS() ? Infinity : PALM_CONTACT_PX,
       maxCanvasPixels: /Android|iPad|iPhone/i.test(navigator.userAgent) ? 8_000_000 : 16_000_000,
     });
     e.setToolSettings({
@@ -208,6 +212,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     });
     editor.value = e;
     benchHooks.editor = e;
+    e.penSeen = settings.s.penSeen;
     applySettings();
     unregister = registerFlusher(flush);
     if (sync.available) {
@@ -251,7 +256,11 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   );
   watch(
     () => state.penSeen,
-    (seen) => seen && settings.s.penOnly === "auto" && console.info("pen detected: fingers now pan/zoom"),
+    (seen) => {
+      if (!seen) return;
+      settings.s.penSeen = true;
+      if (settings.s.penOnly === "auto") console.info("pen detected: fingers now pan/zoom");
+    },
   );
 
   /** Reloads pages changed outside the editor (sync, conflict resolution) once it is idle. */

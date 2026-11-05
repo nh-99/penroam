@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InkEditor } from "../src/editor/engine";
 import { PageSession } from "../src/editor/session";
 import type { Page } from "../src/generated/Page";
+import type { NativeHandlers, NativeInkSurface } from "../src/platform/nativeInk";
 
 function page(): Page {
   return { schemaVersion: 1, id: "p1", paper: "letter", size: { width: 612, height: 792 }, template: { kind: "blank", spacing: 24 }, revision: 0, createdAt: 0, updatedAt: 0, elements: [] };
@@ -50,6 +51,91 @@ afterEach(() => {
   ed.dispose();
   vp.remove();
   vi.useRealTimers();
+});
+
+describe("native pen surface and fingers", () => {
+  const touch = { pointerType: "touch", pointerId: 11, pressure: 0.5 };
+  const touch2 = { pointerType: "touch", pointerId: 12, pressure: 0.5 };
+  const inkCount = () => session.page.elements.filter((el) => el.type === "ink").length;
+
+  async function mountPreview() {
+    let handlers: NativeHandlers | null = null;
+    const noop = async () => {};
+    const surface: NativeInkSurface = {
+      kind: "ios-pencil",
+      ownsCommittedInk: false,
+      capabilities: {},
+      mount: async (_r, _t, _tool, _s, h) => void (handlers = h),
+      unmount: noop,
+      setBounds: noop,
+      setViewportTransform: noop,
+      setTool: noop,
+      setVisible: noop,
+      loadCommittedInk: noop,
+      addStrokes: noop,
+      removeStrokes: noop,
+      commitAck: noop,
+      metrics: async () => ({}),
+    };
+    ed.setNativeSurface(surface);
+    await vi.waitFor(() => expect(handlers).not.toBeNull());
+    return handlers! as NativeHandlers;
+  }
+
+  it("gives fingers pan and zoom once the Pencil has touched down, with no pen pointer events", async () => {
+    const native = await mountPreview();
+    native.penState(true);
+    native.penState(false);
+    expect(ed.penSeen).toBe(true);
+
+    ptr("pointerdown", 100, 100, touch);
+    ptr("pointermove", 130, 150, touch);
+    ptr("pointerup", 130, 150, touch);
+    expect(ed.transform).toMatchObject({ scale: 1, ox: 30, oy: 50 });
+
+    ptr("pointerdown", 100, 100, touch);
+    ptr("pointerdown", 200, 100, touch2);
+    ptr("pointermove", 300, 100, touch2);
+    expect(ed.transform.scale).toBeCloseTo(2);
+    ptr("pointerup", 100, 100, touch);
+    ptr("pointerup", 300, 100, touch2);
+    expect(inkCount()).toBe(0);
+  });
+
+  it("drops a resting palm's pan at pen-down and ignores contacts until pen-up", async () => {
+    const native = await mountPreview();
+    native.penState(true);
+    native.penState(false);
+    ptr("pointerdown", 100, 100, touch); // the palm lands first
+    native.penState(true);
+    ptr("pointermove", 180, 180, touch);
+    ptr("pointerdown", 300, 300, touch2);
+    ptr("pointermove", 340, 340, touch2);
+    expect(ed.transform).toMatchObject({ ox: 0, oy: 0 });
+    native.penState(false);
+    ptr("pointerup", 180, 180, touch);
+    ptr("pointerup", 340, 340, touch2);
+    ptr("pointerdown", 100, 100, touch);
+    ptr("pointermove", 110, 100, touch);
+    expect(ed.transform.ox).toBe(10);
+  });
+
+  it("does not leave fingers ignored if the surface is hidden while the pen is down", async () => {
+    const native = await mountPreview();
+    await vi.waitFor(() => expect(ed.nativeIsVisible).toBe(true));
+    native.penState(true);
+    ed.setOverlayBlocked(true);
+    ed.setOverlayBlocked(false);
+    ptr("pointerdown", 100, 100, touch);
+    ptr("pointermove", 110, 100, touch);
+    expect(ed.transform.ox).toBe(10);
+  });
+
+  it("counts a finished native stroke as pen use", async () => {
+    const native = await mountPreview();
+    native.strokeFinalized({ id: "s1", z: 1, tool: "pen", color: "#111111", opacity: 1, width: 2, pressure: true, source: "stylus", input: {}, points: [{ x: 1, y: 1, pressure: 0.5, tiltX: 0, tiltY: 0, timeUs: 0 }] } as any);
+    expect(ed.penSeen).toBe(true);
+  });
 });
 
 describe("editor engine", () => {

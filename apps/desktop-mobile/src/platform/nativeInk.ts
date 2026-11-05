@@ -12,7 +12,8 @@
 //    renderer commits and paints it, then `commitAck` lets the native layer
 //    drop its preview, so the stroke never flashes or doubles.
 //
-// Pen samples never cross IPC while a stroke is live: only finalised strokes.
+// Pen samples never cross IPC while a stroke is live: only finalised strokes,
+// plus pen-down/up from iOS so fingers can be arbitrated (the web view never sees the pen).
 import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
 import type { InkStroke } from "../generated/InkStroke";
 import type { InkPoint } from "../generated/InkPoint";
@@ -39,6 +40,8 @@ export interface NativeTool {
 
 export interface NativeHandlers {
   strokeFinalized(stroke: InkStroke): void;
+  /** The pen touched or left the surface; emitted only by surfaces that report it (iOS). */
+  penState(down: boolean): void;
   erased(ids: string[]): void;
   viewport(t: { scale: number; ox: number; oy: number }): void;
   status?(s: Record<string, unknown>): void;
@@ -146,6 +149,7 @@ class PluginSurface implements NativeInkSurface {
         this.handlers?.error(`native stroke could not be read: ${e}`);
       }
     });
+    await on("pen", (p) => this.handlers?.penState(p.down === true));
     await on("erased", (p) => this.handlers?.erased((p.ids ?? []).map(String)));
     await on("viewport", (p) => this.handlers?.viewport({ scale: p.scale, ox: p.offsetX, oy: p.offsetY }));
     await on("status", (p) => this.handlers?.status?.(p));

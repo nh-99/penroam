@@ -27,7 +27,7 @@ import {
   type Rect,
 } from "./geometry";
 import { newId } from "./ids";
-import { classifyPointer, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
+import { classifyPointer, PALM_CONTACT_PX, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
 import { PdfCache, PdfPageRenderer } from "./pdf";
 import { drawText, elementBounds, PageRenderer, textBounds, type Ink, type Text } from "./renderer";
 import type { PageSession, SaveState } from "./session";
@@ -53,6 +53,8 @@ export interface EditorSettings {
   /** max backing pixels per page layer */
   maxCanvasPixels: number;
   useNativeInk: boolean;
+  /** Touches wider than this (CSS px) count as palms; `Infinity` turns size filtering off (iOS). */
+  palmContactPx: number;
 }
 
 export interface EditorState {
@@ -125,7 +127,7 @@ export class InkEditor {
     textSize: 16,
     pressure: true,
   };
-  settings: EditorSettings = { penOnly: "auto", mono: false, maxCanvasPixels: 16_000_000, useNativeInk: true };
+  settings: EditorSettings = { penOnly: "auto", mono: false, maxCanvasPixels: 16_000_000, useNativeInk: true, palmContactPx: PALM_CONTACT_PX };
   selection = new Set<string>();
   penSeen = false;
 
@@ -577,15 +579,19 @@ export class InkEditor {
     }
   }
 
+  /** Records that a stylus is in use: "auto" pen-only mode now gives fingers pan and zoom. */
+  private markPenSeen() {
+    if (this.penSeen) return;
+    this.penSeen = true;
+    this.emit({ penSeen: true });
+  }
+
   private onDown(e: PointerEvent) {
     if (e.target === this.textarea) return;
     if (!this.session) return;
     this.clearMatches();
     this.rect = this.viewport.getBoundingClientRect();
-    if (e.pointerType === "pen" && !this.penSeen) {
-      this.penSeen = true;
-      this.emit({ penSeen: true });
-    }
+    if (e.pointerType === "pen") this.markPenSeen();
     // finishing a text edit consumes the tap
     if (this.edit && !(e.pointerType === "touch" && this.touches.size > 0)) {
       this.endTextEdit();
@@ -593,7 +599,7 @@ export class InkEditor {
     }
     const tool = this.effectiveTool(e);
     const busy = !!(this.active || this.erase || this.drag);
-    const cls = classifyPointer(e, { penOnly: this.settings.penOnly, penSeen: this.penSeen, penDown: this.penDown, drawingActive: busy, touches: this.touches.size });
+    const cls = classifyPointer(e, { penOnly: this.settings.penOnly, penSeen: this.penSeen, penDown: this.penDown, drawingActive: busy, touches: this.touches.size, palmPx: this.settings.palmContactPx });
     if (cls === "ignore") return;
     if (e.pointerType === "pen") this.penDown = true;
     if (cls === "navigate" || tool === "hand") return this.beginNavigate(e);
@@ -1379,6 +1385,7 @@ export class InkEditor {
       this.nativeCall(async (nn) => {
         await nn.mount(this.surfaceRect(), this.transform, this.nativeTool(), this.inkElements(), {
           strokeFinalized: (s) => this.onNativeStroke(s),
+          penState: (down) => this.onNativePen(down),
           erased: (ids) => this.onNativeErased(ids),
           viewport: (t) => this.setTransform(t, true),
           error: (m) => this.cb.onError(m),
@@ -1404,12 +1411,28 @@ export class InkEditor {
     } else {
       // show web ink first, then remove the native layer: no blank frame
       this.renderer.ink.style.visibility = "";
+      this.penDown = false; // the surface can no longer report a pen-up
       this.nativeCall((nn) => nn.setVisible(false));
     }
     this.emit({ nativeActive: want });
   }
 
+  /**
+   * The native surface owns the pen, so no pen pointer events reach `onDown`; this stands in for
+   * them. A resting palm usually lands first and looks like a finger, so pen-down also drops any
+   * pan or pinch in progress: the page must not move under the nib.
+   */
+  private onNativePen(down: boolean) {
+    this.markPenSeen();
+    this.penDown = down;
+    if (!down) return;
+    this.touches.clear();
+    this.pinch = null;
+    this.pan = null;
+  }
+
   private onNativeStroke(stroke: InkStroke) {
+    this.markPenSeen(); // surfaces that only report finished strokes (BOOX)
     const s = this.session;
     if (!s) return;
     const el: Ink = { ...stroke, type: "ink", z: s.nextZ() };

@@ -13,6 +13,8 @@ const KEY = "penroam.settings.v1";
 interface Persisted {
   theme: ThemePref;
   penOnly: PenOnlyMode;
+  /** A stylus has been used on this device, so "auto" gives fingers pan and zoom from the start. */
+  penSeen: boolean;
   useNativeInk: boolean;
   pressure: boolean;
   penColor: string;
@@ -32,6 +34,7 @@ interface Persisted {
 const defaults: Persisted = {
   theme: "system",
   penOnly: "auto",
+  penSeen: false,
   useNativeInk: true,
   pressure: true,
   penColor: "#111111",

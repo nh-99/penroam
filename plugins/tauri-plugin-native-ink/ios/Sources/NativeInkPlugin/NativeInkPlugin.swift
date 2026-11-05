@@ -8,7 +8,9 @@
 //  * A UIGestureRecognizer on the web view with allowedTouchTypes = [.pencil]
 //    claims Pencil touches inside the editor rect (cancelsTouchesInView), so
 //    the web canvas never sees them twice; fingers still reach the web view
-//    (pan/zoom/UI). Palm contacts are fingers, so they never draw.
+//    (pan/zoom/UI). Palm contacts are fingers, so they never draw. Since the
+//    web view never sees the Pencil, pen-down/up are sent as "pen" events: the
+//    editor needs them to give fingers to pan/zoom and to ignore palms.
 //  * Coalesced touches are recorded; predicted touches are drawn only on the
 //    preview; estimated force updates patch recorded points.
 //  * On pen-up the stroke is sent to the web editor ("stroke" event); it stays
@@ -270,6 +272,7 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
         p.live = s
         p.setNeedsDisplay()
         metrics["strokes_begun", default: 0] += 1
+        trigger("pen", data: ["down": true])
         return true
     }
 
@@ -283,6 +286,7 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
     }
 
     func end(_ t: UITouch, _ event: UIEvent, cancelled: Bool) {
+        trigger("pen", data: ["down": false])
         guard let p = preview, let s = p.live else { return }
         if !cancelled { s.add((event.coalescedTouches(for: t) ?? [t]).map(sample), coalesced: true) }
         p.live = nil
