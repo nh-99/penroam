@@ -133,7 +133,7 @@ async function confirmDisconnect() {
       <p class="flex items-center gap-2 text-xs text-muted"><RefreshCw :size="14" class="animate-spin" />Waiting for approval…</p>
     </div>
 
-    <div v-else-if="sync.step === 'compare'" class="space-y-3 rounded-xl border-2 border-accent p-3 epaper:border-black">
+    <div v-else-if="sync.step === 'compare'" class="space-y-3 rounded-xl border-2 border-brand p-3 epaper:border-black">
       <p class="text-sm font-medium">Check that the other device shows the same code:</p>
       <p class="text-center font-mono text-3xl font-bold tracking-widest">{{ sync.comparison }}</p>
       <div class="flex flex-wrap gap-2">
@@ -159,7 +159,7 @@ async function confirmDisconnect() {
         <!-- the server address is an implementation detail; only developer mode shows it -->
         <p v-if="sync.customServers" class="flex items-center gap-2 text-xs">
           <span class="min-w-0 flex-1 truncate">Server: <span class="font-mono">{{ sync.server.url }}</span></span>
-          <button class="touch-target rounded-lg px-2 text-accent underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.changeServer()">Change</button>
+          <button class="touch-target rounded-lg px-2 text-brand underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.changeServer()">Change</button>
         </p>
         <template v-if="sync.server.signIn">
           <div v-if="!sync.server.signedInAccount" class="space-y-2">
@@ -169,7 +169,7 @@ async function confirmDisconnect() {
           </div>
           <p v-else class="flex items-center gap-2 text-xs">
             <span class="flex-1">Signed in.</span>
-            <button class="touch-target rounded-lg px-2 text-accent underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.signOut(sync.server.url)">Sign out</button>
+            <button class="touch-target rounded-lg px-2 text-brand underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.signOut(sync.server.url)">Sign out</button>
           </p>
         </template>
         <label v-else class="block text-xs">Account name (development test server)

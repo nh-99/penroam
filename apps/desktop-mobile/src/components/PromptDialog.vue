@@ -13,7 +13,7 @@ const v = ref(props.value);
     <form @submit.prevent="v.trim() && emit('submit', v.trim())">
       <label class="block">
         <span class="mb-1.5 block text-sm font-medium">{{ label }}</span>
-        <input v-model="v" autofocus maxlength="300" class="h-11 w-full rounded-xl border border-line bg-surface px-3 text-base outline-none focus:border-accent epaper:border-2" />
+        <input v-model="v" autofocus maxlength="300" class="h-11 w-full rounded-xl border border-line bg-surface px-3 text-base outline-none focus:border-brand epaper:border-2" />
       </label>
       <div class="mt-6 flex justify-end gap-2">
         <Btn @click="emit('close')">Cancel</Btn>

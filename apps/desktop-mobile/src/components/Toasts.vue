@@ -16,7 +16,7 @@ const ui = useUi();
       <CircleCheck v-else-if="t.kind === 'success'" :size="18" class="mt-0.5 shrink-0 text-ok" />
       <Info v-else :size="18" class="mt-0.5 shrink-0 text-muted" />
       <span class="flex-1 leading-snug">{{ t.text }}</span>
-      <button v-if="t.action" class="shrink-0 font-semibold text-accent underline-offset-2 hover:underline" @click="t.action.run(); ui.dismiss(t.id)">{{ t.action.label }}</button>
+      <button v-if="t.action" class="shrink-0 font-semibold text-brand underline-offset-2 hover:underline" @click="t.action.run(); ui.dismiss(t.id)">{{ t.action.label }}</button>
       <button class="-m-1 shrink-0 rounded p-1 text-muted hover:bg-surface-2" aria-label="Dismiss" @click="ui.dismiss(t.id)"><X :size="16" /></button>
     </div>
   </div>
