@@ -1,14 +1,84 @@
 name: ci
 
+# Almost all of this workflow's time is spent compiling, not running tests, so it is built to
+# compile as little as it can: jobs run in parallel, only for what changed, from main's cache.
+# docs/development.md describes the design.
 on:
   push:
+    branches: ["**"]
+    # The tags penroam-cloud pins. They can point at commits that aren't on a branch.
+    tags: ["sync-protocol-v*"]
   pull_request:
+
+# Superseded branch runs are cancelled. Runs on main are left to finish, each in its own group:
+# main's change detection only looks at the latest push, so a cancelled run's changes would go
+# untested, and sharing a group would queue pushes behind each other.
+concurrency:
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
+  # Backtraces keep their line numbers; full debug info would only slow linking and fill the cache.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
+  # Everything else depends on this job, so skipping it skips the run. Pull requests from this
+  # repository are skipped because the push already ran CI on the same commit.
+  changes:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      android: ${{ steps.filter.outputs.android }}
+      swift: ${{ steps.filter.outputs.swift }}
+    steps:
+      - uses: actions/checkout@v4
+      # Tags have nothing to compare with; they run the sync contract job and nothing else.
+      - if: github.ref_type != 'tag'
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Rust tests and examples read tests/, tools/ and docs/protocol/.
+          filters: |
+            ci: &ci
+              - .github/workflows/ci.yml
+              - .github/actions/**
+            rust:
+              - *ci
+              - .cargo/**
+              - Cargo.lock
+              - Cargo.toml
+              - apps/desktop-mobile/src-tauri/**
+              - apps/desktop-mobile/src/generated/**
+              - crates/**
+              - docs/protocol/**
+              - fuzz/**
+              - plugins/**
+              - tests/**
+              - tools/**
+            frontend:
+              - *ci
+              - apps/desktop-mobile/**
+              - package.json
+              - pnpm-lock.yaml
+              - pnpm-workspace.yaml
+              - tests/**
+              - tools/**
+            android:
+              - *ci
+              - android/**
+            swift:
+              - *ci
+              - ios/**
+
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -22,93 +92,135 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
 
-  rust:
+  # Separate from `test`: clippy's output can't be reused by a build, so together they would only
+  # run one after the other.
+  lint:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: "rustfmt, clippy" }
-      - name: System libraries (WebKitGTK for the Tauri crate)
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev poppler-utils
-      - run: mkdir -p apps/desktop-mobile/dist && touch apps/desktop-mobile/dist/index.html
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt, clippy
+          workspaces: |
+            . -> target
+            fuzz -> target
       - run: cargo fmt --all --check
+      - uses: ./.github/actions/linux-deps
+      - run: mkdir -p apps/desktop-mobile/dist && touch apps/desktop-mobile/dist/index.html
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Fuzz targets compile
+        run: cargo check --manifest-path fuzz/Cargo.toml
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-dev
+      - uses: ./.github/actions/linux-deps
+        with:
+          packages: poppler-utils
+      - run: mkdir -p apps/desktop-mobile/dist && touch apps/desktop-mobile/dist/index.html
       - run: cargo test --workspace
       - name: Generated TypeScript bindings match the Rust schema
         run: git diff --exit-code apps/desktop-mobile/src/generated
       - name: Sync protocol fixtures are deterministic and frozen
         run: cargo run -q -p penroam-sync-testkit --bin penroam-sync-fixtures -- --check crates/penroam-sync-protocol/fixtures/v1
-      - name: Fuzz targets compile
-        run: cargo check --manifest-path fuzz/Cargo.toml
 
   # The public sync contract builds and tests on its own: no notebook
   # engine, UI, device SDK, private repository or credentials.
   sync-contract:
+    needs: changes
+    if: github.ref_type == 'tag' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - run: cargo test -p penroam-sync-protocol -p penroam-sync-testkit
       - name: No engine/UI/private dependencies
         run: |
           ! cargo tree -p penroam-sync-protocol -e all | grep -E 'penroam-(core|storage|pdf|cloud)|tauri'
           ! grep -rn 'penroam-cloud' --include=Cargo.toml .
 
+  # Main builds the shipped packages with the full release profile. Everywhere else a debug build
+  # is enough for the start-up smoke tests, and it reuses the dependencies `test` compiled.
   linux-build:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-24.04
-    needs: [frontend, rust]
+    env:
+      PROFILE: ${{ github.ref == 'refs/heads/main' && 'release' || 'debug' }}
+      BUILD_ARGS: ${{ github.ref == 'refs/heads/main' && '--bundles deb,appimage' || '--debug --no-bundle' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: pnpm }
-      - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: ${{ github.ref == 'refs/heads/main' && 'linux-release' || 'linux-dev' }}
+      - uses: ./.github/actions/linux-deps
+        with:
+          packages: xvfb weston
       - run: pnpm install --frozen-lockfile
-      - run: pnpm tauri build --bundles deb,appimage
+      - run: pnpm tauri build $BUILD_ARGS
       # Start-up smoke tests on both Linux display servers: the app opens its
       # library, runs the quick Workload D on a 1k-stroke page and exits.
       - name: Smoke test on X11 (Xvfb)
         run: |
-          sudo apt-get install -y xvfb
           PENROAM_AUTOBENCH=ci-x11,quick,exit PENROAM_RESULTS_DIR=$PWD/ci-results PENROAM_LIBRARY_DIR=$(mktemp -d) \
-            GDK_BACKEND=x11 timeout 300 xvfb-run -a target/release/penroam-app
+            GDK_BACKEND=x11 timeout 300 xvfb-run -a target/$PROFILE/penroam-app
           ls ci-results/perf-app-workload-d-ci-x11-*.json
       - name: Smoke test on Wayland (headless Weston)
         run: |
-          sudo apt-get install -y weston
           export XDG_RUNTIME_DIR=$(mktemp -d) && chmod 700 $XDG_RUNTIME_DIR
           weston --backend=headless --socket=wl-ci --idle-time=0 & sleep 3
           PENROAM_AUTOBENCH=ci-wayland,quick,exit PENROAM_RESULTS_DIR=$PWD/ci-results PENROAM_LIBRARY_DIR=$(mktemp -d) \
-            WAYLAND_DISPLAY=wl-ci GDK_BACKEND=wayland timeout 300 target/release/penroam-app
+            WAYLAND_DISPLAY=wl-ci GDK_BACKEND=wayland timeout 300 target/$PROFILE/penroam-app
           ls ci-results/perf-app-workload-d-ci-wayland-*.json
-      - uses: actions/upload-artifact@v4
-        with: { name: penroam-linux, path: target/release/bundle }
+      - if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: penroam-linux
+          # Only the packages: the rest of bundle/ is unpacked build scratch (AppDir, deb tree).
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
 
-  # Compatible hosted runners exist; these jobs have not been run yet (see docs/).
+  # A debug build proves these platforms compile and link, and shares its dependencies with the
+  # tests. The release profile is checked nightly by release-check.yml.
   desktop-builds:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.frontend == 'true'
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    needs: [frontend]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: pnpm }
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - run: pnpm install --frozen-lockfile
       - run: cargo test -p penroam-core -p penroam-storage -p penroam-pdf -p penroam-search --features penroam-search/windows-ink
-      - run: pnpm tauri build --no-bundle
+      - run: pnpm tauri build --debug --no-bundle
 
   android-jvm:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: 21 }
+        with: { distribution: temurin, java-version: 21, cache: gradle }
       - uses: android-actions/setup-android@v3
         # the action's default package list includes the legacy `tools`
         # package, which current cmdline-tools no longer provide; Gradle
@@ -117,6 +229,8 @@ jobs:
       - run: cd android && ./gradlew --no-daemon :boox-ink:testDebugUnitTest
 
   swift-linux:
+    needs: changes
+    if: needs.changes.outputs.swift == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

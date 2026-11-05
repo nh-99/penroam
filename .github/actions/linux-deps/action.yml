@@ -1,0 +1,19 @@
+name: Linux system libraries
+description: The WebKitGTK stack the Tauri crate links against, plus any extra packages.
+
+inputs:
+  packages:
+    description: Extra apt packages, space separated.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        # Rebuilding the man page index is the slowest part of an apt install, and nothing reads it.
+        sudo rm -f /var/lib/man-db/auto-update
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev $PACKAGES

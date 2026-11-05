@@ -1,0 +1,35 @@
+name: Set up Rust
+description: Stable toolchain and a build cache that only `main` writes to.
+
+inputs:
+  components:
+    description: Extra toolchain components, comma separated.
+    default: ""
+  shared-key:
+    description: Share a cache between jobs. Empty gives this job its own.
+    default: ""
+  workspaces:
+    description: rust-cache workspace mappings.
+    default: ". -> target"
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: ${{ inputs.components }}
+    # ort-sys records its download directory as a link path, and a cached target/ skips the build
+    # script that would fetch it again. So the directory has to travel with the cache.
+    - name: Keep ONNX Runtime in the cache
+      shell: bash
+      env:
+        ORT_DIR: ${{ runner.temp }}/ort
+      run: echo "ORT_CACHE_DIR=$ORT_DIR" >> "$GITHUB_ENV"
+    # Branches restore main's cache and never save: the repository's 10 GB allowance would
+    # otherwise fill with near-identical copies and evict the one everything restores from.
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.shared-key }}
+        workspaces: ${{ inputs.workspaces }}
+        cache-directories: ${{ runner.temp }}/ort
+        save-if: ${{ github.ref == 'refs/heads/main' }}

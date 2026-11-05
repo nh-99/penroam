@@ -256,6 +256,27 @@ what the script does:
 The session's click coordinates assume the current layout. If a button moves, update
 `session.txt`. It needs Xephyr, ImageMagick and the XTest headers.
 
+## CI
+
+`.github/workflows/ci.yml` runs on every branch push. Nearly all of its time goes on compiling, so
+it avoids compiling:
+
+* Jobs run in parallel, with nothing waiting on another job's result. The `changes` job runs
+  `dorny/paths-filter` and skips the jobs a push can't affect. A new directory that Rust or the
+  frontend reads from has to be added to its filters, or changes there won't run those jobs.
+* Rust jobs use `.github/actions/setup-rust`, which restores `Swatinem/rust-cache`. Only `main`
+  writes to the cache; other branches read from it, so the first push after `Cargo.lock` or the
+  stable toolchain changes is a slower cold build. The cache includes the downloaded ONNX Runtime
+  because `ort-sys` links against it from outside `target/`.
+* Only `main` builds the full release profile (fat LTO) and uploads the `.deb` and AppImage.
+  Other branches run the Linux smoke tests on a debug build, and all branches build Windows and
+  macOS in debug. Some compile-time checks exist only in release builds, such as the `log` level
+  cap in `apps/desktop-mobile/src-tauri/src/lib.rs`, so a branch can pass and still fail on `main`.
+* `.github/workflows/release-check.yml` builds the release profile on Windows and macOS nightly.
+
+Pushes of `sync-protocol-v*` tags run only the sync contract job. Pull requests from this
+repository are skipped because the branch push already ran; pull requests from forks run in full.
+
 ## Fuzzing
 
 `fuzz/` holds cargo-fuzz targets (`decode_page`, `journal_open`, `sync_batch_frame`); they need a

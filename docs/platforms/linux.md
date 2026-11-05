@@ -12,8 +12,9 @@ pressure (XInput2 / tablet-v2) has not been tested with real hardware yet.
 Both report `getCoalescedEvents` and `getPredictedEvents`; neither has `pointerrawupdate`
 (WebKitGTK 2.52), so `pointermove` + coalesced events is the sample stream on Linux.
 
-CI (`.github/workflows/ci.yml`, not yet run) starts the release binary on **Xvfb (X11)** and on
-**headless Weston (Wayland)** and runs the quick benchmark on each.
+CI (`.github/workflows/ci.yml`) starts the app on **Xvfb (X11)** and on **headless Weston
+(Wayland)** and runs the quick benchmark on each: the release binary on `main`, a debug build on
+other branches.
 
 Known WebKitGTK issue (not seen here; this machine renders on the AMD iGPU): blank or white
 windows on Wayland with some NVIDIA proprietary driver setups. Workaround:

@@ -1,0 +1,25 @@
+name: release-check
+
+# CI builds Windows and macOS with the debug profile. This catches what only the release profile
+# does (fat LTO linking, the release-only compile-time checks) without slowing every push. Linux
+# is covered on each push to main, which builds the packages.
+on:
+  schedule:
+    - cron: "43 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  release-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm tauri build --no-bundle
