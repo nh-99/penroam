@@ -49,8 +49,3 @@ source. When writing or changing code:
   *what*.
 * Keep it concise and accurate; never document behaviour that doesn't exist.
 * `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` must pass.
-
-## Commits
-
-Use the repository's configured git identity. Add no `Co-Authored-By` or other attribution
-trailers.
