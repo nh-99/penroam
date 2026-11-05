@@ -252,10 +252,10 @@ fn on_battery() -> Option<bool> {
             let kind = std::fs::read_to_string(p.join("type")).unwrap_or_default();
             match kind.trim() {
                 "Battery" => battery = true,
-                "Mains" | "USB" => {
-                    if std::fs::read_to_string(p.join("online")).is_ok_and(|s| s.trim() == "1") {
-                        mains_online = true;
-                    }
+                "Mains" | "USB"
+                    if std::fs::read_to_string(p.join("online")).is_ok_and(|s| s.trim() == "1") =>
+                {
+                    mains_online = true;
                 }
                 _ => {}
             }
