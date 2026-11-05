@@ -6,7 +6,7 @@ import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { hasHost } from "../platform/ipc";
 import { useSettings } from "./settings";
-import { cloudNotice, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
+import { cloudNotice, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ErasedNotebook, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
 
 export type SetupStep = "none" | "recovery" | "pairing" | "compare";
 
@@ -23,6 +23,7 @@ export const useSync = defineStore("sync", () => {
   const configured = ref(false);
   const status = ref<SyncStatus | null>(null);
   const devices = ref<SyncDevice[]>([]);
+  const erased = ref<ErasedNotebook[]>([]);
   const step = ref<SetupStep>("none");
   const recoveryCode = ref<string | null>(null);
   const pairingCode = ref<string | null>(null);
@@ -187,6 +188,7 @@ export const useSync = defineStore("sync", () => {
     }
     if (configured.value && step.value === "none") {
       devices.value = (await syncApi.devices().catch(() => null)) ?? devices.value;
+      erased.value = (await syncApi.erasedNotebooks().catch(() => null)) ?? erased.value;
       await refreshAccount();
     }
   }
@@ -292,6 +294,14 @@ export const useSync = defineStore("sync", () => {
     await run(() => syncApi.removeDevice(id));
     await refresh();
   };
+  const rename = async (id: string, label: string) => {
+    await run(() => syncApi.renameDevice(id, label));
+    await refresh();
+  };
+  const restoreErased = async (id: string) => {
+    await run(() => syncApi.restoreErased(id));
+    await refresh();
+  };
   const syncNow = () => run(() => syncApi.syncNow());
   const pause = (p: boolean) => run(() => syncApi.pause(p));
   const disconnect = async () => {
@@ -324,6 +334,7 @@ export const useSync = defineStore("sync", () => {
     configured,
     status,
     devices,
+    erased,
     step,
     recoveryCode,
     pairingCode,
@@ -359,6 +370,8 @@ export const useSync = defineStore("sync", () => {
     finishRecovery,
     approve,
     remove,
+    rename,
+    restoreErased,
     syncNow,
     pause,
     disconnect,

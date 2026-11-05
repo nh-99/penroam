@@ -9,6 +9,7 @@ use penroam_sync::Phase;
 use penroam_sync_protocol::ErrorCode;
 use penroam_sync_testkit::InMemoryServer;
 use std::sync::Arc;
+use uuid::Uuid;
 
 fn server() -> Arc<InMemoryServer> {
     Arc::new(InMemoryServer::new())
@@ -878,4 +879,168 @@ fn checkpoint_from_a_removed_device_is_not_trusted() {
         0,
         "nothing imported from the untrusted checkpoint"
     );
+}
+
+/// One notebook on `a`, already on a paired `b`.
+fn two_devices_with_a_notebook(
+    s: &Arc<InMemoryServer>,
+    name: &str,
+) -> (Client, Client, Uuid, Uuid) {
+    let acct = account(s, name);
+    let (mut a, _) = Client::first(s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Field notes", PageDefaults::default(), None)
+        .unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    a.sync().unwrap();
+    let mut b = Client::paired(s, &acct, "b", &mut a);
+    b.sync().unwrap();
+    (a, b, nb.id, p.id)
+}
+
+#[test]
+fn reconnecting_brings_back_notebooks_permanently_deleted_here() {
+    let s = server();
+    let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-purge-rejoin");
+    a.engine.remove_device(b.engine.device_id()).unwrap();
+    // removed, so this never reaches the account: only the local copy goes
+    b.lib.delete_notebook(nb).unwrap();
+    b.lib.purge_notebook(nb).unwrap();
+    assert!(b.lib.is_purged(nb));
+    let Client {
+        lib,
+        engine,
+        root,
+        server,
+        account,
+        _dir,
+    } = b;
+    engine.disconnect(&root).unwrap();
+    drop(lib);
+    let mut b = common::Client::pair_existing(&server, &account, "b-again", root, _dir, &mut a);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(
+        ink_count(&mut b.lib, nb),
+        1,
+        "the account's copy is installed"
+    );
+    assert!(b.engine.erased_notebooks(&b.lib).unwrap().is_empty());
+
+    // the journal still holds the purge: a restart must not erase it again, or
+    // later edits would be dropped with no error
+    let mut b = b.restart();
+    assert_eq!(ink_count(&mut b.lib, nb), 1, "still here after a restart");
+    add(&mut a.lib, nb, p, vec![stroke(2, 2.0, "#b91c1c")]);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut b.lib, nb), 2, "and it keeps receiving edits");
+}
+
+#[test]
+fn a_notebook_deleted_here_is_offered_back_and_stays_back() {
+    let s = server();
+    let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-purge-offer");
+    // connected, so the move to trash syncs; the purge itself does not
+    b.lib.delete_notebook(nb).unwrap();
+    b.lib.purge_notebook(nb).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    a.lib.restore_notebook(nb).unwrap();
+    add(&mut a.lib, nb, p, vec![stroke(2, 2.0, "#b91c1c")]);
+    settle(&mut [&mut a, &mut b]);
+    assert!(
+        b.lib.notebook(nb).is_err(),
+        "a purge holds until it is undone"
+    );
+
+    let offered = b.engine.erased_notebooks(&b.lib).unwrap();
+    assert_eq!(offered.len(), 1);
+    assert_eq!(offered[0].notebook_id, nb);
+    assert_eq!(offered[0].title, "Field notes");
+    assert!(!offered[0].in_trash);
+
+    let mut c = b;
+    c.engine.restore_erased(&mut c.lib, nb).unwrap();
+    c.sync().unwrap();
+    assert_eq!(
+        ink_count(&mut c.lib, nb),
+        2,
+        "installed from what it already held"
+    );
+    assert!(c.engine.erased_notebooks(&c.lib).unwrap().is_empty());
+
+    let mut c = c.restart();
+    add(&mut a.lib, nb, p, vec![stroke(3, 3.0, "#1d4ed8")]);
+    settle(&mut [&mut a, &mut c]);
+    assert_eq!(ink_count(&mut c.lib, nb), 3);
+    assert_eq!(view(&mut a.lib), view(&mut c.lib));
+}
+
+#[test]
+fn only_an_erased_notebook_can_be_restored() {
+    let s = server();
+    let (_a, mut b, nb, _) = two_devices_with_a_notebook(&s, "acct-purge-guard");
+    assert!(
+        b.engine.restore_erased(&mut b.lib, nb).is_err(),
+        "not erased"
+    );
+    let unknown = Uuid::new_v4();
+    assert!(b.engine.restore_erased(&mut b.lib, unknown).is_err());
+}
+
+#[test]
+fn a_rename_reaches_every_device_and_keeps_keys_and_membership() {
+    let s = server();
+    let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-rename");
+    let id = b.engine.device_id().to_string();
+    let before = a
+        .engine
+        .devices()
+        .into_iter()
+        .find(|d| d.device_id == id)
+        .unwrap();
+
+    a.engine.rename_device(&id, "  panther  ").unwrap();
+    settle(&mut [&mut a, &mut b]);
+    for c in [&a, &b] {
+        let d = c
+            .engine
+            .devices()
+            .into_iter()
+            .find(|d| d.device_id == id)
+            .unwrap();
+        assert_eq!(d.label, "panther");
+        assert_eq!(d.fingerprint, before.fingerprint, "keys are untouched");
+        assert!(d.active);
+    }
+    add(&mut b.lib, nb, p, vec![stroke(2, 2.0, "#b91c1c")]);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(
+        ink_count(&mut a.lib, nb),
+        2,
+        "the renamed device still syncs"
+    );
+
+    let mut b = b.restart();
+    b.sync().unwrap();
+    let d = b
+        .engine
+        .devices()
+        .into_iter()
+        .find(|d| d.device_id == id)
+        .unwrap();
+    assert_eq!(d.label, "panther", "replayed from the key log");
+}
+
+#[test]
+fn a_rename_needs_a_usable_label_and_an_active_device() {
+    let s = server();
+    let (mut a, b, _, _) = two_devices_with_a_notebook(&s, "acct-rename-bad");
+    let id = b.engine.device_id().to_string();
+    assert!(a.engine.rename_device(&id, "   ").is_err());
+    assert!(a.engine.rename_device(&id, &"x".repeat(129)).is_err());
+    a.engine.remove_device(&id).unwrap();
+    assert!(a.engine.rename_device(&id, "gone").is_err());
+    // none of those may leave a bad entry behind
+    a.sync().unwrap();
+    assert_eq!(a.status().phase, Phase::Idle);
 }
