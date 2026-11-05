@@ -3395,6 +3395,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-native-ink",
+ "tauri-plugin-native-print",
  "tauri-plugin-opener",
  "uuid",
  "windows",
@@ -4936,6 +4937,18 @@ dependencies = [
 name = "tauri-plugin-native-ink"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+]
+
+[[package]]
+name = "tauri-plugin-native-print"
+version = "0.1.0"
+dependencies = [
+ "gtk",
+ "penroam-pdf",
  "serde",
  "serde_json",
  "tauri",

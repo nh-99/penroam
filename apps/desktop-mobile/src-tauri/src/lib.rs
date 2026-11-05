@@ -54,7 +54,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_native_ink::init())
-        // used from Rust only (system-browser sign-in); the WebView gets no opener permission
+        .plugin(tauri_plugin_native_print::init())
+        // used from Rust only (system-browser sign-in, PDFs for printing on Windows and macOS);
+        // the WebView gets no opener permission
         .plugin(tauri_plugin_opener::init());
     // Mobile sign-in: the identity provider answers with an `ink.penroam.app:` link, which
     // the operating system hands to this app (RFC 8252 §7.1). Desktop uses a loopback listener.
@@ -128,6 +130,7 @@ pub fn run() {
             commands::export_notebook,
             commands::import_notebook,
             commands::export_annotated_pdf,
+            commands::print_notebook,
             commands::import_stroke_document,
             commands::exit_app,
             sync::sync_info,

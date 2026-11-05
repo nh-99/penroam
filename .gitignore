@@ -26,6 +26,8 @@ apps/desktop-mobile/src-tauri/gen/android/buildSrc/.gradle/
 apps/desktop-mobile/src-tauri/gen/android/build/
 plugins/tauri-plugin-native-ink/android/.tauri/
 plugins/tauri-plugin-native-ink/ios/.tauri/
+plugins/tauri-plugin-native-print/android/.tauri/
+plugins/tauri-plugin-native-print/ios/.tauri/
 plugins/*/permissions/schemas/
 plugins/*/.tauri/
 /fuzz/target

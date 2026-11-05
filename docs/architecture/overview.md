@@ -26,6 +26,7 @@ crates/penroam-sync-testkit     development test server (in memory / persisted, 
 crates/penroam-sync             sync client: crypto, key log, operation log, transports, reconcile engine, dev CLI
 crates/penroam-search           local search: handwriting regions, recognizers (Windows ink, Apple Vision, Penroam model), SQLite FTS5 index
 plugins/tauri-plugin-native-ink NativeInkSurface: Rust bridge, android/ (Kotlin), ios/ (Swift/UIKit)
+plugins/tauri-plugin-native-print system print dialogs: GTK (Rust), android/ (Kotlin), ios/ (Swift/UIKit)
 android/  ios/                  native ink modules used by the plugin: BooxInkView (Kotlin, Gradle root for its tests), InkKit (Swift)
 tests/fixtures/                 shared fixtures (strokes, geometry and text-layout goldens, scenes, PDF, .prp golden, legacy libraries)
 fuzz/                           cargo-fuzz targets (page decoder, journal open, sync batch frame)
@@ -160,8 +161,10 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   Helvetica, which the PDF export uses). Editing uses a textarea overlay positioned in the same
   page coordinate system; the canvas copy is hidden while editing.
 * Paint order is ink → images → text (same in the PDF exporter).
-* Input rules: pen eraser button erases; palm-sized touches are ignored; touches are ignored
-  while the pen is down; "pen-only" mode (auto after the first pen event) makes fingers pan and
+* Input rules: pen eraser button erases; palm-sized touches are ignored (not on iOS, where
+  fingertips report palm-like sizes); touches are ignored
+  while the pen is down; "pen-only" mode (auto after the first pen use on the device, remembered
+  across launches; native surfaces report it themselves) makes fingers pan and
   zoom; `pointercancel`, lost capture, window blur and app backgrounding finish or cancel
   gestures so no stroke is ever left stuck.
 
@@ -246,3 +249,28 @@ Non-BOOX Android devices use the web canvas (the generalised native Mode C exist
   flag is lifted (`WebTuning` hook in `ios/InkKit`; App Store risk) — hence the native preview layer.
 * **Offline**: strict CSP (`connect-src ipc:` only), PDF.js data files bundled. Search and
   handwriting recognition make no network calls.
+
+## 8. Printing
+
+Printing reuses the annotated PDF export, so a printout matches an exported PDF: ink stays
+vector, and whatever the export replaces or leaves out is replaced or left out on paper too. The
+`print_notebook` command renders the PDF, releases the library lock, writes the PDF to the
+library's staging folder and passes it on. The renderer never sees that path.
+
+| Platform | Route | Who applies a page range |
+|---|---|---|
+| Linux | GTK print dialog, then CUPS | Penroam (`penroam_pdf::keep_pages`) |
+| Android | `PrintManager` system UI | The print spooler |
+| iOS, iPadOS | `UIPrintInteractionController` | The system |
+| Windows, macOS | Default PDF viewer, via the opener plugin | The viewer |
+
+* **No WebView access.** `tauri-plugin-native-print` has no commands; only Rust calls it. The
+  generic `call` command of the ink plugin is reachable from the WebView, which is why printing
+  is not a method there: a renderer must not be able to name a file to print.
+* **Page ranges on Linux.** A job made from a finished PDF is not cut down by GTK, and the range
+  is not sent to CUPS. So the file is reduced to the chosen pages, after the dialog closes and off
+  the main thread. `keep_pages` prunes unreferenced objects, so pages that were not chosen do not
+  reach the print system. Copies, collation, reverse order and pages per sheet stay with CUPS.
+* **Temporary file.** The plugin deletes the file when the print system has finished with it or
+  the dialog is cancelled. Because the staging folder is emptied every time the library opens, a
+  file left by a crash or still held for a PDF viewer goes on the next launch.

@@ -23,6 +23,8 @@ account, a server or a subscription.
 - **Never lose work.** Every stroke is saved to disk as you go, and the indicator in the top
   bar tells you when it has been. If the app or computer crashes, your notebook reopens with
   everything you'd written.
+- **Print your notes.** Print a whole notebook or just some pages, with ink as sharp as on
+  screen.
 - **Your files, your choice.** Export any notebook as a `.penroam` file (a documented,
   lossless format) and open it on another device.
 - **Light, dark and ePaper themes**, with layouts for desktop, tablet and phone.
@@ -101,12 +103,18 @@ between pages.
 notebook, then write on it like any other page. To get the PDF back with your notes on it,
 choose **Export → Annotated PDF**.
 
+**Printing.** Press `Ctrl+P` in a notebook, or choose **Print…** from the **Export** menu in the
+top bar or from a notebook's **⋮** menu in the library. Your system's print dialog opens, so
+you choose the printer, the number of copies and which pages to print there. A printout matches
+**Export → Annotated PDF**, and Penroam tells you if anything couldn't be included. On Windows
+and macOS the notebook opens in your default PDF viewer instead, and you print from there.
+
 **Searching.** Click the magnifying glass (`Ctrl+K` in the library, `Ctrl+F` in a notebook)
 and type. Penroam searches every notebook's titles, typed text and the text of imported PDFs.
 It also reads your handwriting: on Windows with the handwriting recognizer built into Windows,
-and on devices without one with a handwriting model, a file you install under
-**Settings → Advanced** (it runs on your device and is used as a fallback on Windows too).
-Choose a result to open its page with the matching words outlined. Quoted words
+and on devices without one with a handwriting model, which Penroam downloads once, shortly after
+you first open it. The model runs on your device, and the download sends none of your notes. On
+Windows it is optional, as a fallback; get it under **Settings → Advanced**. Choose a result to open its page with the matching words outlined. Quoted words
 (`"budget review"`) match as a phrase, and close misspellings still find handwriting that was
 read slightly wrong (marked *similar spelling*). If a handwritten line was read wrongly, click
 the pencil next to the result and type what it says; search uses your reading from then on, and
@@ -116,7 +124,8 @@ search index. Without a recognizer or an installed model, Penroam searches title
 PDF text, but not handwriting.
 
 **Settings → Advanced** chooses between your device's recognizer and the Penroam model where you
-have both, and installs or removes the model.
+have both, and checks for model updates, installs a model from a file, or removes it. A model you
+remove stays removed.
 
 **Moving notebooks between devices.** Use **Export → Notebook (.penroam)** to save a
 notebook as a file. On the other device, click **Import** in the library. Everything comes
@@ -131,7 +140,8 @@ immediately if you want extra reassurance.
 Notebooks are stored in the app's private data folder on your device and nowhere else.
 Penroam has no accounts and no analytics. Search works entirely on your device: the
 search index is kept in the app's cache folder, and neither it nor anything you search for is
-uploaded or included in exports. The `.penroam` format is documented
+uploaded or included in exports. When you print, your device's print system receives a copy of
+what you print. The `.penroam` format is documented
 in [docs/formats/](docs/formats/), so your notes are never locked into this app.
 
 ## Contributing

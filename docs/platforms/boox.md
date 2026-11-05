@@ -33,6 +33,9 @@ cd android && ./gradlew :boox-ink:testDebugUnitTest   # 14 JVM tests
 
 ## Known risks
 
+* Printing has not been tried on a BOOX. It needs Android's print spooler, which some e-ink
+  firmware may leave out; without one, printing shows an error. With no print service installed
+  the system dialog offers only "Save as PDF".
 * Native view covers the whole canvas element including the desk area outside the page; ink
   drawn off-page is kept (the web canvas clips its rendering to the page).
 * Highlighter preview on the EPD pen layer is opaque (the hardware layer has no alpha); the

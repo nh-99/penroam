@@ -327,6 +327,37 @@ fn annotated_export_keeps_source_pages_and_adds_vector_annotations() {
 }
 
 #[test]
+fn keep_pages_leaves_only_the_chosen_pages() {
+    let source = make_pdf(
+        &[(612.0, 792.0, 0), (400.0, 500.0, 0), (300.0, 300.0, 0)],
+        true,
+    );
+    let infos = inspect(&source).unwrap();
+    let hash = penroam_storage_free_sha(&source);
+    let pages: Vec<Page> = infos
+        .iter()
+        .map(|info| pdf_page(info, &hash, vec![text(50.0, 50.0, "kept note")]))
+        .collect();
+    let (pdf, _) = export_annotated(&pages, |_| Some(source.clone())).unwrap();
+
+    // out of order and repeated indexes, and one past the end, still give document order
+    let cut = keep_pages(&pdf, &[2, 0, 2, 9]).unwrap();
+    let doc = Document::load_mem(&cut).unwrap();
+    assert_eq!(doc.get_pages().len(), 2);
+    assert!(doc.extract_text(&[1]).unwrap().contains("Source page 1"));
+    assert!(doc.extract_text(&[2]).unwrap().contains("Source page 3"));
+    assert_eq!(inspect(&cut).unwrap()[1].media_box, infos[2].media_box);
+
+    // what was cut is gone from the file, not just unlinked
+    let streams = |d: &Document| d.objects.values().filter(|o| o.as_stream().is_ok()).count();
+    assert!(streams(&doc) < streams(&Document::load_mem(&pdf).unwrap()));
+
+    assert!(matches!(keep_pages(&pdf, &[]), Err(PdfError::NoPages)));
+    assert!(matches!(keep_pages(&pdf, &[3]), Err(PdfError::NoPages)));
+    assert!(matches!(keep_pages(b"junk", &[0]), Err(PdfError::Parse(_))));
+}
+
+#[test]
 fn render_with_pdftoppm_if_available() {
     // Visual smoke test: rasterise the export and check that annotation pixels
     // land where expected. Skipped when poppler is not installed.

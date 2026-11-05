@@ -9,6 +9,7 @@
 //!   **vector** content in the same document-space transform the editor uses.
 //!   Blank/template pages become new PDF pages. The editable data stays in
 //!   the notebook; the PDF is a one-way rendering.
+//! * [`keep_pages`] cuts such an export down to chosen pages, for printing.
 //!
 //! # Coordinates
 //!
@@ -453,6 +454,57 @@ fn f(v: f64) -> String {
     } else {
         s.to_string()
     }
+}
+
+/// Cuts a PDF written by [`export_annotated`] down to the zero-based pages in `keep`, in
+/// document order. Used to print part of a notebook.
+///
+/// This relies on [`export_annotated`] giving every page its own resolved attributes, so a page
+/// loses nothing when it moves directly under the root of the page tree. Do not use it on PDFs
+/// from elsewhere, whose pages may inherit attributes from intermediate tree nodes.
+///
+/// # Errors
+/// [`PdfError::NoPages`] if `keep` names no page of the document, [`PdfError::Parse`] if the
+/// bytes are not a readable PDF and [`PdfError::Write`] if saving the result fails.
+pub fn keep_pages(pdf: &[u8], keep: &[u32]) -> Result<Vec<u8>, PdfError> {
+    let mut doc = Document::load_mem(pdf).map_err(|e| PdfError::Parse(e.to_string()))?;
+    let pages = doc.get_pages();
+    let mut kept: Vec<ObjectId> = keep
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        // lopdf numbers pages from 1
+        .filter_map(|&i| pages.get(&(i + 1)).copied())
+        .collect();
+    if kept.is_empty() {
+        return Err(PdfError::NoPages);
+    }
+    let root = doc
+        .catalog()
+        .and_then(|c| c.get(b"Pages"))
+        .and_then(Object::as_reference)
+        .map_err(|e| PdfError::Parse(e.to_string()))?;
+    for id in &kept {
+        doc.get_dictionary_mut(*id)
+            .map_err(|e| PdfError::Parse(e.to_string()))?
+            .set("Parent", Object::Reference(root));
+    }
+    let tree = doc
+        .get_dictionary_mut(root)
+        .map_err(|e| PdfError::Parse(e.to_string()))?;
+    tree.set("Count", kept.len() as i64);
+    tree.set(
+        "Kids",
+        kept.drain(..)
+            .map(Object::Reference)
+            .collect::<Vec<Object>>(),
+    );
+    // Page content is what makes notes sensitive: nothing dropped may stay in the file.
+    doc.prune_objects();
+    let mut out = Vec::new();
+    doc.save_to(&mut out)
+        .map_err(|e| PdfError::Write(e.to_string()))?;
+    Ok(out)
 }
 
 /// Content stream with the page template, ink and text in display

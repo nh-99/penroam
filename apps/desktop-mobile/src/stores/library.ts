@@ -305,6 +305,23 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
+  async function printNotebook(id: string, currentPage: string | null = null, beforePrint?: () => Promise<void>) {
+    // a held Ctrl+P repeats; one dialog is enough
+    if (busy.value) return;
+    busy.value = "Preparing to print…";
+    try {
+      await beforePrint?.();
+      const { status, report } = await api.printNotebook(id, currentPage);
+      if (status === "sent") ui.success(`Sent ${report.pages} page${report.pages === 1 ? "" : "s"} to the printer.`);
+      else if (status === "viewer") ui.toast("info", "Opened in your PDF viewer. Print from there.", { ms: 9000 });
+      if (status !== "cancelled") for (const w of report.warnings) ui.toast("info", w, { ms: 9000 });
+    } catch (e) {
+      fail(e, "Printing failed");
+    } finally {
+      busy.value = null;
+    }
+  }
+
   async function importNotebook() {
     const f = await pickFile("penroam");
     if (!f) return;
@@ -351,6 +368,7 @@ export const useLibrary = defineStore("library", () => {
     importNotebook,
     exportNotebook,
     exportPdf,
+    printNotebook,
     saveThumb,
     loadThumbs,
     reloadCurrent,

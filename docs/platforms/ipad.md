@@ -10,6 +10,11 @@ on an iPad until the checklist is filled in on a device.
   UIKit Pencil preview surface:
   * Pencil-only `UIGestureRecognizer` on the WKWebView (`allowedTouchTypes = [.pencil]`,
     `cancelsTouchesInView`) limited to the editor rect; fingers and palms go to the web view.
+    The web view never sees the Pencil, so a `pen` event reports pen-down and pen-up: the editor
+    uses it to switch fingers to pan and zoom and to ignore palms while the Pencil is down.
+    The contact-size palm filter is off on iOS: WebKit reports twice the touch radius, so
+    ordinary fingertips exceed the limit. A palm that lands between strokes can pan the page
+    until the Pencil touches down.
   * `PencilPreviewView` (transparent, `isUserInteractionEnabled = false`) draws the live stroke
     with the shared stroke geometry (`InkCore.Geometry`), predicted touches at 50 % alpha.
   * Coalesced touches recorded; `touchesEstimatedPropertiesUpdated` patches force by
@@ -22,6 +27,13 @@ on an iPad until the checklist is filled in on a device.
   Linux**.
 * Web side: `detectNativeInk()` uses the iOS surface for pen/highlighter (eraser/select/text
   use the web canvas, which receives Pencil pointer events when the surface is hidden).
+
+## Printing
+
+`plugins/tauri-plugin-native-print/ios` shows the system print sheet
+(`UIPrintInteractionController`). It compiles against the iOS SDK but has not been run on a
+device. An app shell that links Swift plugin packages by hand has to add this package as well, or
+linking fails on `init_plugin_native_print`.
 
 ## Building the iOS pieces on Linux
 

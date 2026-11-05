@@ -21,6 +21,13 @@ windows on Wayland with some NVIDIA proprietary driver setups. Workaround:
 `WEBKIT_DISABLE_DMABUF_RENDERER=1 penroam-app`. Not applied by default because it slows
 rendering everywhere else.
 
+## Printing
+
+Printing uses GTK's print dialog and sends a PDF to CUPS, so GTK only lists printers that accept
+PDF. See [`../architecture/overview.md`](../architecture/overview.md) §8. To test it without
+paper, run a private `cupsd` with a file-backed queue, set `CUPS_SERVER` for the app, and set
+`PreserveJobFiles Yes` to keep the spooled documents for inspection.
+
 ## Build / run
 
 ```bash

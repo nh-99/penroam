@@ -11,7 +11,7 @@ Design: [`architecture/overview.md`](architecture/overview.md).
 ```text
 apps/desktop-mobile/   Tauri app (Vue frontend in src/, Rust shell in src-tauri/)
 crates/                penroam-core · penroam-storage · penroam-pdf · penroam-search · penroam-sync-protocol · penroam-sync-testkit · penroam-sync
-plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters)
+plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters) · tauri-plugin-native-print (system print dialogs)
 android/               BooxInkView (Onyx Pen SDK module used by the native ink plugin)
 ios/                   InkKit (Swift ink core and Pencil surface used by the native ink plugin)
 tests/fixtures/        geometry/text goldens, benchmark scenes, PDF fixture, .prp golden, legacy libraries
@@ -87,9 +87,8 @@ Raw output goes to the git-ignored `benchmarks/results/`; the method is in
 The app downloads models from a signed catalog (§12c of
 [`protocol/sync-protocol-v1.md`](protocol/sync-protocol-v1.md)). Penroam Cloud publishes the model
 promoted in OtterML by itself; the `sign` command below is for testing and for other servers. It trusts the public keys in
-`TRUSTED_KEYS` (`apps/desktop-mobile/src-tauri/src/models.rs`). **That list is empty until a real
-key is added**: with no key, the app makes no model requests, and models can only be installed
-from a file.
+`TRUSTED_KEYS` (`apps/desktop-mobile/src-tauri/src/models.rs`). A build with no key would make no
+model requests, and models could then only be installed from a file.
 
 ```bash
 # once: the secret file must never reach a server that answers clients; the public key goes

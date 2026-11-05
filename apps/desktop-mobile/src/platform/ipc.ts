@@ -45,6 +45,9 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 const decoder = new TextDecoder();
 const asBytes = (b: ArrayBuffer | Uint8Array | number[]) => (b instanceof Uint8Array ? b : b instanceof ArrayBuffer ? new Uint8Array(b) : Uint8Array.from(b));
 
+/** How a print request ended. "systemDialog": the system took over and reports nothing further. */
+export type PrintStatus = "sent" | "cancelled" | "systemDialog" | "viewer";
+
 export interface NotebookAndPage {
   notebook: Notebook;
   page: Page;
@@ -93,6 +96,7 @@ export const api = {
   exportNotebook: (notebookId: string, path: string) => call<{ bytes: number; pages: number }>("export_notebook", { notebookId, path }),
   importNotebook: (path: string) => call<ImportReport>("import_notebook", { path }),
   exportAnnotatedPdf: (notebookId: string, path: string) => call<ExportReport>("export_annotated_pdf", { notebookId, path }),
+  printNotebook: (notebookId: string, currentPage: string | null) => call<{ status: PrintStatus; report: ExportReport }>("print_notebook", { notebookId, currentPage }),
   importStrokeDocument: (notebookId: string, pageId: string, json: string) => call<ApplyOutcome>("import_stroke_document", { notebookId, pageId, json }),
   exitApp: () => call<void>("exit_app"),
   // benchmark helpers (docs/benchmarks/protocol.md methodology)
