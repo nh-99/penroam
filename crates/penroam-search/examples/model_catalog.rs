@@ -9,10 +9,11 @@
 //! ```
 //!
 //! Each entry's id, version, name, licence and languages are read from the archive itself, so a
-//! catalog cannot describe a model as something it is not. Keep the secret key offline: whoever
-//! holds it can choose what runs on every device. `--sequence` must exceed the last published
-//! catalog's, because clients refuse a lower one. Publishing to a server is the server's own
-//! concern. The format is §12c of `docs/protocol/sync-protocol-v1.md`.
+//! catalog cannot describe a model as something it is not. Whoever holds the secret key can
+//! choose what runs on every device, so it must never reach the server that answers clients.
+//! `--sequence` must exceed the last published catalog's, because clients refuse a lower one.
+//! Hosted releases do not need `sign`: the service signs the model it publishes. It is for
+//! servers that publish by hand. The format is §12c of `docs/protocol/sync-protocol-v1.md`.
 
 use penroam_search::model;
 use penroam_sync::models::{generate_signing_key, sign_catalog};

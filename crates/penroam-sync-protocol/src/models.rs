@@ -5,8 +5,9 @@
 //! are unauthenticated, so a client can download a model without an account and without telling
 //! the server who it is.
 //!
-//! The server is not trusted with the models' contents: the catalog is signed offline, and
-//! clients accept it only under a public key built into the app. The signature covers the
+//! The server that answers clients is not trusted with the models' contents: the catalog is
+//! signed by a release process that holds a key that server does not have, and clients accept
+//! it only under a public key built into the app. The signature covers the
 //! catalog's exact bytes, which is why [`SignedCatalog::catalog`] carries JSON text and not a
 //! nested object: nothing has to be re-serialized to check it. The archive's SHA-256 is inside
 //! that signed text. This crate does no cryptography; `penroam_sync::models` verifies.

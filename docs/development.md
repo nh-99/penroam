@@ -84,14 +84,16 @@ Raw output goes to the git-ignored `benchmarks/results/`; the method is in
 
 ## Handwriting model catalog
 
-The app downloads models from a catalog signed offline (§12c of
-[`protocol/sync-protocol-v1.md`](protocol/sync-protocol-v1.md)). It trusts the public keys in
+The app downloads models from a signed catalog (§12c of
+[`protocol/sync-protocol-v1.md`](protocol/sync-protocol-v1.md)). Penroam Cloud publishes the model
+promoted in OtterML by itself; the `sign` command below is for testing and for other servers. It trusts the public keys in
 `TRUSTED_KEYS` (`apps/desktop-mobile/src-tauri/src/models.rs`). **That list is empty until a real
 key is added**: with no key, the app makes no model requests, and models can only be installed
 from a file.
 
 ```bash
-# once: the secret file stays offline, and the public key goes into TRUSTED_KEYS
+# once: the secret file must never reach a server that answers clients; the public key goes
+# into TRUSTED_KEYS
 cargo run -p penroam-search --example model_catalog -- keygen catalog.key
 # for each release of the catalog; --sequence must exceed the last one
 cargo run -p penroam-search --example model_catalog -- sign --key catalog.key --key-id 2026-1 \

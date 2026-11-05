@@ -492,9 +492,10 @@ nothing is re-serialized to check it.
 
 Client rules:
 
-1. Catalogs are signed offline. The server is a mirror and is not trusted: a client accepts a
-   catalog only if `key_id` names a key built into the app and the signature verifies, and it
-   checks the signature before parsing the text. A client with no trusted key makes no request.
+1. Catalogs are signed by a release process, with a key the API server does not hold. The API
+   server is a mirror and is not trusted: a client accepts a catalog only if `key_id` names a key
+   built into the app and the signature verifies, and it checks the signature before parsing the
+   text. A client with no trusted key makes no request.
 2. A client refuses a catalog whose `sequence` is below the highest it has accepted, so an old
    signed catalog cannot be replayed. Publishers increase `sequence` with every catalog.
 3. A client offers the first entry with `recommended: true` that it can use: `access` is `free`,

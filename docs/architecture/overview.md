@@ -186,7 +186,7 @@ search worker (`src-tauri/src/search.rs`) keeps it current. Storage and privacy 
   The model comes from outside this repository; the app only verifies and runs the bundle.
   Devices with no recognizer of their own download it once at first run, and any device can
   download or update it on request (`src-tauri/src/models.rs`, `penroam_sync::models`), from a
-  catalog signed offline, so models change without an app release. ONNX Runtime stays in the app.
+  signed catalog, so models change without an app release. ONNX Runtime stays in the app.
   Without any recognizer, handwriting is not indexed and everything else is.
 * **Freshness.** Page revisions only grow, also across sync installs, so the index stores the
   revision each page was built from. The worker is told about edits, notebook changes and pages

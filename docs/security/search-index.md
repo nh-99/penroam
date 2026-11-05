@@ -81,10 +81,15 @@ never uses sync. The rest of the app stays usable offline: if the download fails
 changes.
 
 An ONNX graph is parsed and run by a large native library, so a download is only trusted when it
-is proven to be the one that was published. The catalog is signed offline with a key the server
-does not hold, and the app checks it against public keys built into the app; the catalog pins the
-archive's SHA-256; and a catalog older than one already seen is refused. A compromised server can
-withhold models, but cannot substitute one. Details: §12c of
+is proven to be the one that was published. The catalog is signed with a key the public API does
+not hold, and the app checks it against public keys built into the app; the catalog pins the
+archive's SHA-256; and a catalog older than one already seen is refused. A compromised API server
+can withhold models, but cannot substitute one.
+
+The signature does not make publishing harmless. On Penroam Cloud a separate process holds the
+key and signs whichever run is promoted in OtterML, the system where models are trained. So
+anyone who can promote that model, or who takes over that process, can reach devices. Keeping the
+promote permission narrow matters as much as keeping the key. Details: §12c of
 [`../protocol/sync-protocol-v1.md`](../protocol/sync-protocol-v1.md).
 
 A file the user installs has no such proof: its checksums only show it is intact.

@@ -1,9 +1,10 @@
 //! Fetching handwriting models from a server that offers `models.v1`.
 //!
-//! The server is only a mirror. What makes a download trustworthy is the Ed25519 signature on
-//! the catalog, made offline and checked here against keys built into the app; the catalog in
-//! turn pins each archive's SHA-256. So a compromised server, or anyone on the network, can
-//! withhold a model but cannot get a different one run. That matters because an ONNX graph is
+//! The API server is only a mirror. What makes a download trustworthy is the Ed25519 signature on
+//! the catalog, made by a release process that holds a key the API server does not have, and
+//! checked here against keys built into the app; the catalog in turn pins each archive's
+//! SHA-256. So a compromised API server, or anyone on the network, can withhold a model but
+//! cannot get a different one run. That matters because an ONNX graph is
 //! parsed and executed by a large native library, and the checksums inside a bundle only prove
 //! the bundle is what the bundle says it is.
 //!
@@ -116,7 +117,7 @@ pub fn verify_catalog(
 }
 
 /// A new signing key as `(secret seed, public key)`. Used by the release tooling; the seed must
-/// stay offline.
+/// never reach the server that answers clients.
 pub fn generate_signing_key() -> Result<([u8; 32], [u8; 32]), getrandom::Error> {
     let mut seed = [0u8; 32];
     getrandom::getrandom(&mut seed)?;

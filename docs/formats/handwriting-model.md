@@ -97,9 +97,14 @@ name the first app version whose runtime can run it.
 
 ## Publishing
 
-`crates/penroam-search/examples/model_catalog.rs` makes the signing key and builds and signs a
-catalog from archives, taking each entry's id, version, name, licence and languages from the
-archive. See [`../development.md`](../development.md#handwriting-model-catalog).
+Penroam Cloud publishes the model promoted in OtterML (private): it builds the bundle from the
+run, signs a catalog and offers it to clients, without an app release. The run itself supplies
+everything in `model.json` that describes the model.
+
+`crates/penroam-search/examples/model_catalog.rs` makes the signing key, and builds and signs a
+catalog from archives for servers that publish by hand, taking each entry's id, version, name,
+licence and languages from the archive. See
+[`../development.md`](../development.md#handwriting-model-catalog).
 
 ## Training
 
