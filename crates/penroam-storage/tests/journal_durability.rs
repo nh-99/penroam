@@ -419,6 +419,46 @@ fn retried_batch_is_applied_once() {
     assert_eq!(lib.load_page(nb.id, p.id).unwrap().revision, 1);
 }
 
+#[test]
+fn detached_reads_see_journaled_edits_without_touching_the_cache() {
+    let d = tmp();
+    let root = d.path().join("lib");
+    let mut lib = Library::open(&root).unwrap();
+    let (nb, p) = lib
+        .create_notebook("A", PageDefaults::default(), None)
+        .unwrap();
+    lib.apply_page_operations(
+        nb.id,
+        p.id,
+        &batch(
+            10,
+            0,
+            OpKind::AddElements {
+                elements: vec![ink(1, 1)],
+            },
+        ),
+    )
+    .unwrap();
+    // cached page
+    let cached = lib.read_page_detached(nb.id, p.id).unwrap();
+    assert_eq!((cached.revision, cached.elements.len()), (1, 1));
+
+    // after a crash the edit lives only in the journal: snapshot + pending batch
+    lib.crash_for_tests();
+    let mut lib = Library::open(&root).unwrap();
+    let replayed = lib.recovery.replayed_batches;
+    let detached = lib.read_page_detached(nb.id, p.id).unwrap();
+    assert_eq!((detached.revision, detached.elements.len()), (1, 1));
+    // nothing was loaded into the cache: the batch is replayed only by the real load
+    assert_eq!(lib.recovery.replayed_batches, replayed);
+    assert_eq!(detached, lib.load_page(nb.id, p.id).unwrap());
+    assert_eq!(lib.recovery.replayed_batches, replayed + 1);
+    assert!(matches!(
+        lib.read_page_detached(nb.id, Uuid::from_u128(999)),
+        Err(StorageError::NotFound(_))
+    ));
+}
+
 fn journal_segments(root: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = fs::read_dir(root.join("journal"))
         .unwrap()

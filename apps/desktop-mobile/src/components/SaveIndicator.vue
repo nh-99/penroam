@@ -13,7 +13,7 @@ const emit = defineEmits<{ retry: [] }>();
     <template v-else>
       <TriangleAlert :size="15" class="text-danger" />
       <span class="max-w-48 truncate text-danger" :title="error ?? ''">Not saved</span>
-      <button class="rounded-md px-1.5 py-0.5 font-semibold text-accent hover:bg-surface-2" @click="emit('retry')">Retry</button>
+      <button class="rounded-md px-1.5 py-0.5 font-semibold text-brand hover:bg-surface-2" @click="emit('retry')">Retry</button>
     </template>
   </div>
 </template>

@@ -23,6 +23,7 @@ const _: () = assert!(
 
 mod bench;
 mod commands;
+mod search;
 mod sync;
 
 use penroam_storage::Library;
@@ -36,6 +37,8 @@ pub struct AppState {
     pub lib: Mutex<Library>,
     /// Background sync worker (developer preview), if set up.
     pub sync: sync::SyncSlot,
+    /// Background search indexing worker.
+    pub search: search::SearchSlot,
 }
 
 /// App entry point (desktop `main` and the mobile entry point): opens the
@@ -75,7 +78,9 @@ pub fn run() {
             app.manage(AppState {
                 lib: Mutex::new(lib),
                 sync: sync::SyncSlot::default(),
+                search: search::SearchSlot::default(),
             });
+            search::start(app.handle());
             sync::resume_on_launch(app.handle());
             Ok(())
         })
@@ -141,6 +146,14 @@ pub fn run() {
             sync::sync_open_billing,
             sync::sync_request_account_deletion,
             sync::sync_cancel_account_deletion,
+            search::search_query,
+            search::search_status,
+            search::search_set_settings,
+            search::search_rebuild,
+            search::search_correct,
+            search::search_inspect_model,
+            search::search_install_model,
+            search::search_remove_model,
             bench::system_info,
             bench::proc_stats,
             bench::startup_ms,

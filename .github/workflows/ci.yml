@@ -100,7 +100,7 @@ jobs:
         with: { node-version: 24, cache: pnpm }
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
-      - run: cargo test -p penroam-core -p penroam-storage -p penroam-pdf
+      - run: cargo test -p penroam-core -p penroam-storage -p penroam-pdf -p penroam-search --features penroam-search/windows-ink
       - run: pnpm tauri build --no-bundle
 
   android-jvm:

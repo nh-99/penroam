@@ -75,6 +75,8 @@ rust {
 }
 
 dependencies {
+    // Penroam: ONNX Runtime for the optional handwriting model (src-tauri/src/search.rs)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")

@@ -47,7 +47,7 @@ function onDrop(idx: number) {
       <li v-for="(pid, i) in notebook.pageOrder" :key="pid" class="relative"
         @dragover.prevent="overIdx = i" @drop.prevent="onDrop(i)">
         <div v-if="overIdx === i && dragId && dragId !== pid" class="absolute -top-1 left-2 right-2 h-0.5 rounded bg-accent" aria-hidden="true" />
-        <div class="group flex items-start gap-1 rounded-xl p-1.5" :class="pid === current ? 'bg-accent-soft epaper:outline epaper:outline-2 epaper:outline-black' : 'hover:bg-surface-2'">
+        <div class="group flex items-start gap-1 rounded-xl p-1.5" :class="pid === current ? 'bg-brand-soft epaper:outline epaper:outline-2 epaper:outline-black' : 'hover:bg-surface-2'">
           <button class="flex min-w-0 flex-1 items-start gap-2 text-left" draggable="true" :aria-current="pid === current ? 'page' : undefined" :aria-label="`Page ${i + 1}`"
             @dragstart="dragId = pid" @dragend="dragId = null; overIdx = null" @click="emit('select', pid)">
             <span class="w-5 pt-1 text-right text-xs tabular-nums text-muted">{{ i + 1 }}</span>
@@ -78,7 +78,7 @@ function onDrop(idx: number) {
       <ul v-if="showTrash" class="mt-1 space-y-1">
         <li v-for="t in notebook.trashedPages" :key="t.id" class="flex items-center justify-between gap-2 rounded-lg px-2 py-1 text-xs">
           <span class="text-muted">Page {{ t.formerIndex + 1 }} · {{ new Date(t.deletedAt).toLocaleDateString() }}</span>
-          <button class="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-accent hover:bg-surface-2" @click="emit('restore', t.id)"><ArchiveArrowUp :size="14" />Restore</button>
+          <button class="inline-flex min-h-8 items-center gap-1 rounded-md px-2 font-medium text-brand hover:bg-surface-2" @click="emit('restore', t.id)"><ArchiveArrowUp :size="14" />Restore</button>
         </li>
       </ul>
     </div>

@@ -21,7 +21,7 @@ const kinds: { kind: TemplateKind; label: string }[] = [
       role="radio"
       :aria-checked="modelValue === k.kind"
       class="flex flex-col items-center gap-1.5 rounded-xl border p-2 text-xs"
-      :class="modelValue === k.kind ? 'border-accent bg-accent-soft text-accent epaper:border-2 epaper:border-black epaper:bg-white epaper:font-bold' : 'border-line hover:bg-surface-2'"
+      :class="modelValue === k.kind ? 'border-brand bg-brand-soft text-brand epaper:border-2 epaper:border-black epaper:bg-white epaper:font-bold' : 'border-line hover:bg-surface-2'"
       @click="emit('update:modelValue', k.kind)"
     >
       <TemplatePreview :kind="k.kind" />

@@ -74,7 +74,7 @@ function setSize(v: number) {
         <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
         <div class="flex items-center gap-0.5" role="group" :aria-label="state.tool === 'text' ? 'Text size' : 'Thickness'">
           <button v-for="s in sizes" :key="s.v" type="button" class="touch-target inline-flex shrink-0 items-center justify-center rounded-xl hover:bg-surface-2"
-            :class="s.active ? 'bg-accent-soft ring-1 ring-accent/40 epaper:bg-black epaper:text-white' : ''"
+            :class="s.active ? 'bg-brand-soft ring-1 ring-brand/40 epaper:bg-black epaper:text-white' : ''"
             :aria-pressed="s.active" :aria-label="state.tool === 'text' ? `Text size ${s.v} pt` : `Thickness ${s.v} pt`" @click="setSize(s.v)">
             <span v-if="s.dot" class="rounded-full bg-current" :style="{ width: `${s.dot}px`, height: `${s.dot}px` }" />
             <span v-else class="text-xs font-semibold">{{ s.v }}</span>

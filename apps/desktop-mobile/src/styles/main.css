@@ -20,9 +20,11 @@
   --color-line: var(--pr-line);
   --color-ink: var(--pr-ink);
   --color-muted: var(--pr-muted);
+  --color-brand: var(--pr-brand);
+  --color-brand-soft: var(--pr-brand-soft);
+  --color-on-brand: var(--pr-on-brand);
   --color-accent: var(--pr-accent);
-  --color-accent-soft: var(--pr-accent-soft);
-  --color-on-accent: var(--pr-on-accent);
+  --color-tertiary: var(--pr-tertiary);
   --color-desk: var(--pr-desk);
   --color-danger: var(--pr-danger);
   --color-ok: var(--pr-ok);
@@ -36,9 +38,11 @@
   --pr-line: #dcd9d0;
   --pr-ink: #1f2328;
   --pr-muted: #6b6f76;
-  --pr-accent: #2b5d8a;
-  --pr-accent-soft: #dfe9f3;
-  --pr-on-accent: #ffffff;
+  --pr-brand: #073b8a;
+  --pr-brand-soft: #dde6f5;
+  --pr-on-brand: #ffffff;
+  --pr-accent: #00bfa5;
+  --pr-tertiary: #ffbe0b;
   --pr-desk: #e7e5df;
   --pr-danger: #b42318;
   --pr-ok: #2f7d4f;
@@ -55,9 +59,11 @@
   --pr-line: #3a3f45;
   --pr-ink: #e8e6e1;
   --pr-muted: #a0a4ab;
-  --pr-accent: #7fb0dd;
-  --pr-accent-soft: #233547;
-  --pr-on-accent: #0d1720;
+  --pr-brand: #7da4ec;
+  --pr-brand-soft: #1c2c4a;
+  --pr-on-brand: #07152e;
+  --pr-accent: #1fd1b8;
+  --pr-tertiary: #ffc933;
   --pr-desk: #111315;
   --pr-danger: #f97066;
   --pr-ok: #6cc08b;
@@ -74,9 +80,11 @@
   --pr-line: #000000;
   --pr-ink: #000000;
   --pr-muted: #000000;
+  --pr-brand: #000000;
+  --pr-brand-soft: #ffffff;
+  --pr-on-brand: #ffffff;
   --pr-accent: #000000;
-  --pr-accent-soft: #ffffff;
-  --pr-on-accent: #ffffff;
+  --pr-tertiary: #000000;
   --pr-desk: #ffffff;
   --pr-danger: #000000;
   --pr-ok: #000000;
@@ -129,7 +137,7 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--pr-accent);
+  outline: 2px solid var(--pr-brand);
   outline-offset: 2px;
 }
 
@@ -149,6 +157,17 @@ body {
 }
 :root[data-theme="epaper"] .penroam-selection {
   border-color: #000;
+}
+/* search match outline (editor/engine.ts showMatches) */
+.penroam-match {
+  border: calc(2px * var(--inv, 1)) solid #f59e0b;
+  border-radius: calc(4px * var(--inv, 1));
+  background: rgb(245 158 11 / 0.18);
+  pointer-events: none;
+}
+:root[data-theme="epaper"] .penroam-match {
+  border: calc(3px * var(--inv, 1)) solid #000;
+  background: none;
 }
 .penroam-handle {
   width: calc(14px * var(--inv, 1));

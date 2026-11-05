@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Settings, LoaderCircle, TriangleAlert } from "@lucide/vue";
+import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Settings, LoaderCircle, TriangleAlert, Search } from "@lucide/vue";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
@@ -13,6 +13,9 @@ import ConflictsDialog from "../components/ConflictsDialog.vue";
 import { useSync } from "../stores/sync";
 import SettingsDialog from "../components/SettingsDialog.vue";
 import CloudBanner from "../components/CloudBanner.vue";
+import SearchPanel from "../components/SearchPanel.vue";
+import { useSearch } from "../stores/search";
+import { highlightRects, type SearchHit } from "../platform/search";
 import PromptDialog from "../components/PromptDialog.vue";
 import TemplatePreview from "../components/TemplatePreview.vue";
 import IconBtn from "../components/ui/IconBtn.vue";
@@ -82,6 +85,36 @@ async function importPdf() {
   const first = await lib.importPdf();
   if (first) lib.currentPageId = first;
 }
+const search = useSearch();
+async function openHit(h: SearchHit) {
+  search.panelOpen = false;
+  search.pendingHighlight = h.pageId ? { pageId: h.pageId, rects: highlightRects(h) } : null;
+  if (h.notebookId === nb.value.id) {
+    if (h.pageId && nb.value.pageOrder.includes(h.pageId)) lib.currentPageId = h.pageId;
+    return;
+  }
+  // another notebook: same as leaving through the back button, then open it there
+  try {
+    await host.flush();
+  } catch (e) {
+    ui.error(`Changes are not saved yet: ${(e as Error).message}`, { label: "Retry", run: () => void host.retry() });
+    return;
+  }
+  await lib.open(h.notebookId, h.pageId ?? undefined);
+}
+// outline a search match once its page is on screen
+watch(
+  [() => search.pendingHighlight, () => host.loading.value, () => host.editor.value],
+  () => {
+    const p = search.pendingHighlight;
+    const ed = host.editor.value;
+    if (!p || !ed || host.loading.value || host.session()?.page.id !== p.pageId) return;
+    search.pendingHighlight = null;
+    ed.showMatches(p.rects);
+  },
+  { immediate: true },
+);
+
 const exportNb = () => lib.exportNotebook(nb.value.id, nb.value.title, host.flush);
 const exportPdf = () => lib.exportPdf(nb.value.id, nb.value.title, host.flush);
 
@@ -114,6 +147,9 @@ function onKey(e: KeyboardEvent) {
   } else if (m && k === "y") {
     e.preventDefault();
     ed.redo();
+  } else if (m && (k === "f" || k === "k")) {
+    e.preventDefault();
+    search.panelOpen = true;
   } else if (m && k === "s") {
     e.preventDefault();
     host.flush().then(() => ui.success("All changes saved to disk."), (err) => ui.error(`Save failed: ${err.message}`));
@@ -171,6 +207,7 @@ watch(narrow, (n) => {
         <div class="ml-auto flex items-center gap-0.5">
           <SaveIndicator class="mr-1.5" :state="st.saveState" :error="st.saveError" @retry="host.retry()" />
           <SyncIndicator class="mr-1" @open="openSync" />
+          <IconBtn label="Search notebooks" :shortcut="`${mod}+F`" @click="search.panelOpen = true"><Search :size="20" /></IconBtn>
           <IconBtn label="Add page after this one" :shortcut="`${mod}+Shift+N`" @click="addPage()"><Plus :size="20" /></IconBtn>
           <Menu label="Page template">
             <template #trigger="{ toggle, open }">
@@ -239,6 +276,7 @@ watch(narrow, (n) => {
 
     <ConflictsDialog v-if="showConflicts" :notebook-id="nb.id" :current-title="nb.title" @close="showConflicts = false" @resolved="lib.reloadCurrent(); lib.currentPageId && host.markChanged([lib.currentPageId])" />
     <SettingsDialog v-if="showSettings" :native-kind="host.native.value?.kind ?? null" @close="showSettings = false" />
+    <SearchPanel v-if="search.panelOpen" @close="search.panelOpen = false" @open="openHit" />
     <PromptDialog v-if="renaming" title="Rename notebook" label="Title" :value="nb.title" confirm="Rename" @close="renaming = false" @submit="(t) => { lib.rename(nb.id, t); renaming = false; }" />
   </div>
 </template>

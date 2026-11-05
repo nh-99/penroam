@@ -1,0 +1,56 @@
+[package]
+name = "penroam-search"
+description = "Penroam local search: handwriting regions, recognition providers and the derived SQLite full-text index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+penroam-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+zip.workspace = true
+# `bundled` compiles SQLite (public domain) with FTS5 on every platform, so search never
+# depends on the system's SQLite build options.
+rusqlite = { version = "0.41", features = ["bundled"] }
+# ONNX Runtime for the Penroam handwriting model (feature `onnx-model`). No linking strategy is
+# chosen here: the app enables `ort/download-binaries` (desktop, iOS) or `ort/load-dynamic`
+# (Android, where the runtime ships as Microsoft's onnxruntime-android library).
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std"], optional = true }
+
+# Apple Vision text recognition (macOS, iOS / iPadOS)
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-vision = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Foundation_Numerics",
+  "UI_Input_Inking",
+] }
+windows-collections = { version = "0.3", optional = true }
+windows-numerics = { version = "0.3", optional = true }
+
+[features]
+# On-device handwriting recognition with the Windows ink recognizers (Windows only; no-op elsewhere).
+windows-ink = ["dep:windows", "dep:windows-collections", "dep:windows-numerics"]
+# The Penroam handwriting model (ONNX); see src/model.rs.
+onnx-model = ["dep:ort"]
+
+[dev-dependencies]
+tempfile.workspace = true
+# tests and examples link ONNX Runtime from pyke's prebuilt binaries
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native"] }
+
+# examples/eval.rs: peak memory of the evaluation process
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }

@@ -24,6 +24,7 @@ crates/penroam-pdf              PDF inspection (import) and annotated vector exp
 crates/penroam-sync-protocol    public sync wire contract: versions, ids, limits, envelope header, canonical bytes, framing, DTOs, errors
 crates/penroam-sync-testkit     development test server (in memory / persisted, HTTP, fault injection) + fixture generator
 crates/penroam-sync             sync client: crypto, key log, operation log, transports, reconcile engine, dev CLI
+crates/penroam-search           local search: handwriting regions, recognizers (Windows ink, Apple Vision, Penroam model), SQLite FTS5 index
 plugins/tauri-plugin-native-ink NativeInkSurface: Rust bridge, android/ (Kotlin), ios/ (Swift/UIKit)
 android/  ios/                  native ink modules used by the plugin: BooxInkView (Kotlin, Gradle root for its tests), InkKit (Swift)
 tests/fixtures/                 shared fixtures (strokes, geometry and text-layout goldens, scenes, PDF, .prp golden, legacy libraries)
@@ -41,6 +42,7 @@ tools/  docs/                   dev tools, documentation (benchmarks/ = local, g
 | Live pen samples | The active surface (web canvas or native view) | Never cross IPC while a stroke is live; only finalised strokes do |
 | Rendered caches (page bitmaps, thumbnails) | Frontend | Thumbnails are stored by Rust as derived files, never exported |
 | UI preferences (theme, tool colours, pen-only mode) | `localStorage` | Per device, not notebook data |
+| Search index (recognized handwriting, typed/PDF text) | Rust search worker | Derived, in the app cache directory; rebuildable, never exported or synced (§5) |
 
 Rust is the only writer. The renderer never sees library paths; import/export pass a
 path/URI chosen in a system dialog straight back to Rust (`tauri-plugin-fs` resolves Android
@@ -70,8 +72,9 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   recovery truncates a torn tail, quarantines (never deletes) mid-log damage, replays everything
   after the checkpoint floor, removes temp files and moves unreferenced files to `orphans/`.
   An exclusive file lock prevents a second writer.
-* **No database**: snapshots plus journal are the source of truth, so no index can drift out of
-  sync. `list_notebooks` reads small `notebook.json` files.
+* **No database for notes**: snapshots plus journal are the source of truth. `list_notebooks`
+  reads small `notebook.json` files. The search index (§5) is a separate, disposable SQLite
+  file derived from them, never a source of truth.
 * **Merge model.** `penroam_core::replica::Replica` merges operations from several devices
   order-independently: multi-value registers with version-vector dominance, a deterministic
   visible winner (highest op id) with every alternate retained as a conflict, tombstones,
@@ -152,7 +155,53 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   zoom; `pointercancel`, lost capture, window blur and app backgrounding finish or cancel
   gestures so no stroke is ever left stuck.
 
-## 5. NativeInkSurface
+## 5. Search
+
+Search is local and offline. `penroam-search` builds a derived SQLite FTS5 index; the app's
+search worker (`src-tauri/src/search.rs`) keeps it current. Storage and privacy rules:
+[`../security/search-index.md`](../security/search-index.md).
+
+* **Sources.** Notebook titles, typed text blocks, the selectable text of PDF page backgrounds
+  (`penroam_pdf::page_texts`, cached per PDF asset) and recognized handwriting.
+* **Handwriting regions.** `segment` groups pen strokes into lines from vector geometry only
+  (bounding boxes, vertical overlap, gaps relative to the median stroke height, writing order
+  from timestamps). A region's key is a hash of its stroke ids (survives a move; corrections
+  attach to it); its fingerprint also covers the points. Each region is recognized once:
+  re-indexing a page reuses every result whose fingerprint and recognizer
+  (`id/model version/language`) are unchanged, so an edit re-recognizes only the lines it
+  touched, and a recognizer upgrade re-recognizes in the background while old rows stay
+  searchable.
+* **Providers.** `Recognizer::recognize(region, language) -> Vec<RecognitionCandidate>`
+  (text, alternates, confidence, source stroke ids and bounds). Platform recognizers: the
+  Windows handwriting recognizers (`windows-ink` feature; stroke based) and Apple Vision on
+  macOS / iOS (image based: the region is rendered by `raster.rs`; not yet run on Apple
+  hardware). The optional **handwriting model** (`model.rs`, feature `onnx-model`) is a bundle the
+  user installs: a CTC line recognizer in ONNX, run with ONNX Runtime on the CPU over the same
+  rendering. The bundle declares how a line is rendered and fed to its graph, so models with
+  different inputs fit
+  ([`../formats/handwriting-model.md`](../formats/handwriting-model.md)).
+  `ChainRecognizer` puts the platform first and the model behind it: the model handles every
+  region where there is no platform recognizer (Android, BOOX, Linux) and any region the platform
+  recognizer fails on. The model comes from outside this repository; the app only verifies and
+  runs the bundle. Without any recognizer, handwriting is not indexed and everything else is.
+* **Freshness.** Page revisions only grow, also across sync installs, so the index stores the
+  revision each page was built from. The worker is told about edits, notebook changes and pages
+  installed by sync; at launch it checks every live page (`Library::read_page_detached`,
+  which reads snapshot + journal without disturbing the editor's three-page cache).
+* **Scheduling.** One background-priority thread. It takes the library lock only to copy a page
+  (and PDF bytes not yet cached). Nothing is indexed until the pen has been idle for 1.5 s;
+  recognition checks for cancellation between regions; a cancelled page is stored as
+  incomplete and resumed. Pause and "wait while on battery" are user settings.
+* **Queries.** User input is split into words and quoted for FTS5 (no query syntax reaches
+  SQLite). Words match as prefixes, quoted text as a phrase. If few results come back, words of
+  four or more letters also match indexed words within a small edit distance or containing
+  them (recognition errors, words run together); those hits are marked fuzzy. Ranking is BM25
+  over text, alternates and corrections, weighted by source kind and recognizer confidence.
+* **Results** carry notebook, page, the source bounds and the bounds of the matching
+  handwritten words. The editor outlines them in a DOM layer inside the transformed page
+  element (`InkEditor.showMatches`) and pans to them; the ink is untouched.
+
+## 6. NativeInkSurface
 
 `src/platform/nativeInk.ts` defines the interface (`mount/unmount`, `setBounds`,
 `setViewportTransform`, `setTool`, `setVisible`, `loadCommittedInk`, `addStrokes`,
@@ -173,7 +222,7 @@ the native view covers exactly the editor element's CSS rect; both sides use
 Non-BOOX Android devices use the web canvas (the generalised native Mode C exists in
 `BooxInkView` but is not enabled by default until validated).
 
-## 6. Platform constraints
+## 7. Platform constraints
 
 * **Linux/Windows/macOS desktop**: WebKitGTK / WebView2 / WKWebView. Web canvas only.
 * **Android**: system WebView (Chromium). Release builds drop the `INTERNET` permission.
@@ -181,4 +230,5 @@ Non-BOOX Android devices use the web canvas (the generalised native Mode C exist
 * **iOS/iPadOS**: Tauri iOS builds require macOS + Xcode (not available in this environment).
   WKWebView renders rAF at 60 Hz unless the private `PreferPageRenderingUpdatesNear60FPSEnabled`
   flag is lifted (`WebTuning` hook in `ios/InkKit`; App Store risk) — hence the native preview layer.
-* **Offline**: strict CSP (`connect-src ipc:` only), PDF.js data files bundled, no network code.
+* **Offline**: strict CSP (`connect-src ipc:` only), PDF.js data files bundled. Search and
+  handwriting recognition make no network calls.
