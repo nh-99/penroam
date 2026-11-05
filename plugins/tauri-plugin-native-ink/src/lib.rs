@@ -1,4 +1,4 @@
-//! `NativeInkSurface` bridge (see `docs/architecture/overview.md` §5).
+//! `NativeInkSurface` bridge (see `docs/architecture/overview.md` §6).
 //!
 //! The Vue editor owns document semantics; a platform view owns *live* pen
 //! rendering where the WebView cannot match native latency:

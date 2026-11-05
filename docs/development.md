@@ -1,7 +1,8 @@
 # Development
 
 Stack: Tauri 2 · Vue 3 (Composition API) + TypeScript · Vite · Tailwind CSS 4 · `@lucide/vue` ·
-Pinia · PDF.js · Rust (`penroam-core`, `penroam-storage`, `penroam-pdf`, `lopdf`, `zip`) ·
+Pinia · PDF.js · Rust (`penroam-core`, `penroam-storage`, `penroam-pdf`, `penroam-search`, `lopdf`, `zip`,
+SQLite via `rusqlite`) ·
 native ink adapters (BOOX Onyx SDK on Android, UIKit Pencil layer on iPadOS).
 Design: [`architecture/overview.md`](architecture/overview.md).
 
@@ -9,14 +10,14 @@ Design: [`architecture/overview.md`](architecture/overview.md).
 
 ```text
 apps/desktop-mobile/   Tauri app (Vue frontend in src/, Rust shell in src-tauri/)
-crates/                penroam-core · penroam-storage · penroam-pdf · penroam-sync-protocol · penroam-sync-testkit · penroam-sync
+crates/                penroam-core · penroam-storage · penroam-pdf · penroam-search · penroam-sync-protocol · penroam-sync-testkit · penroam-sync
 plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters)
 android/               BooxInkView (Onyx Pen SDK module used by the native ink plugin)
 ios/                   InkKit (Swift ink core and Pencil surface used by the native ink plugin)
 tests/fixtures/        geometry/text goldens, benchmark scenes, PDF fixture, .prp golden, legacy libraries
 fuzz/                  cargo-fuzz targets
 benchmarks/            raw benchmark output (local only, git-ignored)
-tools/                 Linux E2E driver, BOOX check script, .penroam comparison, screenshots, font metrics
+tools/                 Linux E2E driver, BOOX check script, .penroam comparison, screenshots, font metrics, search evaluation corpus
 docs/                  architecture, formats, protocol, platforms, development, README images
 ```
 
@@ -179,6 +180,63 @@ Tests: `cargo test -p penroam-sync` runs the convergence and fault-injection sce
 debug builds; use `--release`), two CLI processes against the HTTP test server
 (`tests/processes.rs`) and the pinned crypto vectors (`tests/vectors.rs`). The protocol crate's
 `tests/fixtures.rs` also checks that `docs/protocol/openapi.yaml` lists every route.
+
+## Search
+
+`crates/penroam-search` (segmentation, recognizers, SQLite FTS5 index) and the app worker in
+`src-tauri/src/search.rs`. Design: [`architecture/overview.md`](architecture/overview.md) §5;
+storage and privacy: [`security/search-index.md`](security/search-index.md).
+
+* SQLite is compiled in (`rusqlite` with `bundled`), so building needs a C compiler for every
+  target, including the Android NDK and Xcode toolchains.
+* Feature `windows-ink` enables the Windows handwriting recognizer; it has no effect on other
+  targets, and the app always enables it. Apple Vision (`src/vision.rs`) is compiled on macOS
+  and iOS only; on Windows it can be type-checked by including the sources in a scratch crate
+  without SQLite (`cargo check --target aarch64-apple-darwin`), since `rusqlite` needs the
+  Apple SDK.
+* Feature `onnx-model` adds the Penroam handwriting model ([`formats/handwriting-model.md`](formats/handwriting-model.md))
+  through `ort`. The crate does not choose how ONNX Runtime is linked: the app uses pyke's
+  prebuilt runtime (`ort/download-binaries`, fetched at build time) on desktop and iOS, and
+  `ort/load-dynamic` on Android with Microsoft's `onnxruntime-android` AAR, which
+  `scripts/patch-android.py` adds to the Gradle project. Tests and examples of the crate link
+  the prebuilt runtime through a dev-dependency.
+* `cargo run -p penroam-search --example raster -- strokes.json out.pgm` renders strokes with the
+  model rasterizer; the training pipeline keeps golden images from it to stay byte-identical.
+* `cargo test -p penroam-search --features windows-ink` on Windows also runs
+  `tests/windows_ink.rs` against the installed recognizer. It skips itself, with a message,
+  when Windows has no handwriting recognizer (most CI images).
+* The app keeps the index in `<app cache dir>/search/<library device id>/` and its settings
+  in `<app config dir>/search.json`. Deleting either is always safe.
+
+### Search evaluation
+
+`examples/eval.rs` measures segmentation, character and word error rates, search
+recall@page / recall@region, false positives, recognition and query latency and peak memory
+over a corpus, overall and per writing style:
+
+```bash
+cargo run -p penroam-search --release --features windows-ink,onnx-model --example eval -- corpus.json --recognizer windows --device "my laptop" --out report.json
+# --recognizer model --model <bundle dir>: an installed-format handwriting model
+# --recognizer chain --model <bundle dir>: Windows first, the model as fallback (as the app does)
+# --recognizer scripted: perfect recognition from the truth, to test segmentation and ranking
+```
+
+A corpus is one JSON file:
+
+```text
+{ "pages": [ { "id": "…", "style": "cursive",
+               "page": <Penroam page JSON>,
+               "lines": [ { "text": "call alice", "bounds": {x,y,w,h},
+                            "words": [ { "text": "call", "strokeIds": ["…"], "bounds": {x,y,w,h} } ] } ] } ],
+  "distractors": ["words", "that", "appear", "on", "no", "page"] }
+```
+
+`tools/search-eval/make-synthetic-corpus.mjs` writes a synthetic one from the Hershey
+single-stroke fonts (`--font` takes `hersheytext.json` from the MIT-licensed `hersheytext`
+npm package; it is not vendored). Synthetic pages test the pipeline. They are not
+handwriting, and numbers from them are not accuracy claims. Real measurements need pages
+written by people who agreed to it, kept outside the repository. Reports and corpora stay
+local (`benchmarks/` is git-ignored).
 
 ## README screenshots
 

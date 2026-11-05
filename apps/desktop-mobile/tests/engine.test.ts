@@ -53,6 +53,23 @@ afterEach(() => {
 });
 
 describe("editor engine", () => {
+  it("outlines search matches without touching the page, pans to them and clears on pen down", () => {
+    ed.showMatches([{ x: 100, y: 700, w: 50, h: 20 }]);
+    const boxes = vp.querySelectorAll<HTMLElement>(".penroam-match");
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0].style.left).toBe("97px");
+    expect(boxes[0].style.top).toBe("697px");
+    expect(session.page.elements).toHaveLength(0);
+    // the match (y 700-720) is centred in the 600 px high viewport
+    expect(ed.transform.oy).toBeLessThan(0);
+    const [, y0, , y1] = ed.visibleDocRect();
+    expect(y0).toBeLessThan(700);
+    expect(y1).toBeGreaterThan(720);
+    ptr("pointerdown", 10, 10, { pointerType: "mouse" });
+    ptr("pointerup", 10, 10, { pointerType: "mouse" });
+    expect(vp.querySelectorAll(".penroam-match")).toHaveLength(0);
+  });
+
   it("a pen stroke is committed on pen-up with pressure and source metadata", async () => {
     drawLine(100, 100, 200, 140, { pressure: 0.42 });
     expect(session.page.elements).toHaveLength(1);

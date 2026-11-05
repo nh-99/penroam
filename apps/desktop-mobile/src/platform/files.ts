@@ -19,12 +19,16 @@ function baseName(p: string): string {
   }
 }
 
-export async function pickFile(kind: "pdf" | "penroam"): Promise<Picked | null> {
+export async function pickFile(kind: "pdf" | "penroam" | "model"): Promise<Picked | null> {
   if (!hasHost()) return null;
   const filters =
-    kind === "pdf" ? [{ name: "PDF document", extensions: ["pdf"] }] : [{ name: "Penroam notebook", extensions: ["penroam"] }];
-  // Android's picker filters by MIME type; .penroam has no registered type, so allow any file there.
-  const path = await open({ multiple: false, directory: false, filters: isMobile() && kind === "penroam" ? [] : filters });
+    kind === "pdf"
+      ? [{ name: "PDF document", extensions: ["pdf"] }]
+      : kind === "model"
+        ? [{ name: "Penroam handwriting model", extensions: ["penroam-model"] }]
+        : [{ name: "Penroam notebook", extensions: ["penroam"] }];
+  // Android's picker filters by MIME type; our extensions have no registered type, so allow any file there.
+  const path = await open({ multiple: false, directory: false, filters: isMobile() && kind !== "pdf" ? [] : filters });
   if (!path || Array.isArray(path)) return null;
   return { path, name: baseName(path) };
 }

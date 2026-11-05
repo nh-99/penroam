@@ -10,6 +10,7 @@ import { useLibrary } from "./stores/library";
 import { useSettings } from "./stores/settings";
 import { useUi } from "./stores/ui";
 import { useSync } from "./stores/sync";
+import { useSearch } from "./stores/search";
 import { api, hasHost } from "./platform/ipc";
 import { flushEverything } from "./platform/lifecycle";
 import { detectNativeInk } from "./platform/nativeInk";
@@ -18,6 +19,7 @@ const lib = useLibrary();
 const settings = useSettings();
 const ui = useUi();
 const sync = useSync();
+const search = useSearch();
 const nativeKind = ref<string | null>(null);
 let unlisten: UnlistenFn | null = null;
 
@@ -38,6 +40,7 @@ onMounted(async () => {
   await lib.refresh();
   if (!hasHost()) return;
   console.info("startup: library loaded");
+  void search.init();
   // sync (developer preview): one query at start-up; nothing more unless it is available
   void sync.init().then(() => {
     if (!sync.available) return;
@@ -90,6 +93,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlisten?.();
   sync.dispose();
+  search.dispose();
 });
 </script>
 

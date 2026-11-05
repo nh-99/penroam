@@ -1124,6 +1124,48 @@ impl Library {
         self.cached_page(nb_id, page_id).map(|c| c.page.clone())
     }
 
+    /// A copy of a page for background readers (search indexing) that leaves
+    /// the page cache alone: a page that is not cached is decoded from its
+    /// snapshot plus the journaled batches not yet in it, and then dropped.
+    /// Reading through [`Library::load_page`] instead would evict, and so
+    /// checkpoint, the pages the editor is working on.
+    ///
+    /// Errors: `NotFound` for an unknown notebook or page, `Corrupt` when the
+    /// snapshot is unreadable or the journal cannot be applied cleanly (the
+    /// caller may fall back to [`Library::load_page`], which runs the full
+    /// recovery path and reports it).
+    pub fn read_page_detached(&self, nb_id: Uuid, page_id: Uuid) -> Result<Page> {
+        let nb = self.notebook(nb_id)?;
+        if !nb.all_page_ids().any(|p| p == page_id) {
+            return Err(StorageError::NotFound(format!("page {page_id}")));
+        }
+        if let Some(c) = self.pages.get(&(nb_id, page_id)) {
+            return Ok(c.page.clone());
+        }
+        let (mut page, _) = self
+            .read_snapshot(nb_id, page_id, &self.page_path(nb_id, page_id))
+            .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {e}")))?;
+        for t in self.pending.get(&(nb_id, page_id)).into_iter().flatten() {
+            let TxnTarget::Page { revision, .. } = t.target else {
+                continue;
+            };
+            if revision <= page.revision {
+                continue;
+            }
+            if revision != page.revision + 1 {
+                return Err(StorageError::Corrupt(format!(
+                    "page {page_id}: journal gap at revision {revision}"
+                )));
+            }
+            let bodies: Vec<&DocumentOperation> = t.ops.iter().map(|o| &o.body).collect();
+            apply_to_page(&mut page, &bodies)
+                .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {e}")))?;
+            page.revision = revision;
+            page.updated_at = t.ops.last().map_or(page.updated_at, |o| o.at);
+        }
+        Ok(page)
+    }
+
     /// Runs `f` with a borrowed page (avoids cloning large pages).
     pub fn with_page<T>(
         &mut self,

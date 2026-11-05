@@ -10,6 +10,8 @@ Tauri's generated Android project. Run after `pnpm tauri android init`:
 4. tools:replace="android:label" (the Onyx AARs declare an application label)
 5. pickFirst libc++_shared.so; debug-key signing for sideloaded release test APKs
 6. release builds drop the INTERNET permission: the app is offline by design
+7. Microsoft's ONNX Runtime for Android (MIT): libonnxruntime.so for the optional handwriting
+   model, which the Rust side (`ort` with `load-dynamic`) opens at run time
 """
 import pathlib, re
 
@@ -67,7 +69,7 @@ patch(APP, "libc++_shared", lambda t: t.replace("""    buildFeatures {
     }
     // Penroam: onyxsdk-pen and mmkv both ship libc++_shared.so.
     packaging { jniLibs { pickFirsts += "**/libc++_shared.so" } }""", 1))
-patch(APP, "Penroam: sign release", lambda t: t.replace("""        getByName("release") {""", """        getByName("release") {
+patch(APP, "Penroam: sign sideloaded release", lambda t: t.replace("""        getByName("release") {""", """        getByName("release") {
             // Penroam: sign sideloaded release test builds with the debug key.
             // Not for distribution (no app-store release yet).
             signingConfig = signingConfigs.getByName("debug")""", 1))
@@ -79,3 +81,11 @@ patch(gen / "app" / "src" / "release" / "AndroidManifest.xml", "INTERNET", lambd
     <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
 </manifest>
 """)
+
+# ONNX Runtime ships as an AAR whose libonnxruntime.so Gradle packages into the APK; the Rust
+# search worker loads it only when a handwriting model is installed.
+patch(APP, "onnxruntime-android", lambda t: t.replace("""dependencies {
+""", """dependencies {
+    // Penroam: ONNX Runtime for the optional handwriting model (src-tauri/src/search.rs)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+""", 1))

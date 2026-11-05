@@ -30,11 +30,27 @@ penroam-storage.workspace = true
 penroam-pdf.workspace = true
 penroam-sync = { path = "../../../crates/penroam-sync", features = ["keychain"] }
 penroam-sync-protocol = { path = "../../../crates/penroam-sync-protocol" }
+# `windows-ink` only has an effect on Windows (on-device handwriting recognition);
+# `onnx-model` runs an installed Penroam handwriting model (the fallback recognizer)
+penroam-search = { path = "../../../crates/penroam-search", features = ["windows-ink", "onnx-model"] }
 tauri-plugin-native-ink = { path = "../../../plugins/tauri-plugin-native-ink" }
 
 # Mobile sign-in: the identity provider's answer comes back as an `ink.penroam.app:` link.
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-deep-link = "2.6"
+
+# ONNX Runtime for the handwriting model. Desktop and iOS link pyke's prebuilt runtime at build
+# time; Android opens Microsoft's libonnxruntime.so (onnxruntime-android, packaged by Gradle,
+# see scripts/patch-android.py) at run time.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "load-dynamic"] }
+
+# search worker: power state and background thread priority
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_System_Power", "Win32_System_Threading"] }
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 libc = "0.2"

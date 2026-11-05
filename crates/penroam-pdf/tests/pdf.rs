@@ -405,3 +405,20 @@ fn penroam_storage_free_sha(b: &[u8]) -> String {
     }
     format!("{h:016x}").repeat(4)
 }
+
+#[test]
+fn page_texts_follow_page_order_and_reject_garbage() {
+    let pdf = make_pdf(
+        &[(612.0, 792.0, 0), (595.0, 842.0, 90), (300.0, 300.0, 0)],
+        true,
+    );
+    let texts = page_texts(&pdf).unwrap();
+    assert_eq!(texts.len(), inspect(&pdf).unwrap().len());
+    for (i, t) in texts.iter().enumerate() {
+        assert!(
+            t.contains(&format!("Source page {}", i + 1)),
+            "page {i}: {t:?}"
+        );
+    }
+    assert!(page_texts(b"not a pdf").is_err());
+}

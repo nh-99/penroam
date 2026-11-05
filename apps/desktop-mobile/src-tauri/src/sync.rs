@@ -753,6 +753,13 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
         let result = engine.reconcile(&state.lib);
         match &result {
             Ok(report) => {
+                // remote changes: re-index only the pages that were reinstalled
+                for nb in &report.installed_notebooks {
+                    state.search.notebook_changed(*nb);
+                }
+                for (nb, page) in &report.installed_pages {
+                    state.search.page_changed(*nb, *page);
+                }
                 if !report.installed_notebooks.is_empty() {
                     let _ = app.emit(
                         "sync://changed",

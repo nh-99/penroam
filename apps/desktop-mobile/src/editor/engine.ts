@@ -306,6 +306,7 @@ export class InkEditor {
     this.endTextEdit();
     this.cancelGestures();
     this.clearSelection();
+    this.clearMatches();
     this.session = session;
     this.pdfCache = pdfCache;
     session.events = {
@@ -457,6 +458,44 @@ export class InkEditor {
     }, 160);
   }
 
+  // ======================================================= search ==
+
+  private matches: HTMLDivElement[] = [];
+
+  /**
+   * Outlines search matches (page points) and pans so that they are on screen. The outlines
+   * are DOM boxes inside the page element, so they follow pan and zoom; the ink itself is
+   * untouched. They go away on the next pointer down or page change.
+   */
+  showMatches(rects: { x: number; y: number; w: number; h: number }[]) {
+    this.clearMatches();
+    if (!rects.length) return;
+    const pad = 3;
+    for (const r of rects) {
+      const d = document.createElement("div");
+      d.className = "penroam-match absolute";
+      d.style.left = `${r.x - pad}px`;
+      d.style.top = `${r.y - pad}px`;
+      d.style.width = `${r.w + pad * 2}px`;
+      d.style.height = `${r.h + pad * 2}px`;
+      this.overlay.appendChild(d);
+      this.matches.push(d);
+    }
+    const x0 = Math.min(...rects.map((r) => r.x)), y0 = Math.min(...rects.map((r) => r.y));
+    const x1 = Math.max(...rects.map((r) => r.x + r.w)), y1 = Math.max(...rects.map((r) => r.y + r.h));
+    const [vx0, vy0, vx1, vy1] = this.visibleDocRect();
+    if (x0 < vx0 || y0 < vy0 || x1 > vx1 || y1 > vy1) {
+      // centre the matches at the current zoom
+      const { scale } = this.transform;
+      this.setTransform({ scale, ox: this.viewW / 2 - ((x0 + x1) / 2) * scale, oy: this.viewH / 2 - ((y0 + y1) / 2) * scale });
+    }
+  }
+
+  clearMatches() {
+    for (const d of this.matches) d.remove();
+    this.matches = [];
+  }
+
   /** Page area currently on screen (doc pt). */
   visibleDocRect(): Rect {
     const [x0, y0] = toDoc(this.transform, 0, 0);
@@ -541,6 +580,7 @@ export class InkEditor {
   private onDown(e: PointerEvent) {
     if (e.target === this.textarea) return;
     if (!this.session) return;
+    this.clearMatches();
     this.rect = this.viewport.getBoundingClientRect();
     if (e.pointerType === "pen" && !this.penSeen) {
       this.penSeen = true;

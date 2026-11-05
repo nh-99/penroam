@@ -124,6 +124,35 @@ pub fn inspect(bytes: &[u8]) -> Result<Vec<PdfPageInfo>, PdfError> {
         .collect()
 }
 
+/// Most decompressed content bytes read per page by [`page_texts`]. A small compressed stream
+/// can inflate without bound (a "decompression bomb"); a page over the limit yields no text.
+pub const MAX_TEXT_CONTENT_BYTES: usize = 64 << 20;
+
+/// The selectable text of every page, in page order (the same order and indices as
+/// [`inspect`] and [`PdfBackgroundRef::page_index`]), for the local search index.
+///
+/// Text comes from the PDF's own text operators, so scanned pages yield an empty string. A
+/// page whose content cannot be decoded, or exceeds [`MAX_TEXT_CONTENT_BYTES`], also yields an
+/// empty string rather than failing the whole document. Errors are those of [`inspect`]: the
+/// file is unreadable, encrypted, empty or too long.
+pub fn page_texts(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
+    let doc = load(bytes)?;
+    let pages = doc.get_pages();
+    if pages.is_empty() {
+        return Err(PdfError::NoPages);
+    }
+    if pages.len() > MAX_PAGES {
+        return Err(PdfError::TooManyPages(pages.len()));
+    }
+    Ok(pages
+        .keys()
+        .map(|n| {
+            doc.extract_text_with_limit(&[*n], MAX_TEXT_CONTENT_BYTES)
+                .unwrap_or_default()
+        })
+        .collect())
+}
+
 fn num(doc: &Document, o: &Object) -> Option<f64> {
     let o = doc.dereference(o).ok()?.1;
     o.as_float().ok().map(f64::from)

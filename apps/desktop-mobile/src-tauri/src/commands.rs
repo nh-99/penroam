@@ -153,6 +153,7 @@ pub fn create_notebook(
         return Err(invalid("new notebooks use Letter or A4 pages"));
     }
     let (notebook, page) = lib!(state).create_notebook(&title, defaults, cover)?;
+    state.search.notebook_changed(notebook.id);
     Ok(NotebookAndPage { notebook, page })
 }
 
@@ -160,7 +161,9 @@ pub fn create_notebook(
 #[tauri::command(async)]
 pub fn rename_notebook(state: State<'_, AppState>, id: Uuid, title: String) -> R<Notebook> {
     state.sync.nudge();
-    Ok(lib!(state).rename_notebook(id, &title)?)
+    let nb = lib!(state).rename_notebook(id, &title)?;
+    state.search.notebook_changed(id);
+    Ok(nb)
 }
 
 /// Sets the cover colour (`#rrggbb`).
@@ -174,20 +177,26 @@ pub fn set_notebook_cover(state: State<'_, AppState>, id: Uuid, cover: String) -
 #[tauri::command(async)]
 pub fn delete_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
     state.sync.nudge();
-    Ok(lib!(state).delete_notebook(id)?)
+    let nb = lib!(state).delete_notebook(id)?;
+    state.search.notebook_changed(id);
+    Ok(nb)
 }
 
 /// Takes a notebook out of the trash.
 #[tauri::command(async)]
 pub fn restore_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
     state.sync.nudge();
-    Ok(lib!(state).restore_notebook(id)?)
+    let nb = lib!(state).restore_notebook(id)?;
+    state.search.notebook_changed(id);
+    Ok(nb)
 }
 
 /// Erases a trashed notebook from this device (local only; not synced).
 #[tauri::command(async)]
 pub fn purge_notebook(state: State<'_, AppState>, id: Uuid) -> R<()> {
-    Ok(lib!(state).purge_notebook(id)?)
+    lib!(state).purge_notebook(id)?;
+    state.search.notebook_changed(id);
+    Ok(())
 }
 
 /// Inserts a page at `index` (default: end). An explicit `size` creates a
@@ -211,12 +220,14 @@ pub fn create_page(
         });
         let (notebook, mut pages) =
             lib.create_pages(notebook_id, index, vec![(Paper::Custom, size, t, None)])?;
+        state.search.notebook_changed(notebook_id);
         return Ok(NotebookAndPage {
             notebook,
             page: pages.remove(0),
         });
     }
     let (notebook, page) = lib.create_page(notebook_id, index, template, paper)?;
+    state.search.notebook_changed(notebook_id);
     Ok(NotebookAndPage { notebook, page })
 }
 
@@ -228,21 +239,27 @@ pub fn update_page_order(
     order: Vec<Uuid>,
 ) -> R<Notebook> {
     state.sync.nudge();
-    Ok(lib!(state).update_page_order(notebook_id, order)?)
+    let nb = lib!(state).update_page_order(notebook_id, order)?;
+    state.search.notebook_changed(notebook_id);
+    Ok(nb)
 }
 
 /// Moves a page to the notebook's trash.
 #[tauri::command(async)]
 pub fn delete_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Notebook> {
     state.sync.nudge();
-    Ok(lib!(state).delete_page(notebook_id, page_id)?)
+    let nb = lib!(state).delete_page(notebook_id, page_id)?;
+    state.search.notebook_changed(notebook_id);
+    Ok(nb)
 }
 
 /// Restores a trashed page to its former position.
 #[tauri::command(async)]
 pub fn restore_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Notebook> {
     state.sync.nudge();
-    Ok(lib!(state).restore_page(notebook_id, page_id)?)
+    let nb = lib!(state).restore_page(notebook_id, page_id)?;
+    state.search.notebook_changed(notebook_id);
+    Ok(nb)
 }
 
 /// Returns the page as raw JSON bytes (avoids a second serde pass for large
@@ -275,7 +292,9 @@ pub fn apply_page_operations(
     batch: OperationBatch,
 ) -> R<ApplyOutcome> {
     state.sync.nudge();
-    Ok(lib!(state).apply_page_operations(notebook_id, page_id, &batch)?)
+    let out = lib!(state).apply_page_operations(notebook_id, page_id, &batch)?;
+    state.search.page_changed(notebook_id, page_id);
+    Ok(out)
 }
 
 /// Checkpoints one page (writes its snapshot) when the editor leaves it.
@@ -342,7 +361,7 @@ fn file_path(s: &str) -> R<FilePath> {
 }
 
 /// Reads a user-chosen file (path or content URI) with a size limit.
-fn read_user_file(app: &AppHandle, path: &str, limit: u64) -> R<Vec<u8>> {
+pub(crate) fn read_user_file(app: &AppHandle, path: &str, limit: u64) -> R<Vec<u8>> {
     let f = app
         .fs()
         .open(file_path(path)?, OpenOptions::new().read(true).clone())
@@ -416,6 +435,7 @@ pub fn import_pdf(
         })
         .collect();
     let (notebook, pages) = lib.create_pages(notebook_id, index, pages)?;
+    state.search.notebook_changed(notebook_id);
     Ok(NotebookAndPages { notebook, pages })
 }
 
@@ -476,7 +496,9 @@ pub fn import_notebook(
     let bytes = read_user_file(&app, &path, MAX_IMPORT_BYTES)?;
     let r = lib!(state).import_archive(std::io::Cursor::new(bytes));
     trim_heap();
-    Ok(r?)
+    let r = r?;
+    state.search.notebook_changed(r.notebook.id);
+    Ok(r)
 }
 
 /// Exports the live pages as a PDF with vector ink and text over the original
@@ -529,8 +551,11 @@ pub fn import_stroke_document(
     };
     let r = lib.apply_page_operations(notebook_id, page_id, &batch);
     drop(batch);
+    drop(lib);
     trim_heap();
-    Ok(r?)
+    let r = r?;
+    state.search.page_changed(notebook_id, page_id);
+    Ok(r)
 }
 
 /// Flushes and exits (the editor calls this after saving on window close).
