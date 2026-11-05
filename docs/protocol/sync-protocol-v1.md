@@ -561,6 +561,11 @@ signed over `"penroam/keylog/v1\0" ‖ body_json`. The body is
 | `addDevice` | an active member, or the account key | device certificate (id, Ed25519 and X25519 public keys, label), every epoch key wrapped to it |
 | `removeDevice` | an active member, or the account key | device id, `new_epoch = current + 1`, the new key wrapped to every remaining device and to the recovery key, and `lastSeq`: the removed device's highest sequence the remover had received (it pulls first). Clients refuse that device's operations above `lastSeq`, so a misbehaving server cannot deliver writes it made after removal. Entries without `lastSeq` impose no cutoff |
 
+A `renameDevice` entry changes an active device's label and nothing else. It is signed by an
+active member or the account key, and carries the device id and a label of at most 128 bytes
+that is not blank. Older clients do not know this kind and reject the log, so they stop syncing
+until updated; no local data is affected.
+
 * The **recovery code** encodes a 32-byte root secret (`PRK1-` + Crockford base32 with a
   2-byte checksum). It derives the account signing key and the recovery X25519 key. Devices do
   not store it.

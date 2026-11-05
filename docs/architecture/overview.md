@@ -75,6 +75,11 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
 * **No database for notes**: snapshots plus journal are the source of truth. `list_notebooks`
   reads small `notebook.json` files. The search index (§5) is a separate, disposable SQLite
   file derived from them, never a source of truth.
+* **Permanent delete.** A purge erases a notebook on this device and is never sent to the
+  account; only the move to trash before it syncs. Sync installs nothing for a purged notebook,
+  and the sync settings offer it back while the account holds it. Connecting a device clears its
+  purges, since it starts over with what the account holds. A later install supersedes the
+  purge, which the journal may still hold (`Library::replay`).
 * **Merge model.** `penroam_core::replica::Replica` merges operations from several devices
   order-independently: multi-value registers with version-vector dominance, a deterministic
   visible winner (highest op id) with every alternate retained as a conflict, tombstones,

@@ -220,6 +220,18 @@ pub struct SyncStatus {
     pub security_review_pending: bool,
 }
 
+/// A notebook the account holds that was permanently deleted on this device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErasedNotebook {
+    /// Notebook id.
+    pub notebook_id: Uuid,
+    /// Its title in the account.
+    pub title: String,
+    /// Whether it is in the trash on the account.
+    pub in_trash: bool,
+}
+
 /// A device as shown in the device list (from the verified key log).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -760,6 +772,52 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
+    /// Changes a device's label for every device on the account. The label goes
+    /// in the key log, so like any label the server can read it; older versions
+    /// of the app reject a log with a rename until they are updated.
+    pub fn rename_device(&mut self, device_id: &str, label: &str) -> Result<()> {
+        self.require_member()?;
+        let label = label.trim();
+        // Checked here because the log is append-only: an entry verify_log
+        // rejects could not be taken back, and would stop every device syncing.
+        if label.is_empty() || label.len() > keylog::MAX_LABEL_BYTES {
+            return Err(StorageError::Invalid(format!(
+                "a device name must be 1 to {} bytes",
+                keylog::MAX_LABEL_BYTES
+            ))
+            .into());
+        }
+        for attempt in 0..3 {
+            self.refresh_keylog()?;
+            let m = self.membership.clone().expect("refreshed");
+            if !m.is_active(device_id) {
+                return Err(StorageError::NotFound(format!("active device {device_id}")).into());
+            }
+            let entry = keylog::make_entry(
+                m.len,
+                &m.head,
+                EntryKind::RenameDevice {
+                    device_id: device_id.to_string(),
+                    label: label.to_string(),
+                },
+                &self.keys.device_id.clone(),
+                &self.keys.signing,
+            );
+            match Self::append_entry(&mut self.transport, m.len, &entry) {
+                Ok(()) => break,
+                Err(SyncError::Transport(TransportError::Api(b)))
+                    if b.code == ErrorCode::Conflict && attempt < 2 =>
+                {
+                    continue
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        self.refresh_keylog()?;
+        self.event("renamed a device");
+        Ok(())
+    }
+
     /// Every device in the verified key log (empty before the first refresh).
     pub fn devices(&self) -> Vec<DeviceView> {
         let Some(m) = &self.membership else {
@@ -1083,6 +1141,12 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// Synthesizes creation operations for every existing notebook (the
     /// library may have checkpointed its history away).
     fn seed(&mut self, lib: &mut Library) -> Result<usize> {
+        // A permanent delete only ever meant "erased on this device". Connecting
+        // starts over with what the account holds, so an old one doesn't apply:
+        // the notebooks would arrive, and be quietly dropped.
+        for id in lib.purged_notebooks() {
+            lib.forget_purge(id);
+        }
         let mut n = 0;
         let at_seq = lib.last_seq();
         for nb_id in lib.notebook_ids() {
@@ -2154,6 +2218,39 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(&self.replicas[&nb].0)
     }
 
+    /// Notebooks the account holds that were permanently deleted on this device,
+    /// by title. They are safe in the account; [`SyncEngine::restore_erased`]
+    /// brings one back.
+    pub fn erased_notebooks(&mut self, lib: &Library) -> Result<Vec<ErasedNotebook>> {
+        let mut out = Vec::new();
+        for id in lib.purged_notebooks() {
+            if self.store.oplog.indexes_for(&id).is_empty() {
+                continue;
+            }
+            if let Some(nb) = self.replica(id)?.notebook() {
+                out.push(ErasedNotebook {
+                    notebook_id: id,
+                    title: nb.title.clone(),
+                    in_trash: nb.deleted_at.is_some(),
+                });
+            }
+        }
+        out.sort_by(|a, b| a.title.cmp(&b.title));
+        Ok(out)
+    }
+
+    /// Puts a notebook from [`SyncEngine::erased_notebooks`] back on this device.
+    /// The next reconcile installs it from the operations already held here.
+    pub fn restore_erased(&mut self, lib: &mut Library, id: Uuid) -> Result<()> {
+        if !lib.is_purged(id) || self.store.oplog.indexes_for(&id).is_empty() {
+            return Err(StorageError::NotFound(format!("erased notebook {id}")).into());
+        }
+        lib.forget_purge(id);
+        self.store.state.dirty.insert(id);
+        self.store.save()?;
+        Ok(())
+    }
+
     /// Phase 3 (library locked): installs merged notebooks.
     pub fn apply(&mut self, lib: &mut Library, report: &mut ReconcileReport) -> Result<()> {
         report.ingested += self.ingest(lib)?;
@@ -2161,6 +2258,17 @@ impl<T: SyncTransport> SyncEngine<T> {
         // the merged state we install, or the install would hide them
         let dirty: Vec<Uuid> = self.store.state.dirty.iter().copied().collect();
         for nb in dirty {
+            // Erased here on purpose: nothing to install, and nothing was
+            // installed. `erased_notebooks` offers it back.
+            if lib.is_purged(nb) {
+                let prefix = format!("{nb}/");
+                self.store.state.dirty.remove(&nb);
+                self.store
+                    .state
+                    .dirty_pages
+                    .retain(|k| !k.starts_with(&prefix));
+                continue;
+            }
             let dirty_pages: BTreeSet<String> = self.store.state.dirty_pages.clone();
             let (merged, pages, conflicts) = {
                 let rep = self.replica(nb)?;
