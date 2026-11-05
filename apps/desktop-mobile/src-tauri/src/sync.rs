@@ -45,7 +45,8 @@ use penroam_sync::store::SyncStore;
 use penroam_sync::transport::HttpTransport;
 use penroam_sync::SyncTransport as _;
 use penroam_sync::{
-    DeviceView, FileSecretStore, SecretStore, Setup, SyncEngine, SyncError, SyncStatus,
+    DeviceView, ErasedNotebook, FileSecretStore, SecretStore, Setup, SyncEngine, SyncError,
+    SyncStatus,
 };
 use penroam_sync_protocol::account::actions;
 use penroam_sync_protocol::dto::capabilities;
@@ -167,6 +168,11 @@ enum Cmd {
     Devices(Reply<Vec<DeviceView>>),
     Approve(String, String, Reply<String>),
     Remove(String, Reply<()>),
+    /// Device id and new label.
+    Rename(String, String, Reply<()>),
+    /// Notebooks in the account that were permanently deleted here.
+    Erased(Reply<Vec<ErasedNotebook>>),
+    RestoreErased(Uuid, Reply<()>),
     Conflicts(Uuid, Reply<Vec<Conflict>>),
     Resolve(Uuid, ConflictTarget, Uuid, Reply<()>),
     PollPairing(Reply<Option<String>>),
@@ -630,6 +636,37 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 let _ = r.send(res.map_err(|e| e.to_string()));
                 continue;
             }
+            Ok(Cmd::Rename(id, label, r)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let mut res = engine.rename_device(&id, &label);
+                if res.as_ref().is_err_and(unauth) {
+                    have_token = false;
+                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                        res = engine.rename_device(&id, &label);
+                    }
+                }
+                let _ = r.send(res.map_err(|e| e.to_string()));
+                continue;
+            }
+            Ok(Cmd::Erased(r)) => {
+                let res = {
+                    let state = app.state::<AppState>();
+                    let lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+                    engine.erased_notebooks(&lib)
+                };
+                let _ = r.send(res.map_err(|e| e.to_string()));
+                continue;
+            }
+            Ok(Cmd::RestoreErased(nb, r)) => {
+                let res = {
+                    let state = app.state::<AppState>();
+                    let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+                    engine.restore_erased(&mut lib, nb)
+                };
+                let _ = r.send(res.map_err(|e| e.to_string()));
+                due = Some(Instant::now());
+                continue;
+            }
             Ok(Cmd::Conflicts(nb, r)) => {
                 let _ = r.send(engine.conflicts(nb).map_err(|e| e.to_string()));
                 continue;
@@ -754,17 +791,23 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
         match &result {
             Ok(report) => {
                 // remote changes: re-index only the pages that were reinstalled
-                for nb in &report.installed_notebooks {
+                let changed: Vec<Uuid> = report
+                    .installed_notebooks
+                    .iter()
+                    .chain(&report.erased_notebooks)
+                    .copied()
+                    .collect();
+                for nb in &changed {
                     state.search.notebook_changed(*nb);
                 }
                 for (nb, page) in &report.installed_pages {
                     state.search.page_changed(*nb, *page);
                 }
-                if !report.installed_notebooks.is_empty() {
+                if !changed.is_empty() {
                     let _ = app.emit(
                         "sync://changed",
                         Changed {
-                            notebook_ids: report.installed_notebooks.clone(),
+                            notebook_ids: changed,
                             pages: report.installed_pages.clone(),
                         },
                     );
@@ -1087,6 +1130,28 @@ pub fn sync_approve_device(
 #[tauri::command(async)]
 pub fn sync_remove_device(state: State<'_, AppState>, device_id: String) -> Result<(), CmdError> {
     ask(&state.sync, |r| Cmd::Remove(device_id, r))
+}
+
+/// Renames a device for every device on the account.
+#[tauri::command(async)]
+pub fn sync_rename_device(
+    state: State<'_, AppState>,
+    device_id: String,
+    label: String,
+) -> Result<(), CmdError> {
+    ask(&state.sync, |r| Cmd::Rename(device_id, label, r))
+}
+
+/// Notebooks the account holds that are not on this device.
+#[tauri::command(async)]
+pub fn sync_erased_notebooks(state: State<'_, AppState>) -> Result<Vec<ErasedNotebook>, CmdError> {
+    ask(&state.sync, Cmd::Erased)
+}
+
+/// Puts a notebook from `sync_erased_notebooks` back on this device.
+#[tauri::command(async)]
+pub fn sync_restore_erased(state: State<'_, AppState>, notebook_id: Uuid) -> Result<(), CmdError> {
+    ask(&state.sync, |r| Cmd::RestoreErased(notebook_id, r))
 }
 
 /// Devices from the verified key log.

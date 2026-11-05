@@ -74,6 +74,14 @@ export interface SyncDevice {
   addedBy: string;
 }
 
+export interface ErasedNotebook {
+  notebookId: string;
+  title: string;
+  inTrash: boolean;
+  cover: string;
+  pageCount: number;
+}
+
 export type ConflictKind =
   | "notebookTitle"
   | "notebookCover"
@@ -171,6 +179,9 @@ export const syncApi = {
   pollPairing: () => call<string | null>("sync_poll_pairing"),
   approveDevice: (code: string, label: string) => call<string>("sync_approve_device", { code, label }),
   removeDevice: (deviceId: string) => call<void>("sync_remove_device", { deviceId }),
+  renameDevice: (deviceId: string, label: string) => call<void>("sync_rename_device", { deviceId, label }),
+  erasedNotebooks: () => call<ErasedNotebook[]>("sync_erased_notebooks"),
+  restoreErased: (notebookId: string) => call<void>("sync_restore_erased", { notebookId }),
   devices: () => call<SyncDevice[]>("sync_devices"),
   syncNow: () => call<void>("sync_now"),
   pause: (paused: boolean) => call<void>("sync_pause", { paused }),

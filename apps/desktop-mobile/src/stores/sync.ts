@@ -6,7 +6,7 @@ import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { hasHost } from "../platform/ipc";
 import { useSettings } from "./settings";
-import { cloudNotice, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
+import { cloudNotice, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ErasedNotebook, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
 
 export type SetupStep = "none" | "recovery" | "pairing" | "compare";
 
@@ -23,6 +23,13 @@ export const useSync = defineStore("sync", () => {
   const configured = ref(false);
   const status = ref<SyncStatus | null>(null);
   const devices = ref<SyncDevice[]>([]);
+  const erased = ref<ErasedNotebook[]>([]);
+  /** Asked to download, and not in the library yet. */
+  const downloading = ref<string[]>([]);
+  /** In the account and not on this device: downloading one just puts it back here. */
+  const cloudNotebooks = computed(() => erased.value.filter((n) => !n.inTrash));
+  /** Deleted, with no copy on this device: the trash can still restore them. */
+  const cloudTrash = computed(() => erased.value.filter((n) => n.inTrash));
   const step = ref<SetupStep>("none");
   const recoveryCode = ref<string | null>(null);
   const pairingCode = ref<string | null>(null);
@@ -74,7 +81,11 @@ export const useSync = defineStore("sync", () => {
         if (s?.phase === "quotaExceeded" && status.value?.phase !== "quotaExceeded") void refreshAccount();
         status.value = s;
         configured.value = s !== null;
-        if (s === null) devices.value = [];
+        if (s === null) {
+          devices.value = [];
+          erased.value = [];
+          downloading.value = [];
+        } else if (s.phase !== "syncing") void refreshCloudNotebooks();
         updatePolling();
       }),
     );
@@ -84,10 +95,19 @@ export const useSync = defineStore("sync", () => {
     updatePolling();
     // plan and storage for the banner (one request; servers without account.v1 answer null)
     if (configured.value) void refreshAccount();
+    if (configured.value) void refreshCloudNotebooks();
   }
 
   function onFocus() {
     if (configured.value) void refreshAccount();
+  }
+
+  async function refreshCloudNotebooks() {
+    const next = await syncApi.erasedNotebooks().catch(() => null);
+    if (!next) return;
+    // the engine stops listing a notebook once its install is queued; the card stays until it lands
+    const pending = erased.value.filter((n) => downloading.value.includes(n.notebookId) && !next.some((m) => m.notebookId === n.notebookId));
+    erased.value = [...next, ...pending];
   }
 
   async function refreshAccount() {
@@ -187,6 +207,7 @@ export const useSync = defineStore("sync", () => {
     }
     if (configured.value && step.value === "none") {
       devices.value = (await syncApi.devices().catch(() => null)) ?? devices.value;
+      await refreshCloudNotebooks();
       await refreshAccount();
     }
   }
@@ -292,6 +313,26 @@ export const useSync = defineStore("sync", () => {
     await run(() => syncApi.removeDevice(id));
     await refresh();
   };
+  const rename = async (id: string, label: string) => {
+    await run(() => syncApi.renameDevice(id, label));
+    await refresh();
+  };
+  /** Brings back a notebook from `cloudNotebooks` or `cloudTrash`; rejects if that can't start. */
+  async function download(id: string) {
+    if (downloading.value.includes(id)) return;
+    downloading.value.push(id);
+    try {
+      await syncApi.restoreErased(id);
+    } catch (e) {
+      downloading.value = downloading.value.filter((d) => d !== id);
+      throw e;
+    }
+  }
+  /** These notebooks are in the library, so their cloud cards are done with. */
+  function arrived(ids: string[]) {
+    downloading.value = downloading.value.filter((d) => !ids.includes(d));
+    erased.value = erased.value.filter((n) => !ids.includes(n.notebookId));
+  }
   const syncNow = () => run(() => syncApi.syncNow());
   const pause = (p: boolean) => run(() => syncApi.pause(p));
   const disconnect = async () => {
@@ -324,6 +365,10 @@ export const useSync = defineStore("sync", () => {
     configured,
     status,
     devices,
+    erased,
+    downloading,
+    cloudNotebooks,
+    cloudTrash,
     step,
     recoveryCode,
     pairingCode,
@@ -359,6 +404,9 @@ export const useSync = defineStore("sync", () => {
     finishRecovery,
     approve,
     remove,
+    rename,
+    download,
+    arrived,
     syncNow,
     pause,
     disconnect,

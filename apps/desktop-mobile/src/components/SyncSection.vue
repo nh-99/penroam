@@ -3,9 +3,10 @@
 // sync as available. Notes never depend on sync: everything here can be
 // disconnected without touching local notebooks.
 import { computed, onMounted, ref } from "vue";
-import { Cloud, Copy, KeyRound, Link2, LogIn, Pause, Play, RefreshCw, ShieldAlert, Smartphone, Trash2, Unplug } from "@lucide/vue";
+import { Cloud, Copy, KeyRound, Link2, LogIn, Pause, Pencil, Play, RefreshCw, ShieldAlert, Smartphone, Trash2, Unplug } from "@lucide/vue";
 import Btn from "./ui/Btn.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import PromptDialog from "./PromptDialog.vue";
 import CloudAccountSection from "./CloudAccountSection.vue";
 import { useSync } from "../stores/sync";
 import { useUi } from "../stores/ui";
@@ -23,6 +24,7 @@ const approveCode = ref("");
 const approveLabel = ref("");
 const approvedSas = ref<string | null>(null);
 const removing = ref<SyncDevice | null>(null);
+const renaming = ref<SyncDevice | null>(null);
 const disconnecting = ref(false);
 
 function defaultLabel(): string {
@@ -246,6 +248,9 @@ async function confirmDisconnect() {
               <p class="truncate text-sm">{{ d.label || "Unnamed device" }}<span v-if="d.thisDevice" class="text-muted"> (this device)</span><span v-if="!d.active" class="text-muted"> · removed</span></p>
               <p class="font-mono text-[11px] text-muted">{{ d.fingerprint }}</p>
             </div>
+            <button v-if="d.active && sync.status?.phase !== 'revoked'" class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" :aria-label="`Rename ${d.label}`" @click="renaming = d">
+              <Pencil :size="16" />
+            </button>
             <button v-if="d.active && !d.thisDevice && sync.status?.phase !== 'revoked'" class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" :aria-label="`Remove ${d.label}`" @click="removing = d">
               <Trash2 :size="16" />
             </button>
@@ -271,6 +276,9 @@ async function confirmDisconnect() {
       </div>
     </div>
 
+    <PromptDialog v-if="renaming" title="Rename device" label="Update Penroam on your other devices first: older versions stop syncing after a rename until they are updated. Only your devices show this name, but it isn't encrypted, so keep it generic."
+      :value="renaming.label" confirm="Rename" @close="renaming = null"
+      @submit="(v: string) => { const d = renaming; renaming = null; if (d) sync.rename(d.deviceId, v); }" />
     <ConfirmDialog v-if="removing" title="Remove this device?" danger confirm="Remove device"
       :message="`“${removing.label}” will no longer receive new changes: a new encryption key epoch starts for the remaining devices. It keeps whatever it already downloaded, and its notes on that device are not deleted.`"
       @close="removing = null" @confirm="confirmRemove" />

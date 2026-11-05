@@ -67,6 +67,11 @@ Building the Android app needs the Android SDK and NDK. See
 style. To rename, recolour or delete a notebook, open the **⋮** menu on its card. Deleted
 notebooks go to the **Trash**, where you can restore them or delete them for good.
 
+With sync on, deleting a notebook for good removes it from all your devices, but it stays in
+your account: the Trash keeps it, and **Restore** brings it back everywhere. A notebook that's
+in your account but not on this device shows on the shelf as a card with a cloud icon. Click it
+to download the notebook.
+
 **Writing.** Choose a tool from the toolbar, then a colour and thickness:
 
 | Tool | Key | What it does |

@@ -26,9 +26,23 @@ use crate::validate::{validate_element, validate_page, validate_template, valida
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Version of the [`DocumentOperation`] encoding and semantics. Independent
-/// of the file format and model schema versions.
-pub const OP_SCHEMA_VERSION: u16 = 1;
+/// Newest [`DocumentOperation`] encoding and semantics this build can read.
+/// Independent of the file format and model schema versions.
+pub const OP_SCHEMA_VERSION: u16 = 2;
+
+/// The schema an operation is written with: the oldest that means the same
+/// thing, so that a device on an older version only stops syncing once it
+/// receives something it can't honour.
+///
+/// Version 2 is a `notebookPurged` that syncs. Without its own version an older
+/// client would take one for a forged payload and raise an integrity alert;
+/// this way it parks the operation and asks to be updated.
+pub fn op_schema_for(body: &DocumentOperation) -> u16 {
+    match body {
+        DocumentOperation::NotebookPurged { .. } => 2,
+        _ => 1,
+    }
+}
 
 /// Globally unique operation id (random UUID), stable across retries.
 pub type OperationId = Uuid;
@@ -138,7 +152,9 @@ pub enum DocumentOperation {
         /// Target notebook.
         notebook_id: Uuid,
     },
-    /// Local physical erasure of a trashed notebook. Local-only: not merged
+    /// Physical erasure of a trashed notebook from a library. Every device of a
+    /// synced account erases its copy, and the operations stay in the account,
+    /// so a later `NotebookRestored` brings it back: not merged
     /// (hosted deletion/retention is a separate, later policy).
     #[serde(rename_all = "camelCase")]
     NotebookPurged {
