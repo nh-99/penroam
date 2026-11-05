@@ -40,6 +40,8 @@ pub mod secrets;
 pub mod store;
 pub mod transport;
 
-pub use engine::{DeviceView, Phase, ReconcileReport, Setup, SyncEngine, SyncError, SyncStatus};
+pub use engine::{
+    DeviceView, ErasedNotebook, Phase, ReconcileReport, Setup, SyncEngine, SyncError, SyncStatus,
+};
 pub use secrets::{FileSecretStore, SecretStore};
 pub use transport::{SyncTransport, TransportError};

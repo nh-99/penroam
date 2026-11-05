@@ -157,7 +157,19 @@ pub enum EntryKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         last_seq: Option<u64>,
     },
+    #[serde(rename_all = "camelCase")]
+    /// Changes an active device's label; signed by an active member or the
+    /// account key. Keys and membership are untouched.
+    RenameDevice {
+        /// The device to rename.
+        device_id: String,
+        /// Its new label: at most [`MAX_LABEL_BYTES`], not blank.
+        label: String,
+    },
 }
+
+/// Longest device label a rename may set, in bytes.
+pub const MAX_LABEL_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -477,6 +489,15 @@ pub fn verify_log(
                 check_grants(i, &grants, new_epoch, &allowed)?;
                 m.current_epoch = new_epoch;
                 m.grants.entry(new_epoch).or_default().extend(grants);
+            }
+            EntryKind::RenameDevice { device_id, label } => {
+                if !m.is_active(&device_id) {
+                    return Err(KeyLogError::Invalid(i, "device is not an active member"));
+                }
+                if label.trim().is_empty() || label.len() > MAX_LABEL_BYTES {
+                    return Err(KeyLogError::Invalid(i, "unusable device label"));
+                }
+                m.devices.get_mut(&device_id).unwrap().cert.label = label;
             }
         }
         // the next entry must name the hash of this entry's exact stored bytes

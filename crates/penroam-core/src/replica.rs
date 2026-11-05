@@ -27,7 +27,7 @@
 use crate::model::*;
 use crate::operation::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -138,6 +138,8 @@ struct NotebookState {
     cover: Register<String>,
     alive: Register<bool>,
     deleted_at: HashMap<OperationId, Timestamp>,
+    /// The `alive` writes that were purges rather than moves to the trash.
+    purges: HashSet<OperationId>,
 }
 
 /// Where a conflict is.
@@ -254,9 +256,6 @@ pub enum MergeError {
     /// The operation belongs to another notebook.
     #[error("operation is for notebook {0}, not this replica")]
     WrongNotebook(Uuid),
-    /// The operation is device-local by design (e.g. `notebookPurged`).
-    #[error("{0} is local-only and is not merged")]
-    LocalOnly(&'static str),
 }
 
 /// One notebook, merged from operations of any number of devices.
@@ -347,9 +346,6 @@ impl Replica {
         check_delivery: bool,
     ) -> Result<Applied, MergeError> {
         check_schema(op)?;
-        if let DocumentOperation::NotebookPurged { .. } = op.body {
-            return Err(MergeError::LocalOnly("notebookPurged"));
-        }
         if op.body.notebook_id() != self.notebook_id {
             return Err(MergeError::WrongNotebook(op.body.notebook_id()));
         }
@@ -520,6 +516,7 @@ impl Replica {
                     cover: Register::new(w.of(cover.to_lowercase())),
                     alive: Register::new(w.of(true)),
                     deleted_at: HashMap::new(),
+                    purges: HashSet::new(),
                 });
             }
             NotebookRenamed { title, .. } => {
@@ -534,7 +531,12 @@ impl Replica {
                 nb.deleted_at.insert(w.id, at);
             }
             NotebookRestored { .. } => self.nb().alive.write(w.of(true)),
-            NotebookPurged { .. } => unreachable!("rejected earlier"),
+            NotebookPurged { .. } => {
+                let nb = self.nb();
+                nb.alive.write(w.of(false));
+                nb.deleted_at.insert(w.id, at);
+                nb.purges.insert(w.id);
+            }
             AssetReferenced { asset, .. } => {
                 self.assets
                     .entry(asset.sha256.clone())
@@ -703,6 +705,17 @@ impl Replica {
         }
         nb.assets = self.assets.values().cloned().collect();
         Some(nb)
+    }
+
+    /// Whether the notebook is permanently deleted: no device should keep a
+    /// copy. The operations remain, so a restore undoes it, and restoring is
+    /// add-wins like every other `alive` write: a restore concurrent with a
+    /// purge keeps the notebook.
+    pub fn is_purged(&self) -> bool {
+        self.notebook.as_ref().is_some_and(|s| {
+            let alive = s.alive.alive_winner();
+            !alive.value && s.purges.contains(&alive.id)
+        })
     }
 
     /// A merged page (live or trashed). `revision` counts applied content

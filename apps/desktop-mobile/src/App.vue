@@ -44,6 +44,11 @@ onMounted(async () => {
   // sync (developer preview): one query at start-up; nothing more unless it is available
   void sync.init().then(() => {
     if (!sync.available) return;
+    watch(() => lib.notebooks, (ns) => sync.arrived(ns.map((n) => n.id)));
+    // an install can land in a reconcile that then fails offline, which reports no change
+    watch(() => sync.status, () => {
+      if (sync.downloading.length && !lib.current) void lib.refresh();
+    });
     sync.onChanged((c) => {
       // remote changes were merged into the library
       if (!lib.current) void lib.refresh();

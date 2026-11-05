@@ -17,7 +17,7 @@ Each number is independent. None is derived from another.
 |---|---|---|
 | `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 3 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
 | `ENVELOPE_VERSION` | 1 | Opaque remote container: envelope header, canonical bytes, framing |
-| `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 1 (1) | Encrypted semantic operation payload |
+| `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 2 (1) | Encrypted semantic operation payload |
 | `FILE_FORMAT_VERSION` | 1 | Local `.prp` page file |
 | `JOURNAL_FORMAT_VERSION` | 1 | Local operation journal |
 | `ARCHIVE_FORMAT_VERSION` | 2 | `.penroam` archive |
@@ -28,7 +28,7 @@ The local-format numbers are copied into the protocol crate on purpose, because 
 
 ```json
 { "protocol": {"major": 1, "minor": 3}, "envelope_version": 1,
-  "op_schema": {"min": 1, "max": 1},
+  "op_schema": {"min": 1, "max": 2},
   "formats": {"file_format": 1, "journal_format": 1, "archive_format": 2, "notebook_schema": 2, "page_schema": 1},
   "git_sha": null }
 ```
@@ -560,6 +560,11 @@ signed over `"penroam/keylog/v1\0" ‖ body_json`. The body is
 | `genesis` (index 0 only) | account key | account public key, recovery public key, first device certificate, epoch 1 key wrapped to that device and to the recovery key |
 | `addDevice` | an active member, or the account key | device certificate (id, Ed25519 and X25519 public keys, label), every epoch key wrapped to it |
 | `removeDevice` | an active member, or the account key | device id, `new_epoch = current + 1`, the new key wrapped to every remaining device and to the recovery key, and `lastSeq`: the removed device's highest sequence the remover had received (it pulls first). Clients refuse that device's operations above `lastSeq`, so a misbehaving server cannot deliver writes it made after removal. Entries without `lastSeq` impose no cutoff |
+
+A `renameDevice` entry changes an active device's label and nothing else. It is signed by an
+active member or the account key, and carries the device id and a label of at most 128 bytes
+that is not blank. Older clients do not know this kind and reject the log, so they stop syncing
+until updated; no local data is affected.
 
 * The **recovery code** encodes a 32-byte root secret (`PRK1-` + Crockford base32 with a
   2-byte checksum). It derives the account signing key and the recovery X25519 key. Devices do

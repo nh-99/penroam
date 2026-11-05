@@ -180,12 +180,13 @@ wall clock.
   if lost it is rebuilt with `uploadedThrough = 0` (re-upload; the server deduplicates by op id).
 * `.lock`: exclusive OS file lock while a library is open (second writer refused).
 
-## 9. Operation schema 1
+## 9. Operation schema 2
 
 `LocalOperation {id, deviceId, localSequence, schemaVersion, causalDependencies, at, body}`.
 `id` is stable across retries (page operations reuse the editor's `PageOperation.opId`).
 Body (`type` tag, camelCase): `notebookCreated`, `notebookRenamed`, `notebookCoverChanged`,
-`notebookDeleted`, `notebookRestored`, `notebookPurged` (local-only erasure), `pageCreated`
+`notebookDeleted`, `notebookRestored`, `notebookPurged` (schema 2; all other bodies are written
+as schema 1, so older clients only stop at a purge), `pageCreated`
 (with `orderKey`), `pageDeleted`, `pageRestored`, `pageReordered` (`orderKey`), `pageTemplateSet`,
 `elementsAdded` (re-adding a removed id = explicit restore), `elementsRemoved`, `elementsReplaced`
 (`changed[i]` = field-group mask: 1 placement, 2 content, 4 style), `assetReferenced`.
