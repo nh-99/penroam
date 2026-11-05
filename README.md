@@ -100,8 +100,8 @@ choose **Export → Annotated PDF**.
 and type. Penroam searches every notebook's titles, typed text and the text of imported PDFs.
 It also reads your handwriting: on Windows with the handwriting recognizer built into Windows,
 and on devices without one with a handwriting model, a file you install under
-**Settings → Search → Handwriting model** (it runs on your device and is used as a fallback on
-Windows too). Choose a result to open its page with the matching words outlined. Quoted words
+**Settings → Advanced** (it runs on your device and is used as a fallback on Windows too).
+Choose a result to open its page with the matching words outlined. Quoted words
 (`"budget review"`) match as a phrase, and close misspellings still find handwriting that was
 read slightly wrong (marked *similar spelling*). If a handwritten line was read wrongly, click
 the pencil next to the result and type what it says; search uses your reading from then on, and
@@ -109,6 +109,9 @@ your ink stays exactly as you wrote it. **Settings → Search** turns handwritin
 or off, pauses indexing, waits while the device runs on battery, and rebuilds or deletes the
 search index. Without a recognizer or an installed model, Penroam searches titles, typed text and
 PDF text, but not handwriting.
+
+**Settings → Advanced** chooses between your device's recognizer and the Penroam model where you
+have both, and installs or removes the model.
 
 **Moving notebooks between devices.** Use **Export → Notebook (.penroam)** to save a
 notebook as a file. On the other device, click **Import** in the library. Everything comes

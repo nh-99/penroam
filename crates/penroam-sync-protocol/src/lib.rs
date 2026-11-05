@@ -16,6 +16,7 @@
 //!   ([`dto`], [`routes`]),
 //! * sign-in and session DTOs for servers with real accounts ([`auth`]),
 //! * account plan, storage allowance and billing-link DTOs ([`account`]),
+//! * the signed handwriting model catalog ([`models`]),
 //! * keeping credentials out of logs: HTTP-library log targets to cap and a
 //!   line scrubber ([`redact`]),
 //! * normalized error codes and a deterministic retry policy ([`error`]),
@@ -41,6 +42,7 @@ pub mod framing;
 pub mod hex;
 pub mod ids;
 pub mod limits;
+pub mod models;
 pub mod redact;
 pub mod routes;
 pub mod version;

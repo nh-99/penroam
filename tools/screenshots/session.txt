@@ -10,11 +10,11 @@ move 2472 64
 down 1
 up 1
 sleep 1200
-move 1176 544
+move 1176 603
 down 1
 up 1
 sleep 600
-move 1660 356
+move 1660 304
 down 1
 up 1
 sleep 800
@@ -81,11 +81,11 @@ move 2506 48
 down 1
 up 1
 sleep 1200
-move 1382 544
+move 1382 603
 down 1
 up 1
 sleep 600
-move 1660 356
+move 1660 304
 down 1
 up 1
 sleep 2500
@@ -96,11 +96,11 @@ move 2506 48
 down 1
 up 1
 sleep 1200
-move 1590 544
+move 1590 603
 down 1
 up 1
 sleep 600
-move 1660 356
+move 1660 304
 down 1
 up 1
 sleep 3000

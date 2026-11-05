@@ -3438,6 +3438,8 @@ dependencies = [
  "objc2-vision",
  "ort",
  "penroam-core",
+ "penroam-sync",
+ "penroam-sync-protocol",
  "rusqlite",
  "serde",
  "serde_json",

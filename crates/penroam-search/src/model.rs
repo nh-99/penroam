@@ -250,9 +250,18 @@ pub const ARCHIVE_EXTENSION: &str = "penroam-model";
 /// [`ModelBundle::open`] before anything installed is touched, so a bad archive leaves the
 /// current model in place.
 pub fn install_archive(bytes: &[u8], models_dir: &Path) -> Result<ModelBundle, ModelError> {
+    install_archive_from(std::io::Cursor::new(bytes), models_dir)
+}
+
+/// [`install_archive`] from any seekable reader, so a downloaded archive does not have to be
+/// held in memory.
+pub fn install_archive_from<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    models_dir: &Path,
+) -> Result<ModelBundle, ModelError> {
     use std::io::Read;
     let io = |e: std::io::Error| ModelError::Io(e.to_string());
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+    let mut zip = zip::ZipArchive::new(reader)
         .map_err(|e| ModelError::Manifest(format!("not a model archive: {e}")))?;
     std::fs::create_dir_all(models_dir).map_err(io)?;
     let staging = models_dir.join(format!(".staging-{}", std::process::id()));

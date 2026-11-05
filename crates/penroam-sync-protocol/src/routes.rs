@@ -2,8 +2,9 @@
 //!
 //! Frozen for protocol 1.0 (see the HTTP mapping in the protocol document).
 //! No HTTP client or server is implemented in this crate. All routes except
-//! [`META`] require `Authorization: Bearer <token>`. There are no billing
-//! routes in the public protocol.
+//! [`META`] and those documented as unauthenticated require
+//! `Authorization: Bearer <token>`. There are no billing routes in the public
+//! protocol.
 
 /// `GET` — protocol range, capabilities, limits, server instance id. Unauthenticated.
 pub const META: &str = "/v1/meta";
@@ -56,6 +57,13 @@ pub const ACCOUNT_BILLING_LINK: &str = "/v1/account/billing-link";
 /// `POST` request account deletion (fresh account session) / `DELETE` withdraw the request.
 /// Capability `account.v1`.
 pub const ACCOUNT_DELETION: &str = "/v1/account/deletion";
+
+/// `GET` the signed handwriting model catalog ([`crate::models::SignedCatalog`]).
+/// Unauthenticated. 404 `not_found` until one is published. Capability `models.v1` (protocol
+/// 1.4).
+pub const MODELS_CATALOG: &str = "/v1/models/catalog";
+/// `GET` a model archive by its SHA-256 (raw bytes). Unauthenticated. Capability `models.v1`.
+pub const MODELS_FILE: &str = "/v1/models/files/{sha256}";
 
 /// JSON control documents.
 pub const MEDIA_JSON: &str = "application/json";

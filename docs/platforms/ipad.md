@@ -38,9 +38,15 @@ cd ios && DEVELOPER_DIR=~/.swiftpm/swift-sdks/darwin.artifactbundle/Developer \
 ```bash
 cd apps/desktop-mobile
 pnpm tauri ios init
+# gen/apple is not checked in and starts with Tauri's default icon; install ours
+cp src-tauri/icons/ios/*.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
 pnpm tauri ios dev --open           # set the signing team in Xcode
 pnpm tauri ios build --export-method debugging
 ```
+
+Repeat the icon copy whenever `gen/apple` is regenerated. `AppIcon-512@2x.png` is the 1024 px App
+Store icon and must stay opaque RGB with no alpha channel, because App Store validation rejects
+any alpha.
 
 ## Device validation checklist (fill in; reference numbers are from the framework evaluation's UIKit reference / WKWebView proxy)
 

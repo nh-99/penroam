@@ -48,6 +48,9 @@ onnx-model = ["dep:ort"]
 
 [dev-dependencies]
 tempfile.workspace = true
+# examples/model_catalog.rs: signing the model catalog
+penroam-sync = { path = "../penroam-sync", default-features = false }
+penroam-sync-protocol = { path = "../penroam-sync-protocol" }
 # tests and examples link ONNX Runtime from pyke's prebuilt binaries
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native"] }
 

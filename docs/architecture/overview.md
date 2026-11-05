@@ -175,15 +175,19 @@ search worker (`src-tauri/src/search.rs`) keeps it current. Storage and privacy 
   (text, alternates, confidence, source stroke ids and bounds). Platform recognizers: the
   Windows handwriting recognizers (`windows-ink` feature; stroke based) and Apple Vision on
   macOS / iOS (image based: the region is rendered by `raster.rs`; not yet run on Apple
-  hardware). The optional **handwriting model** (`model.rs`, feature `onnx-model`) is a bundle the
-  user installs: a CTC line recognizer in ONNX, run with ONNX Runtime on the CPU over the same
+  hardware). The optional **handwriting model** (`model.rs`, feature `onnx-model`) is a
+  bundle kept outside the app: a CTC line recognizer in ONNX, run with ONNX Runtime on the CPU over the same
   rendering. The bundle declares how a line is rendered and fed to its graph, so models with
   different inputs fit
   ([`../formats/handwriting-model.md`](../formats/handwriting-model.md)).
   `ChainRecognizer` puts the platform first and the model behind it: the model handles every
   region where there is no platform recognizer (Android, BOOX, Linux) and any region the platform
-  recognizer fails on. The model comes from outside this repository; the app only verifies and
-  runs the bundle. Without any recognizer, handwriting is not indexed and everything else is.
+  recognizer fails on. Settings → Advanced can restrict search to one of the two.
+  The model comes from outside this repository; the app only verifies and runs the bundle.
+  Devices with no recognizer of their own download it once at first run, and any device can
+  download or update it on request (`src-tauri/src/models.rs`, `penroam_sync::models`), from a
+  catalog signed offline, so models change without an app release. ONNX Runtime stays in the app.
+  Without any recognizer, handwriting is not indexed and everything else is.
 * **Freshness.** Page revisions only grow, also across sync installs, so the index stores the
   revision each page was built from. The worker is told about edits, notebook changes and pages
   installed by sync; at launch it checks every live page (`Library::read_page_detached`,

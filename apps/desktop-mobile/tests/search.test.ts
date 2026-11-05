@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeState, formatBytes, highlightRects, type SearchHit, type SearchStatus } from "../src/platform/search";
+import { describeState, formatBytes, highlightRects, recognizerSummary, type RecognizerChoice, type SearchHit, type SearchSettings, type SearchStatus } from "../src/platform/search";
 
 const hit = (o: Partial<SearchHit>): SearchHit => ({
   notebookId: "n",
@@ -32,5 +32,25 @@ describe("search helpers", () => {
     expect(describeState({ ...s, state: "waiting-for-power", queued: 3 })).toContain("charger");
     expect(describeState({ ...s, state: "error", lastError: "disk full" })).toContain("disk full");
     expect(formatBytes(2_500_000)).toBe("2.4 MB");
+  });
+});
+
+describe("recognizerSummary", () => {
+  const platform = { id: "os", modelVersion: "1", name: "Windows handwriting recognition", languages: [], license: "" };
+  const model = { id: "m", version: "1", name: "M", license: "", languages: [], bytes: 1, provenance: null };
+  const with_ = (recognizer: RecognizerChoice, p: boolean, m: boolean) =>
+    recognizerSummary({ platform: p ? platform : null, model: m ? model : null, settings: { recognizer } as SearchSettings });
+
+  it("names both in automatic mode", () => {
+    expect(with_("auto", true, true)).toContain("as a fallback");
+  });
+  it("follows an explicit choice", () => {
+    expect(with_("platform", true, true)).toBe("Uses Windows handwriting recognition on this device.");
+    expect(with_("model", true, true)).toBe("Uses the Penroam handwriting model on this device.");
+  });
+  it("falls back like the backend when the choice cannot be honoured", () => {
+    expect(with_("model", true, false)).toBe("Uses Windows handwriting recognition on this device.");
+    expect(with_("platform", false, true)).toBe("Uses the Penroam handwriting model on this device.");
+    expect(with_("auto", false, false)).toBeNull();
   });
 });

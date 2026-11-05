@@ -7,7 +7,9 @@ rendering).
 The Penroam handwriting model is an optional, image-based line recognizer. Search uses it where
 the platform has no handwriting recognizer, and as a fallback for lines the platform recognizer
 fails on (`ChainRecognizer`). It is never required: without it, titles, typed text and PDF text
-are still searchable.
+are still searchable. The app does not include a model. Devices get one from a signed catalog
+(§12c of [`../protocol/sync-protocol-v1.md`](../protocol/sync-protocol-v1.md)) or from a file the
+user picks.
 
 ## Files
 
@@ -20,11 +22,15 @@ LICENSE        any other files the model's licence requires (listed in model.jso
 ```
 
 For installing it is packed as a `.penroam-model` file: a zip with those files at the top level
-(no folders). Install (`install_archive`) extracts to a staging directory, refuses
+(no folders). Install (`install_archive`, or `install_archive_from` for a file on disk) extracts to a staging directory, refuses
 names with `/`, `\`, `:` or a leading `.`, caps the total at 512 MiB, verifies every file's size
 and SHA-256 against the manifest, drops unlisted files, and only then replaces the installed
 bundle `<app data>/models/handwriting/<id>/`. A failed install leaves the previous model in
 place. One model is installed at a time.
+
+The checksums in `model.json` come with the bundle, so they catch damage, not substitution. For a
+download, the signed catalog's SHA-256 of the whole archive provides that assurance. For a
+file, the user chooses what to trust and sees the name, version, size and licence first.
 
 ## `model.json`
 
@@ -84,6 +90,16 @@ ONNX Runtime on the CPU with two intra-op threads, on the search worker's backgr
 Desktop and iOS builds link pyke's prebuilt ONNX Runtime (`ort`, `download-binaries`); Android
 loads Microsoft's `libonnxruntime.so` from the `onnxruntime-android` package at run time
 (`load-dynamic`).
+
+The runtime is part of the app; only the model is downloaded. Apps cannot be updated with a new
+graph that needs a newer runtime than they contain, so a catalog entry's `min_app_version` must
+name the first app version whose runtime can run it.
+
+## Publishing
+
+`crates/penroam-search/examples/model_catalog.rs` makes the signing key and builds and signs a
+catalog from archives, taking each entry's id, version, name, licence and languages from the
+archive. See [`../development.md`](../development.md#handwriting-model-catalog).
 
 ## Training
 

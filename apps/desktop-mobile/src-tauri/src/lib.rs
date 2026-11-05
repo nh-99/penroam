@@ -23,6 +23,7 @@ const _: () = assert!(
 
 mod bench;
 mod commands;
+mod models;
 mod search;
 mod sync;
 
@@ -39,6 +40,8 @@ pub struct AppState {
     pub sync: sync::SyncSlot,
     /// Background search indexing worker.
     pub search: search::SearchSlot,
+    /// Handwriting model downloads.
+    pub models: models::ModelsSlot,
 }
 
 /// App entry point (desktop `main` and the mobile entry point): opens the
@@ -79,8 +82,10 @@ pub fn run() {
                 lib: Mutex::new(lib),
                 sync: sync::SyncSlot::default(),
                 search: search::SearchSlot::default(),
+                models: models::ModelsSlot::default(),
             });
             search::start(app.handle());
+            models::start(app.handle());
             sync::resume_on_launch(app.handle());
             Ok(())
         })
@@ -154,6 +159,10 @@ pub fn run() {
             search::search_inspect_model,
             search::search_install_model,
             search::search_remove_model,
+            models::models_status,
+            models::models_check,
+            models::models_download,
+            models::models_cancel,
             bench::system_info,
             bench::proc_stats,
             bench::startup_ms,

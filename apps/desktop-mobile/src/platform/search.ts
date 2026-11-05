@@ -41,7 +41,11 @@ export interface SearchSettings {
   language: string | null;
   paused: boolean;
   pauseOnBattery: boolean;
+  recognizer: RecognizerChoice;
 }
+
+/** Which recognizer to prefer: both, the device's own, or the Penroam model. */
+export type RecognizerChoice = "auto" | "platform" | "model";
 
 export interface RecognizerInfo {
   id: string;
@@ -103,6 +107,17 @@ export const searchApi = {
   removeModel: (id: string) => call<void>("search_remove_model", { id }),
   onStatus: (fn: (s: SearchStatus) => void): Promise<UnlistenFn> => listen<SearchStatus>("search://status", (e) => fn(e.payload)),
 };
+
+/** What reads handwriting right now. Mirrors `RecognizerChoice::resolve` in the backend. */
+export function recognizerSummary(s: Pick<SearchStatus, "platform" | "model" | "settings">): string | null {
+  const choice = s.settings.recognizer;
+  const platform = s.platform && (choice !== "model" || !s.model) ? s.platform : null;
+  const model = s.model && (choice !== "platform" || !s.platform) ? s.model : null;
+  if (platform && model) return `Uses ${platform.name} on this device, with the Penroam handwriting model as a fallback.`;
+  if (platform) return `Uses ${platform.name} on this device.`;
+  if (model) return "Uses the Penroam handwriting model on this device.";
+  return null;
+}
 
 /** Rectangles to outline for a hit: the matching handwritten words, else the whole source. */
 export function highlightRects(h: SearchHit): PageRect[] {

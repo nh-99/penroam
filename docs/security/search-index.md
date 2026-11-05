@@ -55,14 +55,41 @@ The plaintext copy can still leak in two ways the notes do not:
 Recognition runs on the device. Platform recognizers come first: on Windows the handwriting
 recognizers that ship with Windows language features (`Windows.UI.Input.Inking`), on macOS and
 iOS Apple's Vision text recognition. Elsewhere, and as a fallback, Penroam can use a
-handwriting model, which the user installs from a `.penroam-model` file. Before installing, the
-app shows the model's name, version, size and licence; the files are verified against the
-SHA-256 checksums in the bundle before they are run, and a damaged or altered bundle is refused.
-Penroam never downloads a model by itself and sends no ink anywhere. The model is optional:
-removing it only drops the handwriting it recognized from search. Model format:
-[`../formats/handwriting-model.md`](../formats/handwriting-model.md).
+handwriting model. The files of an installed model are verified against the SHA-256 checksums in
+the bundle before they are run, and a damaged or altered bundle is refused. Penroam sends no ink
+anywhere. The model is optional: removing it only drops the handwriting it recognized from
+search. Model format: [`../formats/handwriting-model.md`](../formats/handwriting-model.md).
 
-## User controls (Settings → Search)
+### Getting a model, and what that reveals
+
+A model gets onto a device in one of two ways. Downloads need a catalog key built into the app;
+a build without one (see `TRUSTED_KEYS` in `src-tauri/src/models.rs`) makes no model requests, and
+only the second way exists.
+
+* **Downloaded** from Penroam Cloud. This happens without asking only on a device with no
+  recognizer of its own (Linux, Android, BOOX), once, shortly after the first launch with
+  handwriting search on, and it retries at later launches until it works. Settings → About says
+  so. Everywhere else, and for updates, it happens only when the user presses a button under
+  Settings → Advanced. Nothing polls for updates. A removed model is not downloaded again.
+* **Installed from a `.penroam-model` file**, after the app shows its name, version, size and
+  licence.
+
+A download sends no account, token, device id, ink, query or note, whether or not sync is set up.
+The server sees what any web server sees: the address and the time, and that this address
+fetched a model. So first launch on those devices does contact Penroam Cloud, even for someone who
+never uses sync. The rest of the app stays usable offline: if the download fails, nothing else
+changes.
+
+An ONNX graph is parsed and run by a large native library, so a download is only trusted when it
+is proven to be the one that was published. The catalog is signed offline with a key the server
+does not hold, and the app checks it against public keys built into the app; the catalog pins the
+archive's SHA-256; and a catalog older than one already seen is refused. A compromised server can
+withhold models, but cannot substitute one. Details: §12c of
+[`../protocol/sync-protocol-v1.md`](../protocol/sync-protocol-v1.md).
+
+A file the user installs has no such proof: its checksums only show it is intact.
+
+## User controls (Settings → Search, Settings → Advanced)
 
 * **Search index** off: deletes the index files and stops indexing.
 * **Recognize handwriting** off: handwriting rows are removed as pages are re-indexed.
@@ -70,6 +97,9 @@ removing it only drops the handwriting it recognized from search. Model format:
 * **Pause indexing** and **Wait while on battery** (on by default; power state is known on
   Windows and Linux).
 * **Rebuild**: drops derived rows and indexes everything again; corrections are kept.
+* **Handwriting recognizer** (Advanced, on devices with a platform recognizer): automatic, the
+  platform's only, or the Penroam model only. A change re-reads handwriting in the background.
+* **Handwriting model** (Advanced): download, check for updates, install from a file, remove.
 
 ## Logging and telemetry
 

@@ -82,6 +82,32 @@ Page codec: `cargo run --release -p penroam-core --example page_codec_bench`.
 Raw output goes to the git-ignored `benchmarks/results/`; the method is in
 [`benchmarks/protocol.md`](benchmarks/protocol.md).
 
+## Handwriting model catalog
+
+The app downloads models from a catalog signed offline (§12c of
+[`protocol/sync-protocol-v1.md`](protocol/sync-protocol-v1.md)). It trusts the public keys in
+`TRUSTED_KEYS` (`apps/desktop-mobile/src-tauri/src/models.rs`). **That list is empty until a real
+key is added**: with no key, the app makes no model requests, and models can only be installed
+from a file.
+
+```bash
+# once: the secret file stays offline, and the public key goes into TRUSTED_KEYS
+cargo run -p penroam-search --example model_catalog -- keygen catalog.key
+# for each release of the catalog; --sequence must exceed the last one
+cargo run -p penroam-search --example model_catalog -- sign --key catalog.key --key-id 2026-1 \
+  --sequence 1 --min-app 0.2.0 --recommend hw-en.penroam-model --out catalog.signed.json
+```
+
+To try downloads in a debug build, sign with a throwaway key and point the app at any server that
+offers `models.v1`:
+
+```bash
+PENROAM_DEV_MODEL_KEY=dev:<public key> PENROAM_DEV_MODEL_SERVER=http://127.0.0.1:8080 pnpm tauri dev
+```
+
+Both variables are ignored in release builds. To replay the first-run download, delete
+`<app data>/models/state.json`.
+
 ## Linux real-input E2E
 
 XTest, X11 only; run inside Xephyr when the desktop is locked:
@@ -200,6 +226,8 @@ storage and privacy: [`security/search-index.md`](security/search-index.md).
   `ort/load-dynamic` on Android with Microsoft's `onnxruntime-android` AAR, which
   `scripts/patch-android.py` adds to the Gradle project. Tests and examples of the crate link
   the prebuilt runtime through a dev-dependency.
+* `cargo run -p penroam-search --example model_catalog` makes catalog signing keys and signed
+  catalogs (see [Handwriting model catalog](#handwriting-model-catalog)).
 * `cargo run -p penroam-search --example raster -- strokes.json out.pgm` renders strokes with the
   model rasterizer; the training pipeline keeps golden images from it to stay byte-identical.
 * `cargo test -p penroam-search --features windows-ink` on Windows also runs

@@ -22,10 +22,11 @@
 //!
 //! Handwriting recognition uses the platform's on-device recognizer where there is one
 //! (Windows handwriting recognizers; Apple Vision on macOS and iOS) and the optional Penroam
-//! handwriting model, a bundle the user installs (`<app data>/models/handwriting/`), where
-//! there is none, or as a fallback for regions the platform recognizer fails on
-//! (`penroam_search::ChainRecognizer`). Without either, typed text, titles and PDF text are
-//! still indexed. No search data, query, ink or recognized text leaves the device.
+//! handwriting model, a bundle in `<app data>/models/handwriting/`, where there is none, or as
+//! a fallback for regions the platform recognizer fails on (`penroam_search::ChainRecognizer`).
+//! Settings → Advanced can pick one of the two ([`RecognizerChoice`]). The model is downloaded
+//! ([`crate::models`]) or installed from a file. Without either, typed text, titles and PDF text
+//! are still indexed. No search data, query, ink or recognized text leaves the device.
 
 use crate::commands::CmdError;
 use crate::AppState;
@@ -64,6 +65,33 @@ pub struct SearchSettings {
     pub paused: bool,
     /// Wait while running on battery.
     pub pause_on_battery: bool,
+    /// Which recognizer to prefer (Settings → Advanced).
+    pub recognizer: RecognizerChoice,
+}
+
+/// Which handwriting recognizer the user prefers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecognizerChoice {
+    /// The platform's recognizer first, with the Penroam model as a fallback.
+    #[default]
+    Auto,
+    /// Only the platform's recognizer.
+    Platform,
+    /// Only the Penroam model.
+    Model,
+}
+
+impl RecognizerChoice {
+    /// Which of the available recognizers to use, as `(platform, model)`. A choice that cannot
+    /// be honoured falls back to what the device has: a preference must never turn handwriting
+    /// search off, for example after the model was removed.
+    fn resolve(self, has_platform: bool, has_model: bool) -> (bool, bool) {
+        (
+            has_platform && (self != RecognizerChoice::Model || !has_model),
+            has_model && (self != RecognizerChoice::Platform || !has_platform),
+        )
+    }
 }
 
 impl Default for SearchSettings {
@@ -74,6 +102,7 @@ impl Default for SearchSettings {
             language: None,
             paused: false,
             pause_on_battery: true,
+            recognizer: RecognizerChoice::Auto,
         }
     }
 }
@@ -146,6 +175,11 @@ enum Msg {
     Page(Uuid, Uuid),
     InstallModel {
         bytes: Vec<u8>,
+        reply: Sender<Result<ModelSummary, String>>,
+    },
+    /// Installs an archive that was already verified on disk (a download).
+    InstallModelFile {
+        path: PathBuf,
         reply: Sender<Result<ModelSummary, String>>,
     },
     RemoveModel {
@@ -313,7 +347,7 @@ fn platform_recognizer() -> Option<Box<dyn Recognizer>> {
 }
 
 /// Where handwriting model bundles are installed.
-fn models_dir(app: &AppHandle) -> Option<PathBuf> {
+pub(crate) fn models_dir(app: &AppHandle) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
@@ -328,7 +362,7 @@ struct Stack {
     model_error: Option<String>,
 }
 
-fn build_stack(app: &AppHandle) -> Stack {
+fn build_stack(app: &AppHandle, choice: RecognizerChoice) -> Stack {
     let platform = platform_recognizer();
     let platform_info = platform.as_ref().map(|p| p.info().clone());
     let (mut model, mut model_summary, mut model_error) = (None, None, None);
@@ -344,9 +378,13 @@ fn build_stack(app: &AppHandle) -> Stack {
             Err(e) => model_error = Some(e.to_string()),
         }
     }
+    let (use_platform, use_model) = choice.resolve(platform.is_some(), model.is_some());
     Stack {
-        recognizer: penroam_search::ChainRecognizer::new(platform, model)
-            .map(|c| Box::new(c) as Box<dyn Recognizer>),
+        recognizer: penroam_search::ChainRecognizer::new(
+            platform.filter(|_| use_platform),
+            model.filter(|_| use_model),
+        )
+        .map(|c| Box::new(c) as Box<dyn Recognizer>),
         platform: platform_info,
         model: model_summary,
         model_error,
@@ -653,6 +691,10 @@ impl Worker {
             }
             return;
         }
+        if was.recognizer != self.settings.recognizer {
+            // reload_stack re-checks every page, so nothing else below has to
+            self.reload_stack();
+        }
         let rkey_changed =
             was.handwriting != self.settings.handwriting || was.language != self.settings.language;
         if self.index.is_none() {
@@ -667,7 +709,7 @@ impl Worker {
     /// every page; pages whose recognizer changed are recognized again in the background.
     fn reload_stack(&mut self) {
         self.recognizer = None;
-        let st = build_stack(&self.app);
+        let st = build_stack(&self.app, self.settings.recognizer);
         self.recognizer = st.recognizer;
         self.platform = st.platform;
         self.model = st.model;
@@ -681,6 +723,27 @@ impl Worker {
         }
     }
 
+    fn finish_install(
+        &mut self,
+        result: Result<penroam_search::model::ModelBundle, penroam_search::model::ModelError>,
+        dir: &std::path::Path,
+        reply: Sender<Result<ModelSummary, String>>,
+    ) {
+        let r = result
+            .map(|b| ModelSummary::from(&b.manifest))
+            .map_err(|e| e.to_string());
+        // one model at a time: remove any other installed id
+        if let Ok(sum) = &r {
+            for (path, m) in penroam_search::model::installed(dir) {
+                if m.id != sum.id {
+                    let _ = std::fs::remove_dir_all(path);
+                }
+            }
+        }
+        self.reload_stack();
+        let _ = reply.send(r);
+    }
+
     fn handle(&mut self, m: Msg) {
         match m {
             Msg::InstallModel { bytes, reply } => {
@@ -690,19 +753,19 @@ impl Worker {
                 };
                 // release the loaded model first: its files are about to be replaced
                 self.recognizer = None;
-                let r = penroam_search::model::install_archive(&bytes, &dir)
-                    .map(|b| ModelSummary::from(&b.manifest))
-                    .map_err(|e| e.to_string());
-                // one model at a time: remove any other installed id
-                if let Ok(sum) = &r {
-                    for (path, m) in penroam_search::model::installed(&dir) {
-                        if m.id != sum.id {
-                            let _ = std::fs::remove_dir_all(path);
-                        }
-                    }
-                }
-                self.reload_stack();
-                let _ = reply.send(r);
+                let r = penroam_search::model::install_archive(&bytes, &dir);
+                self.finish_install(r, &dir, reply);
+            }
+            Msg::InstallModelFile { path, reply } => {
+                let Some(dir) = models_dir(&self.app) else {
+                    let _ = reply.send(Err("no app data directory".into()));
+                    return;
+                };
+                self.recognizer = None;
+                let r = std::fs::File::open(&path)
+                    .map_err(|e| penroam_search::model::ModelError::Io(e.to_string()))
+                    .and_then(|f| penroam_search::model::install_archive_from(f, &dir));
+                self.finish_install(r, &dir, reply);
             }
             Msg::RemoveModel { id, reply } => {
                 self.recognizer = None;
@@ -852,7 +915,7 @@ pub fn start(app: &AppHandle) {
         .join(library_id.to_string())
         .join("index.db");
     let settings = load_settings(app);
-    let stack = build_stack(app);
+    let stack = build_stack(app, settings.recognizer);
     let recognizer = stack.recognizer;
     let language = recognizer
         .as_ref()
@@ -1027,9 +1090,62 @@ pub fn search_install_model(
     ask_worker(&state, |reply| Msg::InstallModel { bytes, reply })
 }
 
-/// Removes the installed handwriting model.
+/// Removes the installed handwriting model. It stays removed: the first-run download does not
+/// bring it back.
 #[tauri::command(async)]
-pub fn search_remove_model(state: State<'_, AppState>, id: String) -> Result<(), CmdError> {
+pub fn search_remove_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), CmdError> {
     state.search.shared.cancel.store(true, Ordering::Relaxed);
-    ask_worker(&state, |reply| Msg::RemoveModel { id, reply })
+    ask_worker(&state, |reply| Msg::RemoveModel { id, reply })?;
+    crate::models::mark_first_run_handled(&app);
+    Ok(())
+}
+
+/// Installs a verified, downloaded model archive through the worker. Blocks until it is done.
+pub(crate) fn install_downloaded(app: &AppHandle, path: PathBuf) -> Result<ModelSummary, String> {
+    let state = app.state::<AppState>();
+    state.search.shared.cancel.store(true, Ordering::Relaxed);
+    let (reply, rx) = mpsc::channel();
+    state.search.send(Msg::InstallModelFile { path, reply });
+    rx.recv_timeout(Duration::from_secs(600))
+        .map_err(|_| "search is busy; try again".to_string())?
+}
+
+/// Whether search would use a downloaded model right now: handwriting search is on, the device
+/// has no recognizer of its own, and no model is installed. Devices with a platform recognizer
+/// only get the model if the user asks for it.
+pub(crate) fn needs_a_model(app: &AppHandle) -> bool {
+    let s = load_settings(app);
+    let installed = models_dir(app)
+        .map(|d| !penroam_search::model::installed(&d).is_empty())
+        .unwrap_or(false);
+    s.enabled && s.handwriting && !installed && platform_recognizer().is_none()
+}
+
+#[cfg(test)]
+mod recognizer_choice_tests {
+    use super::RecognizerChoice::{Auto, Model, Platform};
+
+    #[test]
+    fn automatic_uses_everything_available() {
+        assert_eq!(Auto.resolve(true, true), (true, true));
+        assert_eq!(Auto.resolve(true, false), (true, false));
+        assert_eq!(Auto.resolve(false, true), (false, true));
+        assert_eq!(Auto.resolve(false, false), (false, false));
+    }
+
+    #[test]
+    fn a_choice_excludes_the_other_recognizer() {
+        assert_eq!(Platform.resolve(true, true), (true, false));
+        assert_eq!(Model.resolve(true, true), (false, true));
+    }
+
+    #[test]
+    fn an_impossible_choice_falls_back_instead_of_turning_search_off() {
+        assert_eq!(Model.resolve(true, false), (true, false));
+        assert_eq!(Platform.resolve(false, true), (false, true));
+    }
 }

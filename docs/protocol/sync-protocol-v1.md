@@ -44,8 +44,8 @@ The local-format numbers are copied into the protocol crate on purpose, because 
   * `MalformedRange`: an advertised range has min > max.
 
   Every `Incompatible` maps to `upgrade_required`. The client stops syncing, keeps its outbox and local data, and shows an actionable state. It never "tries anyway".
-* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b). Clients ignore unknown capabilities.
-* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind. 1.3 adds `account.v1` (§12b) and the error code `reauth_required`; older clients never call the new routes and read the new code as `unknown`.
+* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b), `models.v1` (1.4, §12c). Clients ignore unknown capabilities.
+* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind. 1.3 adds `account.v1` (§12b) and the error code `reauth_required`; older clients never call the new routes and read the new code as `unknown`. 1.4 adds `models.v1` (§12c) and nothing else.
 * Clients must call `Limits::validate()` on advertised limits. They refuse values that are 0 or above the hard maxima.
 * Op schema: servers relay payloads whose `op_schema_version` is newer than they know, because the payload is opaque to them. A client that cannot apply a newer schema calls `EnvelopeHeader::check_op_schema_supported()`. On failure it pauses with `upgrade_required` and keeps the ciphertext. It never drops the operation.
 * Unknown `ErrorCode` strings deserialize to `unknown`, which is treated as not retryable.
@@ -451,6 +451,65 @@ allowance is the account's quota, no offers and no actions (the action routes an
 `forbidden`). Fixtures: `account-state.free.json`, `account-state.over-quota.json`,
 `account-state.past-due.json`, `account-billing-link-request.json`, `account-billing-link.json`,
 `account-deletion.json`.
+
+## 12c. Handwriting model distribution (`models.v1`, protocol 1.4)
+
+Servers that distribute handwriting models list `models.v1`. Types are in
+`penroam_sync_protocol::models`; signature checking and the HTTP calls are in
+`penroam_sync::models`. Models have nothing to do with the notes in an account: both routes take
+no token, and clients send none.
+
+| Route | Response |
+|---|---|
+| `GET /v1/models/catalog` | `SignedCatalog`, or 404 `not_found` when nothing is published |
+| `GET /v1/models/files/{sha256}` | The `.penroam-model` archive with that SHA-256 (raw bytes), or 404 `not_found` |
+
+`SignedCatalog` is `{ key_id, catalog, signature }`. `catalog` is the `ModelCatalog` as JSON
+**text**, and `signature` is the base64url Ed25519 signature over the bytes
+`penroam/model-catalog/v1\0` followed by that text. The signature covers the text as sent, so
+nothing is re-serialized to check it.
+
+```json
+{
+  "format": "penroam-model-catalog",
+  "format_version": 1,
+  "sequence": 12,
+  "models": [{
+    "id": "penroam-handwriting-en",
+    "version": "2026.11.0",
+    "name": "Penroam handwriting model (English)",
+    "license": "…",
+    "languages": ["en"],
+    "sha256": "<64 lowercase hex digits>",
+    "bytes": 41234567,
+    "model_format_version": 1,
+    "min_app_version": "0.2.0",
+    "access": "free",
+    "recommended": true
+  }]
+}
+```
+
+Client rules:
+
+1. Catalogs are signed offline. The server is a mirror and is not trusted: a client accepts a
+   catalog only if `key_id` names a key built into the app and the signature verifies, and it
+   checks the signature before parsing the text. A client with no trusted key makes no request.
+2. A client refuses a catalog whose `sequence` is below the highest it has accepted, so an old
+   signed catalog cannot be replayed. Publishers increase `sequence` with every catalog.
+3. A client offers the first entry with `recommended: true` that it can use: `access` is `free`,
+   its app version is at least `min_app_version`, and it reads `model_format_version`.
+   **An unknown `access` value means the entry is not for this client.** That is how entries
+   needing something more, such as a paid plan, can be added without older clients trying them.
+4. `version` is compared for equality only. An installed model that differs from the recommended
+   one is offered as an update, which lets a catalog replace a model with one of another id, or
+   move back to an earlier version.
+5. A client discards a download whose size or SHA-256 differs from the entry, and then installs
+   it as described in [`../formats/handwriting-model.md`](../formats/handwriting-model.md).
+6. Unknown JSON fields are ignored. A higher `format_version` is refused and the client offers
+   nothing.
+
+Servers may answer 429 and 503 like any route. Nothing about models affects sync.
 
 ## 13. Payloads, encryption and signatures (client rules)
 

@@ -36,6 +36,9 @@ pub mod capabilities {
     /// Plan, storage allowance, billing link and deletion request (`/v1/account*`, protocol
     /// 1.3; see [`crate::account`]).
     pub const ACCOUNT_V1: &str = "account.v1";
+    /// Signed handwriting model catalog and model downloads (`/v1/models/*`, protocol 1.4; see
+    /// [`crate::models`]).
+    pub const MODELS_V1: &str = "models.v1";
 }
 
 /// `GET /v1/meta` response.

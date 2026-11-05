@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: Penroam Sync Protocol
-  version: "1.3"
+  version: "1.4"
   description: |
-    HTTP mapping of the Penroam sync protocol (major 1, minor 3). The normative text is
+    HTTP mapping of the Penroam sync protocol (major 1, minor 4). The normative text is
     sync-protocol-v1.md in this directory; the Rust types are in the penroam-sync-protocol crate.
     This file is hand-written. A test in crates/penroam-sync-protocol checks that it lists
     every route the crate defines.
@@ -47,6 +47,13 @@ components:
     NoContent:
       description: Done
   schemas:
+    SignedCatalog:
+      type: object
+      required: [key_id, catalog, signature]
+      properties:
+        key_id: { type: string }
+        catalog: { type: string, description: The ModelCatalog as JSON text; signed byte for byte }
+        signature: { type: string, description: Base64url Ed25519 signature }
     Id:
       type: string
       pattern: "^[A-Za-z0-9_-]{1,128}$"
@@ -584,6 +591,30 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionTokens" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/models/catalog:
+    get:
+      summary: The signed handwriting model catalog; no token (models.v1, §12c)
+      security: []
+      responses:
+        "200":
+          description: Signed catalog
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignedCatalog" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/models/files/{sha256}:
+    get:
+      summary: A model archive by its SHA-256; no token (models.v1, §12c)
+      security: []
+      parameters:
+        - { name: sha256, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+      responses:
+        "200":
+          description: The .penroam-model archive
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
   /v1/account:
     get:
