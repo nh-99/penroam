@@ -24,6 +24,12 @@ export const useSync = defineStore("sync", () => {
   const status = ref<SyncStatus | null>(null);
   const devices = ref<SyncDevice[]>([]);
   const erased = ref<ErasedNotebook[]>([]);
+  /** Asked to download, and not in the library yet. */
+  const downloading = ref<string[]>([]);
+  /** In the account and not on this device: downloading one just puts it back here. */
+  const cloudNotebooks = computed(() => erased.value.filter((n) => !n.inTrash));
+  /** Deleted, with no copy on this device: the trash can still restore them. */
+  const cloudTrash = computed(() => erased.value.filter((n) => n.inTrash));
   const step = ref<SetupStep>("none");
   const recoveryCode = ref<string | null>(null);
   const pairingCode = ref<string | null>(null);
@@ -75,7 +81,11 @@ export const useSync = defineStore("sync", () => {
         if (s?.phase === "quotaExceeded" && status.value?.phase !== "quotaExceeded") void refreshAccount();
         status.value = s;
         configured.value = s !== null;
-        if (s === null) devices.value = [];
+        if (s === null) {
+          devices.value = [];
+          erased.value = [];
+          downloading.value = [];
+        } else if (s.phase !== "syncing") void refreshCloudNotebooks();
         updatePolling();
       }),
     );
@@ -85,10 +95,19 @@ export const useSync = defineStore("sync", () => {
     updatePolling();
     // plan and storage for the banner (one request; servers without account.v1 answer null)
     if (configured.value) void refreshAccount();
+    if (configured.value) void refreshCloudNotebooks();
   }
 
   function onFocus() {
     if (configured.value) void refreshAccount();
+  }
+
+  async function refreshCloudNotebooks() {
+    const next = await syncApi.erasedNotebooks().catch(() => null);
+    if (!next) return;
+    // the engine stops listing a notebook once its install is queued; the card stays until it lands
+    const pending = erased.value.filter((n) => downloading.value.includes(n.notebookId) && !next.some((m) => m.notebookId === n.notebookId));
+    erased.value = [...next, ...pending];
   }
 
   async function refreshAccount() {
@@ -188,7 +207,7 @@ export const useSync = defineStore("sync", () => {
     }
     if (configured.value && step.value === "none") {
       devices.value = (await syncApi.devices().catch(() => null)) ?? devices.value;
-      erased.value = (await syncApi.erasedNotebooks().catch(() => null)) ?? erased.value;
+      await refreshCloudNotebooks();
       await refreshAccount();
     }
   }
@@ -298,10 +317,22 @@ export const useSync = defineStore("sync", () => {
     await run(() => syncApi.renameDevice(id, label));
     await refresh();
   };
-  const restoreErased = async (id: string) => {
-    await run(() => syncApi.restoreErased(id));
-    await refresh();
-  };
+  /** Brings back a notebook from `cloudNotebooks` or `cloudTrash`; rejects if that can't start. */
+  async function download(id: string) {
+    if (downloading.value.includes(id)) return;
+    downloading.value.push(id);
+    try {
+      await syncApi.restoreErased(id);
+    } catch (e) {
+      downloading.value = downloading.value.filter((d) => d !== id);
+      throw e;
+    }
+  }
+  /** These notebooks are in the library, so their cloud cards are done with. */
+  function arrived(ids: string[]) {
+    downloading.value = downloading.value.filter((d) => !ids.includes(d));
+    erased.value = erased.value.filter((n) => !ids.includes(n.notebookId));
+  }
   const syncNow = () => run(() => syncApi.syncNow());
   const pause = (p: boolean) => run(() => syncApi.pause(p));
   const disconnect = async () => {
@@ -335,6 +366,9 @@ export const useSync = defineStore("sync", () => {
     status,
     devices,
     erased,
+    downloading,
+    cloudNotebooks,
+    cloudTrash,
     step,
     recoveryCode,
     pairingCode,
@@ -371,7 +405,8 @@ export const useSync = defineStore("sync", () => {
     approve,
     remove,
     rename,
-    restoreErased,
+    download,
+    arrived,
     syncNow,
     pause,
     disconnect,

@@ -643,7 +643,7 @@ impl Library {
                     id,
                     device_id: self.device_id,
                     local_sequence: seq,
-                    schema_version: OP_SCHEMA_VERSION,
+                    schema_version: op_schema_for(&body),
                     causal_dependencies: if seq > 1 {
                         vec![OperationRef {
                             device_id: self.device_id,
@@ -963,7 +963,8 @@ impl Library {
         Ok(self.notebook(id)?.clone())
     }
 
-    /// Permanently removes a notebook that is already in the trash.
+    /// Permanently removes a notebook that is already in the trash. With sync
+    /// on this reaches every device, and the account can restore it.
     pub fn purge_notebook(&mut self, id: Uuid) -> Result<()> {
         if self.notebook(id)?.deleted_at.is_none() {
             return Err(StorageError::Conflict(
@@ -1667,7 +1668,7 @@ impl Library {
     pub fn install_merged(&mut self, nb: Notebook, pages: Vec<Page>) -> Result<()> {
         let nb_id = nb.id;
         if self.purged.contains(&nb_id) {
-            // erased on this device; a purge is local-only
+            // sync lifts a purge first, when the account has the notebook back
             return Ok(());
         }
         validate_notebook(&nb)?;
@@ -1850,6 +1851,15 @@ impl Library {
     /// Whether `id` is one of [`Library::purged_notebooks`].
     pub fn is_purged(&self, id: Uuid) -> bool {
         self.purged.contains(&id)
+    }
+
+    /// Erases a notebook that was permanently deleted on another device. It may
+    /// not be in the trash here yet, and sync won't send this purge back out.
+    pub fn erase_from_sync(&mut self, id: Uuid) -> Result<()> {
+        self.commit_notebook_ops(
+            id,
+            vec![DocumentOperation::NotebookPurged { notebook_id: id }],
+        )
     }
 
     /// Lets sync install a notebook that was erased on this device. Lasts until

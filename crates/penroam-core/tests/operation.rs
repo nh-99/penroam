@@ -48,7 +48,7 @@ impl Device {
             id: Uuid::from_u128(self.next_op),
             device_id: self.id,
             local_sequence: self.seq,
-            schema_version: OP_SCHEMA_VERSION,
+            schema_version: op_schema_for(&body),
             causal_dependencies: deps,
             at: 1_000 + self.seq as i64,
             body,
@@ -456,9 +456,51 @@ fn unknown_schema_and_missing_dependencies_are_not_applied() {
     assert_eq!(snapshot(&r), s);
     r.apply(&b1).unwrap();
     r.apply(&b2).unwrap();
-    // purge is local-only
+}
+
+#[test]
+fn a_purge_merges_and_a_restore_undoes_it() {
+    let (mut a, mut b) = (Device::new(1), Device::new(2));
+    let base = setup(&mut a, &mut b);
+    let mut r = Replica::new(NB);
+    for op in &base {
+        r.apply(op).unwrap();
+    }
     let purge = a.op(DocumentOperation::NotebookPurged { notebook_id: NB });
-    assert!(matches!(r.apply(&purge), Err(MergeError::LocalOnly(_))));
+    assert_eq!(purge.schema_version, 2, "older clients must park it");
+    r.apply(&purge).unwrap();
+    assert!(r.is_purged());
+    assert!(r.notebook().unwrap().deleted_at.is_some());
+
+    let restore = a.op(DocumentOperation::NotebookRestored { notebook_id: NB });
+    assert_eq!(restore.schema_version, 1);
+    r.apply(&restore).unwrap();
+    assert!(!r.is_purged());
+    assert!(r.notebook().unwrap().deleted_at.is_none());
+}
+
+#[test]
+fn a_move_to_the_trash_is_not_a_purge() {
+    let (mut a, mut b) = (Device::new(1), Device::new(2));
+    let base = setup(&mut a, &mut b);
+    let mut r = Replica::new(NB);
+    for op in &base {
+        r.apply(op).unwrap();
+    }
+    let trash = a.op(DocumentOperation::NotebookDeleted { notebook_id: NB });
+    r.apply(&trash).unwrap();
+    assert!(!r.is_purged());
+}
+
+#[test]
+fn a_restore_concurrent_with_a_purge_keeps_the_notebook() {
+    let (mut a, mut b) = (Device::new(1), Device::new(2));
+    let base = setup(&mut a, &mut b);
+    let ao = vec![a.op(DocumentOperation::NotebookPurged { notebook_id: NB })];
+    let bo = vec![b.op(DocumentOperation::NotebookRestored { notebook_id: NB })];
+    let r = converge(&base, &ao, &bo);
+    assert!(!r.is_purged());
+    assert!(r.notebook().unwrap().deleted_at.is_none());
 }
 
 #[test]

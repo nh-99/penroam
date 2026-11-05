@@ -191,9 +191,11 @@ pub fn restore_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
     Ok(nb)
 }
 
-/// Erases a trashed notebook from this device (local only; not synced).
+/// Erases a trashed notebook. With sync on this reaches every device, and the
+/// account can restore it.
 #[tauri::command(async)]
 pub fn purge_notebook(state: State<'_, AppState>, id: Uuid) -> R<()> {
+    state.sync.nudge();
     lib!(state).purge_notebook(id)?;
     state.search.notebook_changed(id);
     Ok(())

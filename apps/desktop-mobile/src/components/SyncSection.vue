@@ -3,7 +3,7 @@
 // sync as available. Notes never depend on sync: everything here can be
 // disconnected without touching local notebooks.
 import { computed, onMounted, ref } from "vue";
-import { Cloud, Copy, Download, KeyRound, Link2, LogIn, Pause, Pencil, Play, RefreshCw, ShieldAlert, Smartphone, Trash2, Unplug } from "@lucide/vue";
+import { Cloud, Copy, KeyRound, Link2, LogIn, Pause, Pencil, Play, RefreshCw, ShieldAlert, Smartphone, Trash2, Unplug } from "@lucide/vue";
 import Btn from "./ui/Btn.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import PromptDialog from "./PromptDialog.vue";
@@ -254,17 +254,6 @@ async function confirmDisconnect() {
             <button v-if="d.active && !d.thisDevice && sync.status?.phase !== 'revoked'" class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" :aria-label="`Remove ${d.label}`" @click="removing = d">
               <Trash2 :size="16" />
             </button>
-          </li>
-        </ul>
-      </div>
-
-      <div v-if="sync.erased.length" class="space-y-2 rounded-xl border border-line p-3">
-        <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">Not on this device</h4>
-        <p class="text-xs text-muted">You permanently deleted these here. They are still in your account.</p>
-        <ul class="space-y-1.5">
-          <li v-for="n in sync.erased" :key="n.notebookId" class="flex items-center gap-2">
-            <p class="min-w-0 flex-1 truncate text-sm">{{ n.title }}<span v-if="n.inTrash" class="text-muted"> · in trash</span></p>
-            <Btn variant="outline" :disabled="sync.busy" @click="sync.restoreErased(n.notebookId)"><Download :size="16" />Download</Btn>
           </li>
         </ul>
       </div>
