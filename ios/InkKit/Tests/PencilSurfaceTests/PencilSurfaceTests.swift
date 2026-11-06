@@ -13,7 +13,7 @@ final class PencilSurfaceTests: XCTestCase {
         XCTAssertEqual(st.points.count, 3)
         XCTAssertEqual(st.points[0].x, 0); XCTAssertEqual(st.points[0].y, 0)
         XCTAssertEqual(st.points[2].x, 2); XCTAssertEqual(st.points[2].y, 2)
-        XCTAssertEqual(st.points[0].pressure, 0.5, accuracy: 1e-4)
+        XCTAssertEqual(st.points[0].pressure, NativeMapping.pencilPressure(fraction: 0.5), accuracy: 1e-4)
         XCTAssertEqual(st.points[2].pressure, 1)
         XCTAssertEqual(st.points[1].timeUs, 4000)
         XCTAssertEqual(st.coalescedCount, 3)
@@ -26,7 +26,7 @@ final class PencilSurfaceTests: XCTestCase {
         let st = LiveStroke(brush: Brush(), transform: ViewTransform())
         st.add([s(0, 0, 1, 1, est: 7, expect: true), s(5, 5, 1, 1.01)], coalesced: false)
         XCTAssertTrue(st.updateEstimated(index: 7, force: 3.0, maximumForce: 4.17, final: true))
-        XCTAssertEqual(st.points[0].pressure, (3.0 / 4.17 * 10000).rounded() / 10000)
+        XCTAssertEqual(st.points[0].pressure, (NativeMapping.pencilPressure(fraction: 3.0 / 4.17) * 10000).rounded() / 10000)
         XCTAssertFalse(st.updateEstimated(index: 7, force: 1, maximumForce: 4.17, final: true), "final update consumed")
         let json = st.finish()
         let pts = json["points"] as! [[String: Any]]
@@ -72,5 +72,50 @@ final class PencilSurfaceTests: XCTestCase {
         let (vx, vy) = t.toView(200, 300)
         let (dx, dy) = t.toDoc(vx, vy)
         XCTAssertEqual(dx, 200, accuracy: 1e-9); XCTAssertEqual(dy, 300, accuracy: 1e-9)
+    }
+}
+
+/// The fixture is shared with the web and Kotlin tests, so all platforms place ink identically.
+final class ViewportVectorTests: XCTestCase {
+    private struct Vectors: Decodable {
+        struct Case: Decodable { let scale, ox, oy, dpr: Double; let doc, view: [Double] }
+        let cases: [Case]
+    }
+
+    func testDocumentPointsLandOnTheSharedPoints() throws {
+        var dir = URL(fileURLWithPath: #filePath)
+        while !FileManager.default.fileExists(atPath: dir.appendingPathComponent("tests/fixtures/viewport-vectors.json").path) {
+            dir.deleteLastPathComponent()
+        }
+        let data = try Data(contentsOf: dir.appendingPathComponent("tests/fixtures/viewport-vectors.json"))
+        let vectors = try JSONDecoder().decode(Vectors.self, from: data)
+        XCTAssertFalse(vectors.cases.isEmpty)
+        for c in vectors.cases {
+            // UIKit points are CSS px, so the surface works before the display scale
+            let t = ViewTransform(scale: c.scale, offsetX: c.ox, offsetY: c.oy)
+            let (x, y) = t.toView(c.doc[0], c.doc[1])
+            XCTAssertEqual(x * c.dpr, c.view[0], accuracy: 1e-3)
+            XCTAssertEqual(y * c.dpr, c.view[1], accuracy: 1e-3)
+            let (dx, dy) = t.toDoc(c.view[0] / c.dpr, c.view[1] / c.dpr)
+            XCTAssertEqual(dx, c.doc[0], accuracy: 1e-3)
+            XCTAssertEqual(dy, c.doc[1], accuracy: 1e-3)
+        }
+    }
+
+    func testFinishedStrokeKeepsTheForceScale() {
+        let s = LiveStroke(brush: Brush(), transform: ViewTransform())
+        s.add([PencilSample(x: 1, y: 1, force: 2, maximumForce: 4, timestamp: 0)], coalesced: false)
+        let input = s.finish()["input"] as? [String: Any]
+        XCTAssertEqual(input?["maximumForce"] as? Double, 4)
+    }
+
+    func testPencilCurveMatchesTheWebEditorAndCanBeInverted() {
+        XCTAssertEqual(NativeMapping.pencilPressure(fraction: 0), 0)
+        XCTAssertEqual(NativeMapping.pencilPressure(fraction: 1), 1, accuracy: 1e-9)
+        XCTAssertEqual(NativeMapping.pencilPressure(fraction: 0.111), 0.404, accuracy: 0.01)
+        XCTAssertEqual(NativeMapping.pencilPressure(fraction: 0.218), 0.639, accuracy: 0.01)
+        for f in stride(from: 0.0, through: 1.0, by: 0.05) {
+            XCTAssertEqual(NativeMapping.pencilFraction(pressure: NativeMapping.pencilPressure(fraction: f)), f, accuracy: 1e-9)
+        }
     }
 }

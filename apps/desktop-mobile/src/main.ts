@@ -4,6 +4,7 @@ import App from "./App.vue";
 import "./styles/main.css";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { isMobile } from "./platform/device";
+import { startPowerReports } from "./platform/power";
 
 // Release WebViews on Android/iOS have no visible console: forward warnings,
 // errors and unhandled rejections to the Rust log (logcat / device console).
@@ -34,4 +35,5 @@ const fontReady = document.fonts
 
 void Promise.resolve(fontReady).finally(() => {
   createApp(App).use(createPinia()).mount("#app");
+  startPowerReports();
 });

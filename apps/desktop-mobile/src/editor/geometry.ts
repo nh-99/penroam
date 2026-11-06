@@ -204,6 +204,28 @@ export function segDist(px: number, py: number, ax: number, ay: number, bx: numb
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
+/** Even-odd point-in-polygon test. The polygon closes itself. */
+export function pointInPolygon(x: number, y: number, poly: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Share of a stroke's points that must lie inside a lasso to select it. */
+export const LASSO_MIN_INSIDE = 0.6;
+
+/** Whether a lasso catches a stroke. A loose loop that clips a few points of a neighbour does not. */
+export function lassoHitsStroke(s: StrokeLike, poly: [number, number][]): boolean {
+  if (!s.points.length) return false;
+  let n = 0;
+  for (const p of s.points) if (pointInPolygon(p.x, p.y, poly)) n++;
+  return n / s.points.length >= LASSO_MIN_INSIDE;
+}
+
 export function rectsIntersect(a: Rect, b: Rect): boolean {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 }

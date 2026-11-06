@@ -161,6 +161,7 @@ export async function runAutobench(mode: string) {
       editor.benchView(1);
       const redraws = [editor.fullRedraw(), editor.fullRedraw(), editor.fullRedraw()];
       const visible = [editor.visibleRedraw(), editor.visibleRedraw(), editor.visibleRedraw()];
+      const rescale = await editor.rescaleBench();
       await editor.renderer.whenComplete();
       const vr = editor.visibleDocRect();
       const frames = await editor.replay(replayPts);
@@ -181,6 +182,8 @@ export async function runAutobench(mode: string) {
         fullRedrawMedianMs: median(redraws),
         visibleRedrawMs: visible,
         visibleRedrawMedianMs: median(visible),
+        rescaleTotalMs: rescale.totalMs,
+        rescaleLongestSliceMs: rescale.longestSliceMs,
         visibleDocRect: vr.map((v) => Math.round(v)),
         replayFrameMedianMs: median(frames),
         replayFrameMaxMs: Math.max(...frames),

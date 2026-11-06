@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { describeInkPath, type InkPath } from "../platform/inkPath";
+import { inkCapabilities } from "../platform/nativeInk";
 import { computed, onMounted, ref } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { Monitor, Sun, Moon, Tablet, ShieldCheck } from "@lucide/vue";
@@ -46,12 +48,14 @@ const penModes: { v: PenOnlyMode; label: string; hint: string }[] = [
 const nativeLabel = computed(() =>
   props.nativeKind === "boox" ? "BOOX hardware pen (Onyx SDK)" : props.nativeKind === "ios-pencil" ? "Native Apple Pencil layer" : null,
 );
+const inkPath = ref<InkPath | null>(null);
 const rec = computed(() => lib.recovery);
 
 const ui = useUi();
 const version = ref<string | null>(null);
 onMounted(async () => {
   if (!hasHost()) return;
+  inkPath.value = describeInkPath(props.nativeKind, await inkCapabilities());
   try {
     version.value = await getVersion();
   } catch {
@@ -103,6 +107,7 @@ function versionTapped() {
             <span><span class="block text-sm">{{ nativeLabel }}</span><span class="block text-xs text-muted">Low-latency native pen rendering. Turn off to use the web canvas.</span></span>
             <input v-model="settings.s.useNativeInk" type="checkbox" class="h-5 w-5" />
           </label>
+          <p v-if="inkPath" class="px-1 text-xs leading-relaxed text-muted"><span class="font-semibold">{{ inkPath.label }}.</span> {{ inkPath.detail }}</p>
         </section>
       </div>
       <SearchSection v-else-if="tab === 'search'" />

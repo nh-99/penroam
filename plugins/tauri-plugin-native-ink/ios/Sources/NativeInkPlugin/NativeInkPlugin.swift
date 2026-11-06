@@ -18,9 +18,10 @@
 //    on the preview until the editor calls `commitAck` after painting its
 //    committed copy (HandoffQueue; 2 s timeout as a safety net).
 //
-// Status: implemented and compiled against the iOS SDK only where a macOS +
-// Xcode toolchain is available; see docs/platforms/ipad.md for what has and
-// has not been validated on hardware.
+//  * Double-tap on the Pencil follows the system preference (UIPencilInteraction)
+//    and is reported as a "pencilTap" event.
+//
+// See docs/platforms/ipad.md for what has and has not been validated on hardware.
 #if canImport(UIKit)
 import InkCore
 import PencilSurface
@@ -109,10 +110,11 @@ final class PencilCapture: UIGestureRecognizer {
     }
 }
 
-class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
+class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
     private weak var webview: WKWebView?
     private var preview: PencilPreviewView?
     private var capture: PencilCapture?
+    private var pencilInteraction: UIPencilInteraction?
     private var cssRect = CGRect.zero
     private var brush = Brush()
     private var transform = ViewTransform()
@@ -143,8 +145,33 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
                 "pencilSurface": UIDevice.current.userInterfaceIdiom == .pad,
                 "maximumFramesPerSecond": UIScreen.main.maximumFramesPerSecond,
                 "webFrameRate": WebFrameRate.lastHookApply as Any,
+                "device": ["model": UIDevice.current.model, "system": UIDevice.current.systemVersion],
             ])
         }
+    }
+
+    /// Power state, for scheduling background work. Rust cannot read this on iOS.
+    @objc public func getPower(_ invoke: Invoke) {
+        DispatchQueue.main.async {
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            var result: [String: Any] = ["saver": ProcessInfo.processInfo.isLowPowerModeEnabled]
+            switch UIDevice.current.batteryState {
+            case .unplugged: result["onBattery"] = true
+            case .charging, .full: result["onBattery"] = false
+            default: break // unknown: leave it out
+            }
+            invoke.resolve(result)
+        }
+    }
+
+    func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
+        let action: String
+        switch UIPencilInteraction.preferredTapAction {
+        case .switchEraser: action = "switchEraser"
+        case .switchPrevious: action = "switchPrevious"
+        default: return // palettes and shortcuts belong to other apps
+        }
+        trigger("pencilTap", data: ["action": action])
     }
 
     @objc public func attach(_ invoke: Invoke) throws {
@@ -167,8 +194,16 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
                 wv.addGestureRecognizer(g)
                 capture = g
             }
+            if pencilInteraction == nil {
+                let i = UIPencilInteraction()
+                i.delegate = self
+                wv.addInteraction(i)
+                pencilInteraction = i
+            }
             place()
             setShown(false)
+            // attach runs again whenever the surface is remounted
+            expireTimer?.invalidate()
             expireTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.expire() }
             invoke.resolve(["mode": "UIKIT_PENCIL"])
         }
@@ -179,6 +214,9 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
             expireTimer?.invalidate(); expireTimer = nil
             if let g = capture { g.view?.removeGestureRecognizer(g) }
             capture = nil
+            if let i = pencilInteraction { i.view?.removeInteraction(i) }
+            pencilInteraction = nil
+            for s in handoff.pending { handoff.ack(s.id) }
             preview?.removeFromSuperview(); preview = nil
             invoke.resolve()
         }

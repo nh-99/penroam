@@ -26,6 +26,7 @@ mod commands;
 mod models;
 #[cfg(target_os = "linux")]
 mod pinch;
+mod power;
 mod search;
 mod sync;
 
@@ -164,6 +165,7 @@ pub fn run() {
             sync::sync_open_billing,
             sync::sync_request_account_deletion,
             sync::sync_cancel_account_deletion,
+            power::power_report,
             search::search_query,
             search::search_status,
             search::search_set_settings,

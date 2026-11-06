@@ -84,7 +84,8 @@ The page is shown here as JSON — the form used over IPC, in operations, and in
 
 * `points` are the original input samples mapped to page points (rounded to 0.001 pt; pressure
   to 1e-4). Predicted samples are never stored. `pressure` is normalised 0..1 (mouse 0.5); raw
-  platform ranges live in `input` (e.g. `maxTouchPressure` from Onyx).
+  platform ranges live in `input` (e.g. `maxTouchPressure` from Onyx; `maximumForce` and
+  `pressureCurve` from Apple Pencil, whose strokes are stored through a curve).
 * `flags`: bit 1 = pressure was an estimate refined later (iOS), bit 2 = sample came from a
   coalesced event list.
 * Rendering (all ports): width = `pressure ? max(0.5, width·(0.4 + 1.2·p)) : width`; midpoint

@@ -174,7 +174,7 @@ function onKey(e: KeyboardEvent) {
     ed.setTool("select");
     ed.selectAll();
   } else if (!m && !e.altKey) {
-    const tools: Record<string, Tool> = { p: "pen", m: "highlighter", e: "eraser", v: "select", t: "text", h: "hand" };
+    const tools: Record<string, Tool> = { p: "pen", m: "highlighter", e: "eraser", v: "select", l: "lasso", t: "text", h: "hand" };
     if (tools[k]) ed.setTool(tools[k]);
     else if (k === "delete" || k === "backspace") ed.deleteSelection();
     else if (k === "escape") ed.clearSelection();

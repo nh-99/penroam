@@ -163,6 +163,15 @@ class BooxInkView @JvmOverloads constructor(
     private var pendingEpdRepaint = false
     private var pendingRawReenable = false
     private var pendingGcRect: Rect? = null
+    private val refreshPlanner = EpdRefreshPlanner()
+    /** Document-space area of the strokes erased by the gesture in progress. */
+    private var erasedBounds: FloatArray? = null
+    // Page changes, pans and zooms each ask for a full refresh; one flash has to cover them all.
+    private val fullRefresh = Runnable {
+        refreshPlanner.fullDone()
+        runCatching { OnyxBridge.fullRefreshGc(this) }.onFailure { recordError("full refresh", it) }
+        metrics.event("epaper_refresh_requested", mapOf("mode" to "GC_full"))
+    }
     private var commitStartNs = 0L
 
     // Coordinate-space probe (Onyx TouchPoint view-local vs screen).
@@ -508,7 +517,7 @@ class BooxInkView @JvmOverloads constructor(
         val t0 = metrics.now()
         if (eraser) {
             eraseAlong(r.points)
-            requestEpaperRefresh(full = true)
+            refreshErased()
             return
         }
         val stroke = InkStroke(
@@ -619,10 +628,12 @@ class BooxInkView @JvmOverloads constructor(
     fun removeStrokes(ids: Collection<String>) {
         val set = ids.toHashSet()
         val before = strokes.size
+        var area: FloatArray? = null
+        strokes.forEach { if (it.id in set) area = EpdRefreshPlanner.union(area, it.bounds) }
         strokes.removeAll { it.id in set }
         if (strokes.size != before) {
             rebuildBitmap()
-            requestEpaperRefresh(full = true)
+            area?.let { requestRegionalRefresh(it) }
         }
         metrics.event("strokes_removed", mapOf("count" to before - strokes.size))
     }
@@ -784,11 +795,25 @@ class BooxInkView @JvmOverloads constructor(
     )
 
     private fun requestEpaperRefresh(full: Boolean) {
+        if (!full || (mode != Mode.BOOX_HARDWARE && !capabilities.nativeModeCandidate)) return
+        removeCallbacks(fullRefresh)
+        postDelayed(fullRefresh, FULL_REFRESH_SETTLE_MS)
+    }
+
+    /** Refreshes what a removal changed, which is usually far from the whole panel. */
+    private fun requestRegionalRefresh(docBounds: FloatArray) {
         if (mode != Mode.BOOX_HARDWARE && !capabilities.nativeModeCandidate) return
-        post {
-            runCatching { if (full) OnyxBridge.fullRefreshGc(this) }.onFailure { recordError("full refresh", it) }
-            metrics.event("epaper_refresh_requested", mapOf("mode" to "GC_full"))
-        }
+        val r = docBoundsToViewRect(docBounds, pad = 10)
+        if (r.isEmpty) return
+        val fraction = r.width().toFloat() * r.height() / max(1, width * height)
+        if (refreshPlanner.regional(fraction) == EpdRefreshPlanner.Kind.FULL) return requestEpaperRefresh(full = true)
+        pendingGcRect = r
+        invalidate()
+    }
+
+    private fun refreshErased() {
+        erasedBounds?.let { requestRegionalRefresh(it) }
+        erasedBounds = null
     }
 
     // =================================================== MotionEvent ==
@@ -895,7 +920,7 @@ class BooxInkView @JvmOverloads constructor(
                 if (activeEraser) {
                     if (eraseAt(last)) rebuildBitmap()
                     if (activeErased.isNotEmpty()) listener?.onStrokesErased(activeErased.toList())
-                    requestEpaperRefresh(full = true)
+                    refreshErased()
                     return
                 }
                 val t0 = metrics.now()
@@ -962,7 +987,14 @@ class BooxInkView @JvmOverloads constructor(
         val r = ERASER_RADIUS_DOC / transform.scale
         val removed = ArrayList<String>()
         val it = strokes.iterator()
-        while (it.hasNext()) { val s = it.next(); if (StrokeGeometry.hitTest(s, p.x, p.y, r)) { removed.add(s.id); it.remove() } }
+        while (it.hasNext()) {
+            val s = it.next()
+            if (StrokeGeometry.hitTest(s, p.x, p.y, r)) {
+                removed.add(s.id)
+                erasedBounds = EpdRefreshPlanner.union(erasedBounds, s.bounds)
+                it.remove()
+            }
+        }
         if (removed.isEmpty()) return false
         activeErased.addAll(removed)
         metrics.count("strokes_erased", removed.size.toLong())
@@ -1049,6 +1081,7 @@ class BooxInkView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        removeCallbacks(fullRefresh)
         viewTreeObserver.removeOnGlobalLayoutListener(layoutListener)
         unregisterLifecycle()
         closeSession("view detached")
@@ -1099,6 +1132,8 @@ class BooxInkView @JvmOverloads constructor(
     companion object {
         private const val TAG = "BooxInkView"
         const val ERASER_RADIUS_DOC = 8f
+        /** How long changes may keep arriving before the one full refresh that covers them. */
+        const val FULL_REFRESH_SETTLE_MS = 150L
         /** Contacts larger than this (dp) are treated as palms. */
         const val PALM_TOUCH_MAJOR_PX = 40f
     }

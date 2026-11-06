@@ -2,6 +2,7 @@
 // defaults. Stored in localStorage; notebooks themselves live in Rust storage.
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
+import type { Tool } from "../editor/engine";
 import type { PenOnlyMode } from "../editor/input";
 import type { Paper } from "../generated/Paper";
 import type { TemplateKind } from "../generated/TemplateKind";
@@ -12,6 +13,8 @@ const KEY = "penroam.settings.v1";
 
 interface Persisted {
   theme: ThemePref;
+  /** The last tool used on this device. */
+  tool: Tool;
   penOnly: PenOnlyMode;
   /** A stylus has been used on this device, so "auto" gives fingers pan and zoom from the start. */
   penSeen: boolean;
@@ -35,6 +38,7 @@ interface Persisted {
 
 const defaults: Persisted = {
   theme: "system",
+  tool: "pen",
   penOnly: "auto",
   penSeen: false,
   useNativeInk: true,

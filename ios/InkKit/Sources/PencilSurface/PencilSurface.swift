@@ -68,6 +68,8 @@ public final class LiveStroke {
     public private(set) var predicted: [InkPoint] = []
     public private(set) var coalescedCount = 0
     public private(set) var estimatedUpdates = 0
+    /// The Pencil's full force; raw force = `pencilFraction(pressure) * this`.
+    public private(set) var maximumForce = 0.0
     private var t0: Double?
     private var pendingEstimates: [Int: Int] = [:] // estimationIndex -> point index
     private let r3 = { (v: Double) in (v * 1000).rounded() / 1000 }
@@ -78,8 +80,9 @@ public final class LiveStroke {
 
     private func point(_ s: PencilSample) -> InkPoint {
         if t0 == nil { t0 = s.timestamp }
+        maximumForce = max(maximumForce, s.maximumForce)
         let (dx, dy) = transform.toDoc(s.x, s.y)
-        let p = s.maximumForce > 0 ? min(1, max(0, s.force / s.maximumForce)) : 0.5
+        let p = s.maximumForce > 0 ? NativeMapping.pencilPressure(fraction: s.force / s.maximumForce) : 0.5
         let tilt = NativeMapping.tilt(altitude: s.altitude, azimuth: s.azimuth)
         return InkPoint(x: r3(dx), y: r3(dy), pressure: (p * 10000).rounded() / 10000, tiltX: tilt.x, tiltY: tilt.y,
                         timeUs: Int64(((s.timestamp - (t0 ?? s.timestamp)) * 1_000_000).rounded()))
@@ -111,7 +114,7 @@ public final class LiveStroke {
     @discardableResult
     public func updateEstimated(index: Int, force: Double, maximumForce: Double, final: Bool) -> Bool {
         guard let i = pendingEstimates[index], i < points.count else { return false }
-        points[i].pressure = maximumForce > 0 ? (min(1, max(0, force / maximumForce)) * 10000).rounded() / 10000 : 0.5
+        points[i].pressure = maximumForce > 0 ? (NativeMapping.pencilPressure(fraction: force / maximumForce) * 10000).rounded() / 10000 : 0.5
         estimatedUpdates += 1
         if final { pendingEstimates[index] = nil }
         return true
@@ -124,7 +127,8 @@ public final class LiveStroke {
             "id": id,
             "source": "stylus",
             "input": ["api": "uikit-pencil", "device": "pencil", "coalescedSamples": coalescedCount,
-                      "estimatedForceUpdates": estimatedUpdates, "pendingEstimates": pendingEstimates.count] as [String: Any],
+                      "estimatedForceUpdates": estimatedUpdates, "pendingEstimates": pendingEstimates.count,
+                      "maximumForce": maximumForce, "pressureCurve": NativeMapping.pencilCurveName] as [String: Any],
             "brush": ["type": brush.tool, "width": brush.width, "color": brush.color, "pressure": brush.pressure && brush.tool == "pen",
                       "opacity": brush.tool == "highlighter" ? brush.opacity : 1] as [String: Any],
             "points": zip(points, flags).map { p, f -> [String: Any] in

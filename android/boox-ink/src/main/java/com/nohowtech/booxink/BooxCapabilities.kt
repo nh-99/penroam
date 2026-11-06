@@ -3,6 +3,7 @@ package com.nohowtech.booxink
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import android.view.InputDevice
 import android.webkit.WebView
 import org.json.JSONArray
 import org.json.JSONObject
@@ -72,6 +73,11 @@ data class BooxCapabilities(
             return BooxCapabilities(hint, sdk, firmwareFound.isNotEmpty(), index, maxPressure, errors, deviceInfo(context, firmwareFound))
         }
 
+        /** Whether a stylus digitiser is present, on any Android device (S Pen, USI, Wacom EMR). */
+        fun hasStylus(): Boolean = InputDevice.getDeviceIds().any { id ->
+            InputDevice.getDevice(id)?.supportsSource(InputDevice.SOURCE_STYLUS) == true
+        }
+
         fun deviceInfo(context: Context, firmwareClasses: List<String> = emptyList()): JSONObject {
             val dm = context.resources.displayMetrics
             val o = JSONObject()
@@ -88,6 +94,7 @@ data class BooxCapabilities(
                 .put("density", dm.density.toDouble())
                 .put("densityDpi", dm.densityDpi)
                 .put("firmwareClasses", JSONArray(firmwareClasses))
+                .put("stylus", hasStylus())
             try {
                 val pkg = WebView.getCurrentWebViewPackage()
                 if (pkg != null) o.put("webViewPackage", pkg.packageName).put("webViewVersion", pkg.versionName)

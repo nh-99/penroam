@@ -60,6 +60,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       useNativeInk: s.useNativeInk,
       // iPad fingertips exceed the size limit; palms are rejected by the Pencil-down rules instead
       palmContactPx: isIOS() ? Infinity : PALM_CONTACT_PX,
+      pencilCurve: isIOS(),
+      detailWhenZoomed: isIOS(),
       maxCanvasPixels: /Android|iPad|iPhone/i.test(navigator.userAgent) ? 8_000_000 : 16_000_000,
     });
     e.setToolSettings({
@@ -224,6 +226,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     benchHooks.editor = e;
     e.penSeen = settings.s.penSeen;
     applySettings();
+    e.setTool(settings.s.tool);
     unregister = registerFlusher(flush);
     if (sync.available) {
       offChanged = sync.onChanged((c) => {
@@ -271,6 +274,10 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   watch(
     () => ui.overlays > 0 || extraBlocked.value,
     (b) => editor.value?.setOverlayBlocked(b),
+  );
+  watch(
+    () => state.tool,
+    (t) => (settings.s.tool = t),
   );
   watch(
     () => state.penSeen,

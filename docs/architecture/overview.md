@@ -183,6 +183,23 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   zoom; `pointercancel`, lost capture, window blur and app backgrounding finish or cancel
   gestures so no stroke is ever left stuck.
 
+**Sharp past the canvas limit.** Page canvases are capped by pixel area (8 Mpx on mobile, about
+200 % zoom on an iPad with a Letter page). Beyond that, two detail canvases cover the viewport plus
+a margin at full resolution, and a clip-path cuts their area out of the page layers. They sit in the
+viewport rather than the scaled page element, shown 1:1 with device pixels, because a compositor can
+stretch a `will-change: transform` element from a fixed scale. On iOS they are used for any zoom past
+fit width. Selection outlines and the text editor sit in the page element, so ink draws above them
+while this layer is up. The page layers stay complete underneath, so a pan past the detail area shows
+softer ink until the next settle, never missing ink. The template and PDF background stay on the
+page layer and soften past the limit.
+
+**Redraws never hold up the pen.** A settled zoom draws the visible region into a detached canvas
+in slices of about 8 ms and swaps it in with the other layers in one task; the rest of the page
+follows in bands, nearest first, and shows the old pixels scaled until then. A stroke added
+meanwhile is queued on the job, and any other ink change restarts it. Only the open page stays in memory,
+so a notebook's size does not affect this. There is no separate tile cache: the page-sized canvas
+already covers pan, and the cost is in drawing, not in finding what to draw.
+
 ## 5. Search
 
 Search is local and offline. `penroam-search` builds a derived SQLite FTS5 index; the app's
@@ -253,6 +270,9 @@ the native view covers exactly the editor element's CSS rect; both sides use
 
 Non-BOOX Android devices use the web canvas (the generalised native Mode C exists in
 `BooxInkView` but is not enabled by default until validated).
+
+Android and iOS also serve `getPower`, since Rust cannot read power state there. The webview passes
+the answer to `power_report` (`src-tauri/src/power.rs`) for the search and sync workers.
 
 ## 7. Platform constraints
 

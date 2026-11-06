@@ -1,8 +1,8 @@
 # iPad / iPadOS — status and validation checklist
 
-**Status: implemented, compiled for iOS, not validated on hardware.** A Tauri iOS app build
-needs macOS + Xcode, which this environment does not have. Nothing below is claimed to work
-on an iPad until the checklist is filled in on a device.
+**Status: runs on hardware, checklist open.** Penroam has been installed on an iPad13,4 from Linux
+with xtool (below) and used with an Apple Pencil, which is how the palm rules here were tuned. The
+checklist at the end has not been filled in, and a build signed through Xcode has not been made.
 
 ## What exists
 
@@ -18,10 +18,18 @@ on an iPad until the checklist is filled in on a device.
     ordinary fingertips exceed the limit. Contacts that land within 400 ms of the Pencil lifting
     are ignored instead, and pen-down drops any pan, pinch or finger stroke already under way.
     A palm that lands later than that can still pan the page until the Pencil touches down.
+  * `UIPencilInteraction`: a double-tap follows the system setting. "Switch to eraser" and "Switch
+    to previous tool" work; the palette and shortcut actions are left alone.
   * `PencilPreviewView` (transparent, `isUserInteractionEnabled = false`) draws the live stroke
     with the shared stroke geometry (`InkCore.Geometry`), predicted touches at 50 % alpha.
   * Coalesced touches recorded; `touchesEstimatedPropertiesUpdated` patches force by
-    `estimationUpdateIndex` (flag bit 1 on the point).
+    `estimationUpdateIndex` (flag bit 1 on the point). Updates that arrive after pen-up are
+    dropped, because the stroke has already been committed; `input.pendingEstimates` counts them.
+  * Writing uses only the bottom quarter of the Pencil's force range (on an iPad13,4: median 0.11
+    of maximum, 95th percentile 0.22), so linear pressure gave thin, nearly uniform ink. Pressure is
+    stored through a curve, `pencilPressure`, that puts ordinary writing mid-range. It is shared with
+    the web path and recorded as `input.pressureCurve`; with `input.maximumForce` the raw force can
+    be recovered. Older strokes keep their linear values and look as they did.
   * Commit hand-off: stroke stays on the preview until the web editor acks after painting
     (`commitAck`, two frames after commit), 2 s timeout as a safety net.
   * WebKit 120 Hz rendering-update hook (`WebTuning`, from the framework evaluation; private SPI — App Store risk).
@@ -48,6 +56,11 @@ cd ios && DEVELOPER_DIR=~/.swiftpm/swift-sdks/darwin.artifactbundle/Developer \
 # -> "Build of target: 'tauri-plugin-native-ink' complete!" (compiles against the iOS SDK; not linked into an app)
 ```
 
+## On Linux, without a Mac
+
+xtool builds SwiftPM only, so the app shell lives in a git-ignored folder that links the Rust
+static library with the Swift plugin packages. xtool's team prefix ends up in the bundle ID.
+
 ## On a Mac
 
 ```bash
@@ -62,6 +75,11 @@ pnpm tauri ios build --export-method debugging
 Repeat the icon copy whenever `gen/apple` is regenerated. `AppIcon-512@2x.png` is the 1024 px App
 Store icon and must stay opaque RGB with no alpha channel, because App Store validation rejects
 any alpha.
+
+## Hover
+
+iPadOS delivers Pencil hover to the web view on hardware that has it (M2 iPads and later), and the
+editor's hover ring handles it there. The iPad13,4 cannot hover, so this has not been observed.
 
 ## Device validation checklist (fill in; reference numbers are from the framework evaluation's UIKit reference / WKWebView proxy)
 
@@ -78,6 +96,7 @@ any alpha.
 | Fingers pan/zoom, never draw; palm resting (Workload F) | | |
 | 15-second stroke (Workload E) | | |
 | Fast cursive (Workload B), circles/small lettering (C), normal writing (A) | | |
+| Double-tap: eraser and previous tool, per the system setting | | |
 | App background/resume mid-stroke | | |
 | Text tool with Pencil (Scribble off) and keyboard; no accidental ink | | |
 | Rotation / Split View: overlay frame follows the canvas | | |

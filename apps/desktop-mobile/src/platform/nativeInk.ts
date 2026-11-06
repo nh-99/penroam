@@ -43,6 +43,8 @@ export interface NativeHandlers {
   strokeFinalized(stroke: InkStroke): void;
   /** The pen touched or left the surface; emitted only by surfaces that report it (iOS). */
   penState(down: boolean): void;
+  /** The Apple Pencil was double-tapped; `action` is the system's preference for that gesture. */
+  pencilTap(action: string): void;
   erased(ids: string[]): void;
   viewport(t: { scale: number; ox: number; oy: number }): void;
   status?(s: Record<string, unknown>): void;
@@ -151,6 +153,7 @@ class PluginSurface implements NativeInkSurface {
       }
     });
     await on("pen", (p) => this.handlers?.penState(p.down === true));
+    await on("pencilTap", (p) => this.handlers?.pencilTap(String(p.action)));
     await on("erased", (p) => this.handlers?.erased((p.ids ?? []).map(String)));
     await on("viewport", (p) => this.handlers?.viewport({ scale: p.scale, ox: p.offsetX, oy: p.offsetY }));
     await on("status", (p) => this.handlers?.status?.(p));
@@ -213,6 +216,13 @@ class PluginSurface implements NativeInkSurface {
 }
 
 let probed: Promise<NativeInkSurface | null> | null = null;
+let probedCaps: Record<string, unknown> | null = null;
+
+/** What the native plugin reported, whether or not a native surface is in use. */
+export async function inkCapabilities(): Promise<Record<string, unknown> | null> {
+  await detectNativeInk();
+  return probedCaps;
+}
 
 /** Detects the platform ink surface once. Desktop: always null (web canvas). */
 export function detectNativeInk(): Promise<NativeInkSurface | null> {
@@ -221,6 +231,7 @@ export function detectNativeInk(): Promise<NativeInkSurface | null> {
     if (!hasHost() || !(isAndroid() || isIOS())) return null;
     try {
       const caps = await invoke<Record<string, unknown>>("plugin:native-ink|call", { method: "getCapabilities", args: {} });
+      probedCaps = caps;
       if (isIOS()) return caps.pencilSurface ? new PluginSurface("ios-pencil", caps) : null;
       if (caps.nativeModeCandidate) return new PluginSurface("boox", caps);
       return null; // other Android devices: the web canvas is the validated path

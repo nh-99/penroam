@@ -3,7 +3,7 @@
 // under the top bar on wide screens and as a bottom tray on narrow ones (it
 // never floats over the canvas, so native ink overlays can't cover it).
 import { computed } from "vue";
-import { Pen, Highlighter, Eraser, MousePointer2, Type, Hand, Undo2, Redo2, ZoomIn, ZoomOut, Scan, Trash, SquarePen, Rows3 } from "@lucide/vue";
+import { Pen, Highlighter, Eraser, MousePointer2, LassoSelect, Type, Hand, Undo2, Redo2, ZoomIn, ZoomOut, Scan, Trash, SquarePen, Rows3 } from "@lucide/vue";
 import IconBtn from "./ui/IconBtn.vue";
 import type { EditorState, Tool } from "../editor/engine";
 import { HIGHLIGHTER_COLORS, HIGHLIGHTER_WIDTHS, PEN_COLORS, PEN_WIDTHS, TEXT_SIZES, useSettings } from "../stores/settings";
@@ -19,25 +19,27 @@ const tools: { t: Tool; label: string; icon: any; key: string }[] = [
   { t: "highlighter", label: "Highlighter", icon: Highlighter, key: "M" },
   { t: "eraser", label: "Stroke eraser", icon: Eraser, key: "E" },
   { t: "select", label: "Select and move", icon: MousePointer2, key: "V" },
+  { t: "lasso", label: "Lasso select", icon: LassoSelect, key: "L" },
   { t: "text", label: "Text", icon: Type, key: "T" },
   { t: "hand", label: "Pan", icon: Hand, key: "H" },
 ];
 
+const selecting = computed(() => props.state.tool === "select" || props.state.tool === "lasso");
 const colors = computed(() => (props.state.tool === "highlighter" ? HIGHLIGHTER_COLORS : PEN_COLORS));
 const currentColor = computed(() =>
   props.state.tool === "highlighter" ? settings.s.highlighterColor : props.state.tool === "text" ? settings.s.textColor : settings.s.penColor,
 );
-const showStyle = computed(() => ["pen", "highlighter", "text"].includes(props.state.tool) || (props.state.tool === "select" && props.state.selectionCount > 0));
+const showStyle = computed(() => ["pen", "highlighter", "text"].includes(props.state.tool) || (selecting.value && props.state.selectionCount > 0));
 
 function setColor(c: string) {
   const t = props.state.tool;
   if (t === "highlighter") settings.s.highlighterColor = c;
   else if (t === "text") settings.s.textColor = c;
-  else if (t === "select") emit("restyle", { color: c });
+  else if (selecting.value) emit("restyle", { color: c });
   else settings.s.penColor = c;
 }
 function isActiveColor(c: string) {
-  return props.state.tool !== "select" && currentColor.value === c;
+  return !selecting.value && currentColor.value === c;
 }
 const sizes = computed(() => {
   const t = props.state.tool;
@@ -48,11 +50,11 @@ const sizes = computed(() => {
 });
 // Text locks to ruled and dotted paper's rows. With the Text tool this button sets how new text
 // is placed; with text selected it changes the selection.
-const showRowLock = computed(() => props.state.pageHasRows && (props.state.tool === "text" || (props.state.tool === "select" && props.state.selectionHasText)));
-const rowLocked = computed(() => (props.state.tool === "select" ? !props.state.selectionTextFree : !settings.s.textFreePlacement));
+const showRowLock = computed(() => props.state.pageHasRows && (props.state.tool === "text" || (selecting.value && props.state.selectionHasText)));
+const rowLocked = computed(() => (selecting.value ? !props.state.selectionTextFree : !settings.s.textFreePlacement));
 function toggleRowLock() {
   const free = rowLocked.value;
-  if (props.state.tool === "select") emit("freePlacement", free);
+  if (selecting.value) emit("freePlacement", free);
   else settings.s.textFreePlacement = free;
 }
 function setSize(v: number) {
@@ -97,7 +99,7 @@ function setSize(v: number) {
       <IconBtn :label="rowLocked ? 'Text locked to rows (click for free placement)' : 'Free text placement (click to lock to rows)'" :active="rowLocked" role="switch" :aria-checked="rowLocked" @click="toggleRowLock"><Rows3 :size="20" /></IconBtn>
     </template>
 
-    <template v-if="state.tool === 'select' && state.selectionCount > 0">
+    <template v-if="selecting && state.selectionCount > 0">
       <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
       <IconBtn v-if="state.selectionCount === 1 && state.selectionHasText" label="Edit text" shortcut="Enter" @click="emit('editText')"><SquarePen :size="20" /></IconBtn>
       <IconBtn label="Delete selection" shortcut="Del" @click="emit('deleteSelection')"><Trash :size="20" /></IconBtn>

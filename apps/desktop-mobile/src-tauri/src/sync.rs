@@ -66,6 +66,8 @@ type Engine = SyncEngine<HttpTransport>;
 type Reply<T> = Sender<Result<T, String>>;
 
 const IDLE_INTERVAL: Duration = Duration::from_secs(60);
+/// Replaces [`IDLE_INTERVAL`] while the OS battery saver is on. Local edits still sync at once.
+const SAVER_INTERVAL: Duration = Duration::from_secs(300);
 const DEBOUNCE: Duration = Duration::from_millis(1500);
 /// How long a browser sign-in may take before it is abandoned.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -573,9 +575,12 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
     };
     let unauth = |e: &SyncError| matches!(e, SyncError::Transport(t) if is_unauthenticated(t));
     loop {
-        let wait = due.map_or(IDLE_INTERVAL, |d| {
-            d.saturating_duration_since(Instant::now())
-        });
+        let idle = if crate::power::saver() {
+            SAVER_INTERVAL
+        } else {
+            IDLE_INTERVAL
+        };
+        let wait = due.map_or(idle, |d| d.saturating_duration_since(Instant::now()));
         match rx.recv_timeout(wait) {
             Ok(Cmd::Nudge) => {
                 let d = Instant::now() + DEBOUNCE;

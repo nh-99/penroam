@@ -1,0 +1,43 @@
+move 1037 32
+down 1
+up 1
+sleep 500
+type Lasso check
+key Return
+sleep 2000
+drag 300 300 400 340 20
+drag 300 500 400 540 20
+key l
+sleep 300
+move 270 270
+down 1
+sleep 60
+move 355 270
+sleep 60
+move 440 270
+sleep 60
+move 440 320
+sleep 60
+move 440 370
+sleep 60
+move 355 370
+sleep 60
+move 270 370
+sleep 60
+move 270 320
+sleep 60
+up 1
+sleep 800
+shot lasso-selected
+key Delete
+sleep 2500
+shot lasso-deleted
+quit
+start
+sleep 2500
+move 120 200
+down 1
+up 1
+sleep 2500
+shot tool-remembered
+quit

@@ -55,7 +55,9 @@ cd ../../android && ./gradlew :boox-ink:testDebugUnitTest          # JVM tests o
 tools/boox-check.sh                                                # on-device plumbing check + manual checklist
 ```
 
-Details: [`platforms/boox.md`](platforms/boox.md).
+Details: [`platforms/boox.md`](platforms/boox.md). Other Android tablets, including the S Pen:
+[`platforms/android.md`](platforms/android.md). What is verified on which device:
+[`platforms/capabilities.md`](platforms/capabilities.md).
 
 ## iOS / iPadOS
 

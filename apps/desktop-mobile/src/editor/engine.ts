@@ -19,7 +19,9 @@ import {
   hitTest,
   hitTestSegment,
   isUniform,
+  lassoHitsStroke,
   pieceCount,
+  pointInPolygon,
   rectsIntersect,
   stablePieceCount,
   strokeBounds,
@@ -27,7 +29,7 @@ import {
   type Rect,
 } from "./geometry";
 import { newId } from "./ids";
-import { classifyPointer, PALM_CONTACT_PX, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
+import { classifyPointer, PALM_CONTACT_PX, PENCIL_CURVE, penErases, pressureArrived, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
 import { PdfCache, PdfPageRenderer } from "./pdf";
 import { drawText, elementBounds, PageRenderer, paintOf, textBounds, type Ink, type Text } from "./renderer";
 import type { PageSession, SaveState } from "./session";
@@ -38,7 +40,7 @@ import { rowPitchOf, snapToRow } from "./templates";
 import { contentHeight, firstBaseline, lineHeight, metrics, TEXT_FONT_FAMILY } from "./textLayout";
 import { backingScale, clampScale, constrain, fitPage, fitWidth, toDoc, zoomAbout, type ViewTransform } from "./viewport";
 
-export type Tool = "pen" | "highlighter" | "eraser" | "select" | "text" | "hand";
+export type Tool = "pen" | "highlighter" | "eraser" | "select" | "lasso" | "text" | "hand";
 export const DRAW_TOOLS: Tool[] = ["pen", "highlighter", "eraser"];
 
 export interface ToolSettings {
@@ -61,6 +63,10 @@ export interface EditorSettings {
   useNativeInk: boolean;
   /** Touches wider than this (CSS px) count as palms; `Infinity` turns size filtering off (iOS). */
   palmContactPx: number;
+  /** Pens are Apple Pencils, whose force needs the Pencil curve (iOS). */
+  pencilCurve: boolean;
+  /** Use the detail layer for any zoom past fit width, because the page layers blur there too (iOS). */
+  detailWhenZoomed: boolean;
 }
 
 export interface EditorState {
@@ -115,7 +121,8 @@ interface EraseGesture {
 type SelectDrag =
   | { kind: "move"; pointerId: number; start: [number, number]; dx: number; dy: number; moved: boolean; guides: Guide[]; tapEdits?: boolean }
   | { kind: "resize"; pointerId: number; start: [number, number]; orig: TextBlock; width: number; height: number }
-  | { kind: "band"; pointerId: number; start: [number, number]; end: [number, number] };
+  | { kind: "band"; pointerId: number; start: [number, number]; end: [number, number] }
+  | { kind: "lasso"; pointerId: number; points: [number, number][] };
 
 interface TextEdit {
   id: string;
@@ -142,7 +149,7 @@ export class InkEditor {
     textFreePlacement: false,
     pressure: true,
   };
-  settings: EditorSettings = { penOnly: "auto", mono: false, maxCanvasPixels: 16_000_000, useNativeInk: true, palmContactPx: PALM_CONTACT_PX };
+  settings: EditorSettings = { penOnly: "auto", mono: false, maxCanvasPixels: 16_000_000, useNativeInk: true, palmContactPx: PALM_CONTACT_PX, pencilCurve: false, detailWhenZoomed: false };
   selection = new Set<string>();
   penSeen = false;
 
@@ -173,6 +180,11 @@ export class InkEditor {
   private fingerDraw: { pointerId: number; x: number; y: number } | null = null;
   private penDown = false;
   private penLiftedAt = -Infinity;
+  /** The tool before the last change, for the Pencil's "switch to previous tool". */
+  private previousTool: Tool = "pen";
+  private hoverShown = false;
+  private dprQuery: MediaQueryList | null = null;
+  private onDprChange = () => this.watchDpr();
   private spaceDown = false;
   private frameRequested = false;
   private settleTimer: number | null = null;
@@ -206,7 +218,7 @@ export class InkEditor {
     this.world = document.createElement("div");
     this.world.className = "penroam-page absolute left-0 top-0 origin-top-left";
     viewport.appendChild(this.world);
-    this.renderer = new PageRenderer(this.world, () => this.session?.page.elements ?? []);
+    this.renderer = new PageRenderer(this.world, () => this.session?.page.elements ?? [], viewport);
 
     this.overlay = document.createElement("div");
     this.overlay.className = "absolute inset-0";
@@ -267,6 +279,7 @@ export class InkEditor {
     if (this.sampleEvent === "pointerrawupdate") on(viewport, "pointerrawupdate", (e: PointerEvent) => this.onMove(e));
     on(viewport, "pointerup", (e: PointerEvent) => this.onUp(e, false));
     on(viewport, "pointercancel", (e: PointerEvent) => this.onUp(e, true));
+    on(viewport, "pointerleave", () => this.clearHover());
     on(viewport, "lostpointercapture", (e: PointerEvent) => this.onLostCapture(e));
     on(viewport, "wheel", (e: WheelEvent) => this.onWheel(e), { passive: false });
     on(viewport, "contextmenu", (e: Event) => e.preventDefault());
@@ -302,11 +315,26 @@ export class InkEditor {
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(viewport);
     this.resize();
+    this.watchDpr();
+  }
+
+  /**
+   * Dragging the window to a display with another scale keeps its CSS size, so the resize
+   * observer stays silent. `resolution` queries match one exact value, so this re-arms each time.
+   */
+  private watchDpr() {
+    this.dprQuery?.removeEventListener("change", this.onDprChange);
+    this.dprQuery = null;
+    if (typeof matchMedia === "undefined") return;
+    if ((window.devicePixelRatio || 1) !== this.dpr) this.resize();
+    this.dprQuery = matchMedia(`(resolution: ${this.dpr}dppx)`);
+    this.dprQuery.addEventListener?.("change", this.onDprChange);
   }
 
   dispose() {
     this.endTextEdit();
     this.ro.disconnect();
+    this.dprQuery?.removeEventListener?.("change", this.onDprChange);
     this.disposers.forEach((d) => d());
     this.pdf.cancel();
     if (this.settleTimer) clearTimeout(this.settleTimer);
@@ -385,6 +413,7 @@ export class InkEditor {
     for (const id of [...this.selection]) if (!s.elementById(id)) this.selection.delete(id);
     this.renderer.template = s.page.template;
     this.renderer.renderAll(this.visibleDocRect());
+    this.scheduleSettle(); // the redraw replaced any change of resolution in progress
     if (this.native?.ownsCommittedInk && this.nativeMounted) this.nativeCall((n) => n.loadCommittedInk(this.inkElements()));
     if (this.selection.size) this.updateSelectionBox();
     this.emitAll();
@@ -411,7 +440,10 @@ export class InkEditor {
   setMono(mono: boolean) {
     this.settings.mono = mono;
     this.renderer.opts.mono = mono;
-    if (this.session) this.renderer.renderAll();
+    if (this.session) {
+      this.renderer.renderAll();
+      this.scheduleSettle();
+    }
   }
 
   setSettings(s: Partial<EditorSettings>) {
@@ -515,6 +547,7 @@ export class InkEditor {
     const { scale, ox, oy } = this.transform;
     this.world.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
     this.world.style.setProperty("--inv", String(1 / scale));
+    this.renderer.setView(this.transform);
     this.emit({ scale });
     if (notifyNative) this.syncNativeTransform();
     this.scheduleSettle();
@@ -529,13 +562,22 @@ export class InkEditor {
     this.settleTimer = window.setTimeout(() => {
       this.settleTimer = null;
       const want = this.wantedRes();
-      const cur = this.renderer.res;
+      const cur = this.renderer.targetRes;
       if (Math.abs(want - cur) / cur > 0.08) {
-        this.renderer.setResolution(want);
-        this.renderer.renderAll(this.visibleDocRect());
-        if (this.background) void this.renderPdf();
-      }
+        this.renderer.rescale(want, this.visibleDocRect(), () => {
+          if (this.background) void this.renderPdf();
+          this.syncDetail();
+        });
+      } else this.syncDetail();
     }, 160);
+  }
+
+  /** Past what the page layers can hold, the visible area gets its own sharp layer. */
+  private syncDetail() {
+    const want = this.transform.scale * this.dpr;
+    const zoomedIn = this.settings.detailWhenZoomed && this.transform.scale > this.fitTransform("width").scale * 1.1;
+    if (!zoomedIn && want <= this.renderer.targetRes * 1.08) return this.renderer.hideDetail();
+    this.renderer.showDetail(this.visibleDocRect(), want, this.settings.maxCanvasPixels, this.dpr);
   }
 
   // ======================================================= search ==
@@ -599,11 +641,20 @@ export class InkEditor {
     if (tool === this.tool) return;
     this.endTextEdit();
     this.cancelGestures();
-    if (tool !== "select") this.clearSelection();
+    if (tool !== "select" && tool !== "lasso") this.clearSelection();
+    this.previousTool = this.tool;
     this.tool = tool;
     this.viewport.dataset.tool = tool;
+    this.clearHover();
     this.emit({ tool });
     this.updateNative();
+    this.updateSelectionBox();
+  }
+
+  /** Follows the system's Apple Pencil double-tap preference. Other actions are not ours to do. */
+  pencilTap(action: string) {
+    if (action === "switchEraser") this.setTool(this.tool === "eraser" ? this.previousTool : "eraser");
+    else if (action === "switchPrevious") this.setTool(this.previousTool);
   }
 
   setToolSettings(t: Partial<ToolSettings>) {
@@ -675,7 +726,7 @@ export class InkEditor {
 
   private effectiveTool(e: PointerEvent): Tool {
     if (this.spaceDown) return "hand";
-    if (e.pointerType === "pen" && ((e.buttons & 32) !== 0 || e.button === 5)) return "eraser";
+    if (penErases(e)) return "eraser";
     return this.tool;
   }
 
@@ -702,6 +753,7 @@ export class InkEditor {
     if (e.pointerType === "pen") {
       this.markPenSeen();
       this.abandonFingerDraw();
+      this.clearHover();
       // WKWebView gets the Pencil as well as the native capture, which commits the stroke itself
       if (this.native?.kind === "ios-pencil" && this.nativeVisible) {
         e.preventDefault();
@@ -743,13 +795,41 @@ export class InkEditor {
       case "eraser":
         return this.beginErase(e);
       case "select":
+      case "lasso":
         return this.beginSelect(e);
       case "text":
         return this.textTap(e);
     }
   }
 
+  /**
+   * The nib's footprint while a pen hovers (S Pen, Apple Pencil on M2 iPads, most desktop pens).
+   * Off in the ePaper theme, where every update of the ring would be a visible refresh.
+   */
+  private drawHover(e: PointerEvent) {
+    if (this.settings.mono || !DRAW_TOOLS.includes(this.tool)) return;
+    const [x, y] = this.docPoint(e);
+    const { scale } = this.transform;
+    const width = this.tool === "highlighter" ? this.tools.highlighterWidth : this.tool === "pen" ? this.tools.penWidth : (ERASER_RADIUS_PX * 2) / scale;
+    const r = Math.max(width / 2, 2 / scale);
+    this.clearScreen(this.tctx);
+    this.screenCtx(this.tctx);
+    this.tctx.strokeStyle = "rgba(100,100,100,0.8)";
+    this.tctx.lineWidth = 1 / scale;
+    this.tctx.beginPath();
+    this.tctx.arc(x, y, r, 0, Math.PI * 2);
+    this.tctx.stroke();
+    this.hoverShown = true;
+  }
+
+  private clearHover() {
+    if (!this.hoverShown) return;
+    this.hoverShown = false;
+    this.clearScreen(this.tctx);
+  }
+
   private onMove(e: PointerEvent) {
+    if (e.pointerType === "pen" && e.buttons === 0 && e.type === "pointermove" && !this.active && !this.erase && !this.drag) return this.drawHover(e);
     if (this.fingerDraw?.pointerId === e.pointerId) [this.fingerDraw.x, this.fingerDraw.y] = this.viewportPoint(e);
     if (this.touches.has(e.pointerId) || this.pan?.pointerId === e.pointerId) {
       if (e.type === "pointermove") this.navigate(e);
@@ -767,7 +847,7 @@ export class InkEditor {
       if (this.hasPredicted) {
         const pr: PointerEvent[] = (e as any).getPredictedEvents?.() ?? [];
         // predicted samples are an ephemeral preview only; never stored
-        a.predicted = pr.map((pe) => samplePoint(pe, this.rect!, this.transform, a.t0));
+        a.predicted = pr.map((pe) => samplePoint(pe, this.rect!, this.transform, a.t0, false, this.settings.pencilCurve));
       }
       this.scheduleFrame();
       return;
@@ -796,7 +876,7 @@ export class InkEditor {
     if (this.active?.pointerId === e.pointerId) {
       if (cancelled) return this.cancelStroke();
       const a = this.active;
-      const p = samplePoint(e, this.rect!, this.transform, a.t0);
+      const p = samplePoint(e, this.rect!, this.transform, a.t0, false, this.settings.pencilCurve);
       const last = a.stroke.points[a.stroke.points.length - 1];
       if (!last || last.x !== p.x || last.y !== p.y) a.stroke.points.push(p);
       return this.finishStroke();
@@ -928,6 +1008,7 @@ export class InkEditor {
         pointerWidth: e.width,
         pointerHeight: e.height,
         userAgent: navigator.userAgent,
+        ...(this.settings.pencilCurve && kind === "pen" ? { pressureCurve: PENCIL_CURVE } : {}),
       },
       points: [],
     };
@@ -937,11 +1018,13 @@ export class InkEditor {
   }
 
   private addSample(a: ActiveStroke, e: PointerEvent, coalesced: boolean) {
-    const p = samplePoint(e, this.rect!, this.transform, a.t0, coalesced);
+    const p = samplePoint(e, this.rect!, this.transform, a.t0, coalesced, this.settings.pencilCurve);
     const pts = a.stroke.points;
     const last = pts[pts.length - 1];
     if (last && last.x === p.x && last.y === p.y && last.pressure === p.pressure) return;
     pts.push(p);
+    const s = a.stroke;
+    if (!s.pressure && s.tool === "pen" && this.tools.pressure && pressureArrived(e.pointerType, e.pressure)) s.pressure = true;
     if (e.twist) a.stroke.input.twistSeen = true;
   }
 
@@ -1137,6 +1220,11 @@ export class InkEditor {
       this.drag = { kind: "move", pointerId: e.pointerId, start: p, dx: 0, dy: 0, moved: false, guides: [] };
       return;
     }
+    if (this.tool === "lasso") {
+      this.clearSelection();
+      this.drag = { kind: "lasso", pointerId: e.pointerId, points: [p] };
+      return;
+    }
     const hit = this.hitElement(p[0], p[1]);
     if (hit) {
       this.selection = new Set([hit.id]);
@@ -1179,6 +1267,7 @@ export class InkEditor {
   private dragTo(p: [number, number], freehand = false) {
     const d = this.drag!;
     if (d.kind === "band") d.end = p;
+    else if (d.kind === "lasso") d.points.push(p);
     else if (d.kind === "move") {
       d.dx = p[0] - d.start[0];
       d.dy = p[1] - d.start[1];
@@ -1256,6 +1345,20 @@ export class InkEditor {
     this.clearScreen(this.tctx);
     this.screenCtx(this.tctx);
     const ctx = this.tctx;
+    if (d.kind === "lasso") {
+      ctx.save();
+      ctx.strokeStyle = "rgba(37,99,235,0.9)";
+      ctx.fillStyle = "rgba(37,99,235,0.08)";
+      ctx.lineWidth = 1 / this.transform.scale;
+      ctx.setLineDash([4 / this.transform.scale, 3 / this.transform.scale]);
+      ctx.beginPath();
+      d.points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
     if (d.kind === "band") {
       ctx.save();
       ctx.strokeStyle = "rgba(37,99,235,0.9)";
@@ -1307,6 +1410,12 @@ export class InkEditor {
     this.clearScreen(this.tctx);
     const s = this.session;
     if (!d || !s) return;
+    if (d.kind === "lasso") {
+      if (d.points.length < 3) return this.clearSelection();
+      const ids = s.page.elements.filter((e) => this.lassoCatches(e, d.points)).map((e) => e.id);
+      this.selection = new Set(ids);
+      return this.updateSelectionBox();
+    }
     if (d.kind === "band") {
       const r: Rect = [Math.min(d.start[0], d.end[0]), Math.min(d.start[1], d.end[1]), Math.max(d.start[0], d.end[0]), Math.max(d.start[1], d.end[1])];
       if (r[2] - r[0] < 1 && r[3] - r[1] < 1) return this.clearSelection();
@@ -1339,16 +1448,22 @@ export class InkEditor {
     if (changed && after.length) {
       s.commit({ label: d.kind === "move" ? "Move" : "Resize text", forward: [{ op: "replaceElements", elements: after }], inverse: [{ op: "replaceElements", elements: before }] });
     }
-    // only the select tool keeps a selection
-    if (this.tool !== "select") this.clearSelection();
+    // only the selection tools keep a selection
+    if (this.tool !== "select" && this.tool !== "lasso") this.clearSelection();
     this.updateSelectionBox();
+  }
+
+  private lassoCatches(e: Element, poly: [number, number][]): boolean {
+    if (e.type === "ink") return lassoHitsStroke(e, poly);
+    const b = elementBounds(e);
+    return pointInPolygon((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, poly);
   }
 
   private cancelDrag() {
     const d = this.drag;
     this.drag = null;
     this.clearScreen(this.tctx);
-    if (d && d.kind !== "band") this.hideSelection(false);
+    if (d && d.kind !== "band" && d.kind !== "lasso") this.hideSelection(false);
   }
 
   clearSelection() {
@@ -1376,7 +1491,7 @@ export class InkEditor {
     // drop ids that no longer exist (undo/redo)
     for (const id of [...this.selection]) if (!this.session?.elementById(id)) this.selection.delete(id);
     const b = this.selectionBounds();
-    const show = !!b && this.tool === "select";
+    const show = !!b && (this.tool === "select" || this.tool === "lasso");
     this.selBox.classList.toggle("hidden", !show);
     const t = this.singleSelectedText();
     this.selHandle.classList.toggle("hidden", !show || !t);
@@ -1637,7 +1752,7 @@ export class InkEditor {
     this.native = null;
     this.nativeMounted = false;
     this.nativeVisible = false;
-    this.renderer.ink.style.visibility = "";
+    this.renderer.setInkHidden(false);
     this.emit({ nativeActive: false });
     n?.unmount().catch(() => {});
   }
@@ -1662,6 +1777,7 @@ export class InkEditor {
         await nn.mount(this.surfaceRect(), this.transform, this.nativeTool(), this.inkElements(), {
           strokeFinalized: (s) => this.onNativeStroke(s),
           penState: (down) => this.onNativePen(down),
+          pencilTap: (action) => this.pencilTap(action),
           erased: (ids) => this.onNativeErased(ids),
           viewport: (t) => this.setTransform(t, true),
           error: (m) => this.cb.onError(m),
@@ -1682,11 +1798,11 @@ export class InkEditor {
         await nn.setViewportTransform(this.transform);
         await nn.setVisible(true);
         // native now shows the committed ink: hide ours to avoid doubled edges
-        if (owns && this.nativeVisible) requestAnimationFrame(() => (this.renderer.ink.style.visibility = "hidden"));
+        if (owns && this.nativeVisible) requestAnimationFrame(() => this.renderer.setInkHidden(true));
       });
     } else {
       // show web ink first, then remove the native layer: no blank frame
-      this.renderer.ink.style.visibility = "";
+      this.renderer.setInkHidden(false);
       this.penDown = false; // the surface can no longer report a pen-up
       this.nativeCall((nn) => nn.setVisible(false));
     }
@@ -1742,7 +1858,7 @@ export class InkEditor {
     if (!this.native || !this.nativeMounted) return;
     this.nativeMounted = false;
     this.nativeVisible = false;
-    this.renderer.ink.style.visibility = "";
+    this.renderer.setInkHidden(false);
     const n = this.native;
     this.nativeQueue = this.nativeQueue.then(() => n.unmount()).catch(() => {});
     await this.nativeQueue;
@@ -1775,6 +1891,14 @@ export class InkEditor {
   visibleRedraw(): number {
     this.renderer.renderInkProgressive(this.visibleDocRect());
     return this.renderer.lastVisibleRedrawMs;
+  }
+
+  /** A settled zoom's redraw: the longest slice is the longest that input can be kept waiting; ms. */
+  async rescaleBench(): Promise<{ totalMs: number; longestSliceMs: number }> {
+    const t0 = performance.now();
+    this.renderer.rescale(this.renderer.res * 1.2, this.visibleDocRect());
+    await this.renderer.whenComplete();
+    return { totalMs: performance.now() - t0, longestSliceMs: this.renderer.lastLongestSliceMs };
   }
 
   /** Full redraw of all layers' ink at the current resolution; ms (GPU-flushed). */

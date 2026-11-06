@@ -12,8 +12,8 @@ account, a server or a subscription.
 ## Highlights
 
 - **Write naturally.** A pressure-sensitive pen, a highlighter and a stroke eraser (including
-  your stylus's eraser button). On BOOX e-ink tablets, ink is drawn by the device's own
-  low-latency pen layer.
+  your stylus's eraser end or side button). On BOOX e-ink tablets, ink is drawn by the device's
+  own low-latency pen layer.
 - **Ink and typing together.** Type on the rows of ruled or dotted paper, or place text
   anywhere on the page, then move it, resize it, recolour it or change its size alongside your
   handwriting.
@@ -85,6 +85,7 @@ to download the notebook.
 | Highlighter | `M` | Translucent marker |
 | Eraser | `E` | Removes whole strokes |
 | Select | `V` | Drag a box around ink or text to move or delete it |
+| Lasso | `L` | Draw a loop around ink or text to select it, then drag inside the selection to move it |
 | Text | `T` | Click where you want to type, click a text box to edit it, or drag one to move it. `Esc` finishes the text box |
 | Pan | `H` | Move around the page |
 
@@ -124,6 +125,14 @@ description, because Penroam doesn't fetch anything from the web for a note.
 
 Undo and redo with `Ctrl+Z` / `Ctrl+Shift+Z`. Zoom with `Ctrl` and the mouse wheel, a pinch on a
 touchpad or touchscreen, or `Ctrl+=` / `Ctrl+-`. `Ctrl+0` fits the page to the window width.
+
+Penroam remembers your last tool on each device.
+
+**Pens.** A pen's eraser end erases, and so does holding its side button, including on an S Pen.
+If your pen hovers, a ring shows where it will touch down. On an iPad, double-tapping the Apple
+Pencil does what you chose in iPadOS Settings: switch to the eraser or to your previous tool.
+**Settings → General** shows how pen input works on your device. S Pen and desktop pen support
+has not been tested on real hardware yet, so tell us how it goes.
 
 On a touchscreen, **Settings** decides what your fingers do:
 
