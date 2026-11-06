@@ -3,6 +3,16 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { isMobile } from "./device";
 import type { ApplyOutcome } from "../generated/ApplyOutcome";
+import type { ArchiveSummary } from "../generated/ArchiveSummary";
+import type { BackupPreview } from "../generated/BackupPreview";
+import type { BackupProblem } from "../generated/BackupProblem";
+import type { ConflictPolicy } from "../generated/ConflictPolicy";
+import type { HistoryStats } from "../generated/HistoryStats";
+import type { ImportLoss } from "../generated/ImportLoss";
+import type { NotebookRestore } from "../generated/NotebookRestore";
+import type { RestoreReport } from "../generated/RestoreReport";
+import type { RemoteFile } from "../generated/RemoteFile";
+import type { TextExport } from "../generated/TextExport";
 import type { ErrorCode } from "../generated/ErrorCode";
 import type { RenderedMath } from "../generated/RenderedMath";
 import type { ExportReport } from "../generated/ExportReport";
@@ -15,6 +25,25 @@ import type { Paper } from "../generated/Paper";
 import type { RecoveryReport } from "../generated/RecoveryReport";
 import type { Template } from "../generated/Template";
 import type { Size } from "../generated/Size";
+
+/** One restorable version. Those older than this device's own record come from the account. */
+export interface HistoryRow {
+  pageId: string;
+  revision: number | null;
+  position: number | null;
+  at: number;
+  added: number;
+  removed: number;
+}
+
+/** Where automatic backups go. */
+export type AutoTarget = { kind: "folder"; dir: string } | { kind: "webdav"; url: string; user: string };
+
+export interface BackupResult {
+  bytes: number;
+  notebooks: number;
+  unreadable: BackupProblem[];
+}
 
 export class CommandError extends Error {
   constructor(
@@ -96,6 +125,34 @@ export const api = {
     call<{ notebook: Notebook; pages: Page[] }>("import_pdf", { notebookId, path, fileName, index }),
   exportNotebook: (notebookId: string, path: string) => call<{ bytes: number; pages: number }>("export_notebook", { notebookId, path }),
   importNotebook: (path: string) => call<ImportReport>("import_notebook", { path }),
+  inspectNotebook: (path: string) => call<ArchiveSummary>("inspect_notebook", { path }),
+  importDocument: (path: string, fileName: string) => call<{ notebook: Notebook; report: ImportLoss }>("import_document", { path, fileName }),
+  exportPages: (notebookId: string, pages: string[], path: string) => call<{ bytes: number; pages: number }>("export_pages", { notebookId, pages, path }),
+  exportBackup: (path: string) => call<BackupResult>("export_backup", { path }),
+  autoBackup: (target: AutoTarget) => call<BackupResult>("auto_backup", { target }),
+  webdavConnect: (url: string, user: string, password: string) => call<RemoteFile[]>("webdav_connect", { url, user, password }),
+  webdavDisconnect: () => call<void>("webdav_disconnect"),
+  webdavBackups: (url: string, user: string) => call<RemoteFile[]>("webdav_backups", { url, user }),
+  webdavFetch: (url: string, user: string, name: string) => call<string>("webdav_fetch", { url, user, name }),
+  discardFetched: (path: string) => call<void>("discard_fetched", { path }),
+  previewBackup: (path: string) => call<BackupPreview>("preview_backup", { path }),
+  restoreBackup: (path: string, onConflict: ConflictPolicy) => call<RestoreReport>("restore_backup", { path, options: { onConflict } }),
+  exportNotebookText: (notebookId: string, path: string, markdown: boolean) =>
+    call<{ pages: number; textBlocks: number; warnings: string[] }>("export_notebook_text", { notebookId, path, markdown }),
+  pagePlainText: (notebookId: string, pageId: string) => call<TextExport>("page_plain_text", { notebookId, pageId }),
+  exportPageSvg: (notebookId: string, pageId: string, path: string) => call<string[]>("export_page_svg", { notebookId, pageId, path }),
+  async saveRenderedFile(path: string, bytes: Uint8Array): Promise<void> {
+    await invoke("save_rendered_file", isMobile() ? Array.from(bytes) : bytes, { headers: { "x-path": encodeURIComponent(path) } }).catch((e) => {
+      throw new CommandError(e?.code ?? "io", e?.message ?? String(e));
+    });
+  },
+  pageHistory: (notebookId: string, pageId: string) => call<HistoryRow[]>("page_history", { notebookId, pageId }),
+  pageVersion: (notebookId: string, pageId: string, revision: number | null, position: number | null) => call<Page>("page_version", { notebookId, pageId, revision, position }),
+  restorePageVersion: (notebookId: string, pageId: string, revision: number | null, position: number | null) =>
+    call<ApplyOutcome>("restore_page_version", { notebookId, pageId, revision, position }),
+  restoreNotebookVersion: (notebookId: string, at: number, fromAccount: boolean) => call<NotebookRestore>("restore_notebook_version", { notebookId, at, fromAccount }),
+  historyStats: (notebookId: string) => call<HistoryStats>("history_stats", { notebookId }),
+  clearHistory: (notebookId: string) => call<void>("clear_history", { notebookId }),
   notebookMath: (notebookId: string) => call<{ tex: string; display: boolean }[]>("notebook_math", { notebookId }),
   exportAnnotatedPdf: (notebookId: string, path: string, math: RenderedMath[]) => call<ExportReport>("export_annotated_pdf", { notebookId, path, math }),
   printNotebook: (notebookId: string, currentPage: string | null, math: RenderedMath[]) => call<{ status: PrintStatus; report: ExportReport }>("print_notebook", { notebookId, currentPage, math }),

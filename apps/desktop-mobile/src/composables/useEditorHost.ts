@@ -85,18 +85,26 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   }
 
   /** Renders a page that is not open into a small PNG (detached canvases). */
-  async function renderOffscreenThumb(page: Page): Promise<Uint8Array | null> {
+  const renderOffscreenThumb = (page: Page) => renderPagePng(page, 240);
+
+  /**
+   * Renders any page, including a past version, to a PNG `width` pixels wide. The PDF
+   * behind it is drawn at that resolution from the original, so `width` sets the detail.
+   */
+  async function renderPagePng(page: Page, width: number): Promise<Uint8Array | null> {
     const host = document.createElement("div");
     const r = new PageRenderer(host, () => page.elements);
     r.setPage(page.size.width, page.size.height, page.template);
     r.opts.mono = settings.effectiveTheme() === "epaper";
-    const res = Math.min(2, 480 / page.size.width);
+    const res = Math.min(Math.max(2, width / page.size.width), (2 * width) / page.size.width);
     r.setResolution(res);
     if (page.background && pdfCache) {
       r.pdfBitmap = await new PdfPageRenderer().render(pdfCache, page.background, res).catch(() => null);
     }
+    const nb = lib.current;
+    if (nb) await r.loadImages(page.elements, (hash) => api.readAsset(nb.id, hash));
     r.renderAll(null);
-    return r.thumbnail(240);
+    return r.thumbnail(width);
   }
 
   /** Imported notebooks have no thumbnails: render the missing ones in the background. */
@@ -220,6 +228,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     const e = new InkEditor(viewport.value!, {
       onState: (s) => Object.assign(state, s),
       onError: (m) => ui.error(m),
+      readAsset: (hash) => api.readAsset(lib.current!.id, hash),
       onPageEdited: () => void thumbnailNow(),
     });
     editor.value = e;
@@ -294,5 +303,5 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     if (remotePending.size && !remoteTimer) remoteTimer = setTimeout(() => void applyRemoteChanges(), 50);
   }
 
-  return { state, editor, native, loading, pageError, flush, openPage, markChanged, retry: () => session?.retry(), session: () => session };
+  return { state, editor, native, loading, pageError, flush, openPage, markChanged, renderPagePng, retry: () => session?.retry(), session: () => session };
 }

@@ -238,6 +238,45 @@ impl SearchSlot {
         }
     }
 
+    /// Runs `f` on a read-only view of the index, or returns `None` if there isn't one yet.
+    fn read<T>(&self, f: impl FnOnce(&SearchIndex) -> Option<T>) -> Option<T> {
+        let path = self.shared.path.lock().ok()?.clone()?;
+        if !path.exists() {
+            return None;
+        }
+        let generation = self.shared.generation.load(Ordering::SeqCst);
+        let mut g = self.shared.reader.lock().ok()?;
+        if g.as_ref().is_none_or(|(gen, _)| *gen != generation) {
+            *g = Some((generation, SearchIndex::open_reader(&path).ok()?));
+        }
+        f(&g.as_ref()?.1)
+    }
+
+    /// The text read from a page's handwriting, with corrections applied. `None` when
+    /// nothing has been read, for instance while indexing hasn't reached it.
+    pub fn page_text(&self, notebook: Uuid, page: Uuid) -> Option<String> {
+        self.read(|r| r.page_text(notebook, page).ok())
+            .filter(|t| !t.trim().is_empty())
+    }
+
+    /// Every search correction as (notebook, page, region, text), for backups.
+    pub fn all_corrections(&self) -> Vec<(String, String, String, String)> {
+        self.read(|r| r.all_corrections().ok()).unwrap_or_default()
+    }
+
+    /// Stores a correction brought back from a backup. It is applied in order with
+    /// indexing, and attaches to its region when the page is read again.
+    pub fn restore_correction(&self, notebook: Uuid, page: Uuid, region: String, text: String) {
+        let (reply, _rx) = mpsc::channel();
+        self.send(Msg::Correct {
+            notebook,
+            page,
+            region,
+            text: Some(text),
+            reply,
+        });
+    }
+
     /// A page's content changed (edit, import, sync install).
     pub fn page_changed(&self, notebook: Uuid, page: Uuid) {
         self.send(Msg::Page(notebook, page));

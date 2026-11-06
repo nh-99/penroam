@@ -7,6 +7,15 @@ import type { PenOnlyMode } from "../editor/input";
 import type { Paper } from "../generated/Paper";
 import type { TemplateKind } from "../generated/TemplateKind";
 
+export interface AutoBackup {
+  target: "off" | "folder" | "webdav";
+  dir: string;
+  url: string;
+  user: string;
+  /** Last successful automatic backup (ms since the epoch). */
+  lastAt: number;
+}
+
 export type ThemePref = "system" | "light" | "dark" | "epaper";
 
 const KEY = "penroam.settings.v1";
@@ -18,6 +27,10 @@ interface Persisted {
   penOnly: PenOnlyMode;
   /** A stylus has been used on this device, so "auto" gives fingers pan and zoom from the start. */
   penSeen: boolean;
+  /** Don't ask before exporting notes that sync keeps encrypted. */
+  plaintextExportOk: boolean;
+  /** Automatic backups. The WebDAV password is in the keychain, not here. */
+  autoBackup: AutoBackup;
   useNativeInk: boolean;
   pressure: boolean;
   penColor: string;
@@ -41,6 +54,8 @@ const defaults: Persisted = {
   tool: "pen",
   penOnly: "auto",
   penSeen: false,
+  plaintextExportOk: false,
+  autoBackup: { target: "off", dir: "", url: "", user: "", lastAt: 0 },
   useNativeInk: true,
   pressure: true,
   penColor: "#111111",

@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search } from "@lucide/vue";
+import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search, FileText, FileImage, ClipboardCopy, History } from "@lucide/vue";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
 import { useEditorHost } from "../composables/useEditorHost";
+import { api } from "../platform/ipc";
 import Toolbar from "../components/Toolbar.vue";
 import PageSidebar from "../components/PageSidebar.vue";
 import SaveIndicator from "../components/SaveIndicator.vue";
 import SyncIndicator from "../components/SyncIndicator.vue";
 import ConflictsDialog from "../components/ConflictsDialog.vue";
+import HistoryDialog from "../components/HistoryDialog.vue";
 import { useSync } from "../stores/sync";
 import SettingsDialog from "../components/SettingsDialog.vue";
 import CloudBanner from "../components/CloudBanner.vue";
@@ -34,6 +36,7 @@ const narrow = ref(window.innerWidth < 768);
 const drawerOpen = ref(false);
 const showSettings = ref(false);
 const showConflicts = ref(false);
+const showHistory = ref(false);
 const sync = useSync();
 function openSync() {
   if ((sync.status?.conflicts ?? 0) > 0) showConflicts.value = true;
@@ -117,6 +120,33 @@ watch(
 
 const exportNb = () => lib.exportNotebook(nb.value.id, nb.value.title, host.flush);
 const exportPdf = () => lib.exportPdf(nb.value.id, nb.value.title, host.flush);
+const exportText = (markdown: boolean) => lib.exportText(nb.value.id, nb.value.title, markdown, host.flush);
+const pageFileName = () => `${nb.value.title} page ${lib.pageIndex + 1}`;
+const exportSvg = () => lib.currentPageId && lib.exportPageSvg(lib.currentPageId, pageFileName(), host.flush);
+const exportOnePage = () => lib.currentPageId && lib.exportPage(lib.currentPageId, pageFileName(), host.flush);
+const copyText = () => lib.currentPageId && lib.copyPageText(lib.currentPageId, host.flush);
+/** PNG at twice the page's size in points: sharp on paper and on high-density screens. */
+const exportPng = () => {
+  const id = lib.currentPageId;
+  if (!id) return;
+  return lib.exportPagePng(
+    pageFileName(),
+    async () => {
+      const page = await api.loadPage(nb.value.id, id);
+      return host.renderPagePng(page, Math.round(page.size.width * 2));
+    },
+    host.flush,
+  );
+};
+async function openHistory() {
+  await host.flush().catch(() => {});
+  showHistory.value = true;
+}
+function onHistoryRestored(pages: string[]) {
+  showHistory.value = false;
+  void lib.reloadCurrent();
+  host.markChanged(pages);
+}
 const print = () => lib.printNotebook(nb.value.id, lib.currentPageId, host.flush);
 
 const templates: { kind: TemplateKind; label: string }[] = [
@@ -229,7 +259,14 @@ watch(narrow, (n) => {
             <MenuItem @click="exportNb"><Download :size="16" />Notebook (.penroam, editable)…</MenuItem>
             <MenuItem @click="exportPdf"><FileDown :size="16" />Annotated PDF…</MenuItem>
             <MenuItem @click="print"><Printer :size="16" />Print…</MenuItem>
+            <MenuItem @click="exportText(true)"><FileText :size="16" />Markdown (text only)…</MenuItem>
+            <MenuItem @click="exportText(false)"><FileText :size="16" />Plain text (text only)…</MenuItem>
+            <MenuItem @click="exportPng"><FileImage :size="16" />This page as PNG…</MenuItem>
+            <MenuItem @click="exportSvg"><FileImage :size="16" />This page as SVG…</MenuItem>
+            <MenuItem @click="exportOnePage"><Download :size="16" />This page (.penroam, editable)…</MenuItem>
+            <MenuItem @click="copyText"><ClipboardCopy :size="16" />Copy this page's text</MenuItem>
           </Menu>
+          <IconBtn label="Version history" @click="openHistory"><History :size="20" /></IconBtn>
           <IconBtn class="hidden sm:inline-flex" label="Settings" @click="showSettings = true"><Settings :size="20" /></IconBtn>
         </div>
       </div>
@@ -280,6 +317,7 @@ watch(narrow, (n) => {
     </footer>
 
     <ConflictsDialog v-if="showConflicts" :notebook-id="nb.id" :current-title="nb.title" @close="showConflicts = false" @resolved="lib.reloadCurrent(); lib.currentPageId && host.markChanged([lib.currentPageId])" />
+    <HistoryDialog v-if="showHistory && lib.currentPageId" :notebook="nb" :page-id="lib.currentPageId" :render="host.renderPagePng" @close="showHistory = false" @restored="onHistoryRestored" />
     <SettingsDialog v-if="showSettings" :native-kind="host.native.value?.kind ?? null" @close="showSettings = false" />
     <SearchPanel v-if="search.panelOpen" @close="search.panelOpen = false" @open="openHit" />
     <PromptDialog v-if="renaming" title="Rename notebook" label="Title" :value="nb.title" confirm="Rename" @close="renaming = false" @submit="(t) => { lib.rename(nb.id, t); renaming = false; }" />

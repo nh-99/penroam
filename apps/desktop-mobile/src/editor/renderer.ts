@@ -646,6 +646,25 @@ export class PageRenderer {
     }
   }
 
+  /**
+   * Decodes the images a page uses that aren't loaded yet. Returns true if any were added,
+   * meaning the ink layer needs a redraw. An unreadable image keeps its placeholder.
+   */
+  async loadImages(elements: Element[], read: (hash: string) => Promise<Uint8Array>): Promise<boolean> {
+    let added = false;
+    for (const e of elements) {
+      if (e.type !== "image" || this.images.has(e.assetHash)) continue;
+      try {
+        const bytes = await read(e.assetHash);
+        this.images.set(e.assetHash, await createImageBitmap(new Blob([bytes as BlobPart])));
+        added = true;
+      } catch (err) {
+        console.warn("image", e.assetHash, err);
+      }
+    }
+    return added;
+  }
+
   /** Small PNG of the current page for the sidebar / library. */
   async thumbnail(maxWidth = 240): Promise<Uint8Array | null> {
     await this.whenComplete();

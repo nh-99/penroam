@@ -17,7 +17,9 @@
 use crate::AppState;
 use penroam_core::*;
 use penroam_storage::{
-    ApplyOutcome, ErrorCode, ImportReport, NotebookSummary, RecoveryReport, StorageError,
+    ApplyOutcome, ArchiveSummary, ErrorCode, ExportOptions, HistoryPoint, HistoryRetention,
+    HistoryStats, ImportReport, NewAsset, NewPage, NotebookRestore, NotebookSummary,
+    RecoveryReport, StorageError,
 };
 use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -54,11 +56,11 @@ impl From<penroam_pdf::PdfError> for CmdError {
     }
 }
 
-fn io_err(e: std::io::Error) -> CmdError {
+pub(crate) fn io_err(e: std::io::Error) -> CmdError {
     StorageError::from(e).into()
 }
 
-fn invalid(msg: impl Into<String>) -> CmdError {
+pub(crate) fn invalid(msg: impl Into<String>) -> CmdError {
     CmdError {
         code: ErrorCode::Invalid,
         message: msg.into(),
@@ -97,7 +99,7 @@ pub fn flush(app: &AppHandle) {
     }
 }
 
-const GENERATOR: &str = concat!("Penroam ", env!("CARGO_PKG_VERSION"));
+pub(crate) const GENERATOR: &str = concat!("Penroam ", env!("CARGO_PKG_VERSION"));
 const MAX_IMPORT_BYTES: u64 = 2 << 30;
 
 /// Result of creating a notebook or a page.
@@ -358,7 +360,7 @@ pub fn get_thumbnail(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uui
     ))
 }
 
-fn file_path(s: &str) -> R<FilePath> {
+pub(crate) fn file_path(s: &str) -> R<FilePath> {
     FilePath::from_str(s).map_err(|_| invalid("invalid file location"))
 }
 
@@ -381,7 +383,7 @@ pub(crate) fn read_user_file(app: &AppHandle, path: &str, limit: u64) -> R<Vec<u
 
 /// Writes to a user-chosen destination. The bytes are fully produced before
 /// the destination is opened, so a failed export never truncates a file.
-fn write_user_file(app: &AppHandle, path: &str, bytes: &[u8]) -> R<()> {
+pub(crate) fn write_user_file(app: &AppHandle, path: &str, bytes: &[u8]) -> R<()> {
     let mut f = app
         .fs()
         .open(
@@ -441,6 +443,35 @@ pub fn import_pdf(
     Ok(NotebookAndPages { notebook, pages })
 }
 
+/// Copies a user-chosen file into the staging folder and returns a handle that deletes
+/// it. Backups can be far larger than memory, so they are read from a local copy.
+pub(crate) fn stage_user_file(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    path: &str,
+) -> R<StagedFile> {
+    let dest = lib!(state)
+        .staging_dir()
+        .join(format!("incoming-{}", Uuid::new_v4()));
+    let mut from = app
+        .fs()
+        .open(file_path(path)?, OpenOptions::new().read(true).clone())
+        .map_err(io_err)?;
+    let staged = StagedFile(dest);
+    let mut to = std::fs::File::create(&staged.0).map_err(io_err)?;
+    std::io::copy(&mut from, &mut to).map_err(io_err)?;
+    Ok(staged)
+}
+
+/// A staging file, removed when dropped.
+pub(crate) struct StagedFile(pub(crate) std::path::PathBuf);
+
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Size of an exported archive.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -485,6 +516,534 @@ pub fn export_notebook(
     drop(buf);
     trim_heap();
     Ok(ExportResult { bytes: n, pages })
+}
+
+/// Exports the given live pages as their own `.penroam` archive.
+#[tauri::command(async)]
+pub fn export_pages(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    pages: Vec<Uuid>,
+    path: String,
+) -> R<ExportResult> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    let opts = ExportOptions {
+        pages: Some(pages),
+        ..Default::default()
+    };
+    let m = lib!(state).export_archive_with(notebook_id, &mut out, GENERATOR, &opts)?;
+    let buf = out.into_inner();
+    write_user_file(&app, &path, &buf)?;
+    Ok(ExportResult {
+        bytes: buf.len() as u64,
+        pages: m.pages.len() as u32,
+    })
+}
+
+/// Checks a `.penroam` file and describes it without importing it.
+#[tauri::command(async)]
+pub fn inspect_notebook(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> R<ArchiveSummary> {
+    let staged = stage_user_file(&app, &state, &path)?;
+    let f = std::fs::File::open(&staged.0).map_err(io_err)?;
+    Ok(lib!(state).verify_archive(f)?)
+}
+
+/// A document imported from another format.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentImport {
+    notebook: Notebook,
+    report: penroam_interchange::ImportLoss,
+}
+
+impl From<penroam_interchange::ImportError> for CmdError {
+    fn from(e: penroam_interchange::ImportError) -> Self {
+        use penroam_interchange::ImportError as E;
+        let code = match e {
+            E::Malformed(_) => ErrorCode::Archive,
+            E::TooLarge(_) => ErrorCode::TooLarge,
+        };
+        CmdError {
+            code,
+            message: e.to_string(),
+        }
+    }
+}
+
+/// The notebook title for a file: its name without the extension.
+fn title_from(name: &str) -> String {
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s).trim();
+    let title: String = stem
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(penroam_core::validate::limits::MAX_TITLE_CHARS)
+        .collect();
+    if title.trim().is_empty() {
+        "Imported notebook".into()
+    } else {
+        title
+    }
+}
+
+/// Imports a file from another format into a new notebook, chosen by its extension. The
+/// existing library isn't touched, and the report says what could not come across.
+#[tauri::command(async)]
+pub fn import_document(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    file_name: String,
+) -> R<DocumentImport> {
+    use penroam_interchange::{enex, jex, text_import, xournal};
+    state.sync.nudge();
+    let ext = file_name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    let title = title_from(&file_name);
+    let (assets, pages, report) = match ext.as_str() {
+        "pdf" => pdf_document(&app, &path, &file_name)?,
+        "xopp" | "xoj" | "enex" | "jex" | "md" | "markdown" | "txt" => {
+            let limit = match ext.as_str() {
+                "xopp" | "xoj" | "enex" | "jex" => 1 << 30,
+                _ => penroam_interchange::limits::MAX_TEXT_FILE as u64,
+            };
+            let bytes = read_user_file(&app, &path, limit)?;
+            let mut doc = match ext.as_str() {
+                "xopp" | "xoj" => xournal::import_xournal(&bytes, &title)?,
+                "enex" => enex::import_enex(&bytes, &title)?,
+                "jex" => jex::import_jex(&bytes, &title)?,
+                "md" | "markdown" => text_import::import_markdown(&bytes, &title)?,
+                _ => text_import::import_plain_text(&bytes, &title)?,
+            };
+            // a PDF packaged with the document sits behind its pages, measured like any other
+            let mut pdfs: std::collections::HashMap<String, Vec<penroam_pdf::PdfPageInfo>> =
+                Default::default();
+            for a in doc
+                .assets
+                .iter()
+                .filter(|a| a.media_type == "application/pdf")
+            {
+                match penroam_pdf::inspect(&a.bytes) {
+                    Ok(info) => {
+                        pdfs.insert(a.sha256.clone(), info);
+                    }
+                    Err(e) => doc
+                        .report
+                        .lost
+                        .push(format!("A PDF in this file can't be read: {e}")),
+                }
+            }
+            let assets = doc
+                .assets
+                .into_iter()
+                .map(|a| NewAsset {
+                    bytes: a.bytes,
+                    media_type: a.media_type,
+                    name: None,
+                })
+                .collect();
+            let pages = doc
+                .pages
+                .into_iter()
+                .map(|p| {
+                    let background = p.pdf.as_ref().and_then(|(hash, index)| {
+                        Some(pdfs.get(hash)?.get(*index as usize)?.background(hash))
+                    });
+                    NewPage {
+                        paper: if background.is_some() {
+                            Paper::Pdf
+                        } else {
+                            Paper::Custom
+                        },
+                        size: background.as_ref().map_or(p.size, |b| b.display_size()),
+                        template: p.template,
+                        background,
+                        elements: p.elements,
+                    }
+                })
+                .collect();
+            (assets, pages, doc.report)
+        }
+        _ => {
+            return Err(invalid(
+                "Penroam can import PDF, Xournal++, Evernote, Joplin, Markdown and text files",
+            ))
+        }
+    };
+    let notebook = lib!(state).create_notebook_with(&title, assets, pages)?;
+    trim_heap();
+    state.search.notebook_changed(notebook.id);
+    Ok(DocumentImport { notebook, report })
+}
+
+/// A PDF as a new notebook: the file is kept as it is and each page sits on top of it.
+fn pdf_document(
+    app: &AppHandle,
+    path: &str,
+    file_name: &str,
+) -> R<(Vec<NewAsset>, Vec<NewPage>, penroam_interchange::ImportLoss)> {
+    let bytes = read_user_file(app, path, 1 << 30)?;
+    let info = penroam_pdf::inspect(&bytes)?;
+    let hash = penroam_storage::sha256_hex(&bytes);
+    let pages: Vec<NewPage> = info
+        .iter()
+        .map(|i| {
+            let bg = i.background(&hash);
+            NewPage {
+                paper: Paper::Pdf,
+                size: bg.display_size(),
+                template: Template {
+                    kind: TemplateKind::Blank,
+                    spacing: 24.0,
+                },
+                background: Some(bg),
+                elements: Vec::new(),
+            }
+        })
+        .collect();
+    let report = penroam_interchange::ImportLoss {
+        format: "PDF".into(),
+        kept: penroam_interchange::Kept {
+            pages: pages.len() as u32,
+            ..Default::default()
+        },
+        lost: Vec::new(),
+    };
+    let asset = NewAsset {
+        bytes,
+        media_type: "application/pdf".into(),
+        name: Some(file_name.to_string()),
+    };
+    Ok((vec![asset], pages, report))
+}
+
+/// Result of a text export. The text itself goes straight to the file.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextResult {
+    pages: u32,
+    text_blocks: u32,
+    warnings: Vec<String>,
+}
+
+fn export_text_of(
+    state: &State<'_, AppState>,
+    notebook_id: Uuid,
+    only: Option<Uuid>,
+    format: penroam_interchange::text_export::TextFormat,
+) -> R<penroam_interchange::text_export::TextExport> {
+    let (title, pages) = {
+        let mut lib = lib!(state);
+        let nb = lib.notebook(notebook_id)?.clone();
+        let ids: Vec<Uuid> = match only {
+            Some(p) => vec![p],
+            None => nb.page_order.clone(),
+        };
+        let mut pages = Vec::with_capacity(ids.len());
+        for p in ids {
+            pages.push(lib.load_page(notebook_id, p)?);
+        }
+        (nb.title, pages)
+    };
+    // read after the library is released: the index has its own lock
+    Ok(penroam_interchange::text_export::export_text(
+        &title,
+        &pages,
+        format,
+        |p| state.search.page_text(notebook_id, p),
+    ))
+}
+
+/// Exports a notebook's typed text as Markdown or plain text. Lossy: see the warnings.
+#[tauri::command(async)]
+pub fn export_notebook_text(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    path: String,
+    markdown: bool,
+) -> R<TextResult> {
+    use penroam_interchange::text_export::TextFormat;
+    let format = if markdown {
+        TextFormat::Markdown
+    } else {
+        TextFormat::Plain
+    };
+    let r = export_text_of(&state, notebook_id, None, format)?;
+    write_user_file(&app, &path, r.text.as_bytes())?;
+    Ok(TextResult {
+        pages: r.pages,
+        text_blocks: r.text_blocks,
+        warnings: r.warnings,
+    })
+}
+
+/// The text of one page as plain text, for the clipboard.
+#[tauri::command(async)]
+pub fn page_plain_text(
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    page_id: Uuid,
+) -> R<penroam_interchange::text_export::TextExport> {
+    use penroam_interchange::text_export::TextFormat;
+    export_text_of(&state, notebook_id, Some(page_id), TextFormat::Plain)
+}
+
+/// Exports one page as SVG and returns what the file doesn't show.
+#[tauri::command(async)]
+pub fn export_page_svg(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    page_id: Uuid,
+    path: String,
+) -> R<Vec<String>> {
+    let r = {
+        let mut lib = lib!(state);
+        let page = lib.load_page(notebook_id, page_id)?;
+        let types: std::collections::HashMap<String, String> = lib
+            .notebook(notebook_id)?
+            .assets
+            .iter()
+            .map(|a| (a.sha256.clone(), a.media_type.clone()))
+            .collect();
+        let lib = &*lib;
+        penroam_interchange::svg::page_to_svg(&page, |h| {
+            Some((lib.read_asset(notebook_id, h).ok()?, types.get(h)?.clone()))
+        })
+    };
+    write_user_file(&app, &path, r.svg.as_bytes())?;
+    Ok(r.warnings)
+}
+
+/// Saves bytes the webview produced (a page rendered as PNG). Raw body; the destination is
+/// the percent-encoded `x-path` header.
+#[tauri::command(async)]
+pub fn save_rendered_file(app: AppHandle, request: tauri::ipc::Request<'_>) -> R<()> {
+    let path = request
+        .headers()
+        .get("x-path")
+        .and_then(|v| v.to_str().ok())
+        .map(percent_decode)
+        .ok_or_else(|| invalid("missing x-path"))?;
+    let owned;
+    let bytes: &[u8] = match request.body() {
+        tauri::ipc::InvokeBody::Raw(b) => b,
+        tauri::ipc::InvokeBody::Json(serde_json::Value::Array(a)) => {
+            owned = a
+                .iter()
+                .map(|v| v.as_u64().filter(|n| *n < 256).map(|n| n as u8))
+                .collect::<Option<Vec<u8>>>()
+                .ok_or_else(|| invalid("body is not a byte array"))?;
+            &owned
+        }
+        _ => return Err(invalid("expected a file body")),
+    };
+    // the webview chooses the path, so it only gets to write what this command is for
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(invalid("expected a PNG"));
+    }
+    write_user_file(&app, &path, bytes)
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = (b[i] == b'%' && i + 2 < b.len())
+            .then(|| std::str::from_utf8(&b[i + 1..i + 3]).ok())
+            .flatten()
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match hex {
+            Some(v) => {
+                out.push(v);
+                i += 3;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// One version offered in the history dialog. A version this device recorded has a
+/// `revision`. Older ones, replayed from the account's operation log, have a `position`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryRow {
+    page_id: Uuid,
+    revision: Option<u64>,
+    position: Option<u64>,
+    at: Timestamp,
+    added: u32,
+    removed: u32,
+}
+
+impl From<HistoryPoint> for HistoryRow {
+    fn from(p: HistoryPoint) -> Self {
+        Self {
+            page_id: p.page_id,
+            revision: Some(p.revision),
+            position: None,
+            at: p.at,
+            added: p.added,
+            removed: p.removed,
+        }
+    }
+}
+
+/// Restorable versions of one page, oldest first: what this device recorded, and before
+/// that, with sync on, what the account's operation log holds. The log may reach further
+/// back than this device does, for example on a replacement device. It isn't thinned, so
+/// the same retention is applied to what is offered.
+#[tauri::command(async)]
+pub fn page_history(
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    page_id: Uuid,
+) -> R<Vec<HistoryRow>> {
+    let local = lib!(state).page_history(notebook_id, page_id)?;
+    let first_local = local.first().map(|p| p.at);
+    let synced = crate::sync::page_versions(&state, notebook_id, page_id)?;
+    let synced: Vec<_> = synced
+        .into_iter()
+        .filter(|v| first_local.is_none_or(|t| v.at < t))
+        .collect();
+    let times: Vec<Timestamp> = synced.iter().map(|v| v.at).collect();
+    let keep = penroam_storage::history::retained(&times, now_ms(), &HistoryRetention::default());
+    let mut rows: Vec<HistoryRow> = synced
+        .into_iter()
+        .zip(keep)
+        .filter(|(_, k)| *k)
+        .map(|(v, _)| HistoryRow {
+            page_id,
+            revision: None,
+            position: Some(v.position),
+            at: v.at,
+            added: v.added,
+            removed: v.removed,
+        })
+        .collect();
+    rows.extend(local.into_iter().map(HistoryRow::from));
+    Ok(rows)
+}
+
+/// A past version of a page, for preview. Changes nothing.
+#[tauri::command(async)]
+pub fn page_version(
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    page_id: Uuid,
+    revision: Option<u64>,
+    position: Option<u64>,
+) -> R<Page> {
+    version_of(&state, notebook_id, page_id, revision, position)
+}
+
+fn version_of(
+    state: &State<'_, AppState>,
+    notebook_id: Uuid,
+    page_id: Uuid,
+    revision: Option<u64>,
+    position: Option<u64>,
+) -> R<Page> {
+    match (revision, position) {
+        (Some(r), _) => Ok(lib!(state).page_version(notebook_id, page_id, r)?),
+        (None, Some(p)) => crate::sync::page_at(state, notebook_id, page_id, p)?
+            .ok_or_else(|| invalid("that version isn't available")),
+        (None, None) => Err(invalid("no version given")),
+    }
+}
+
+/// Brings a page back to a past version with a new edit, which syncs and can be undone.
+#[tauri::command(async)]
+pub fn restore_page_version(
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    page_id: Uuid,
+    revision: Option<u64>,
+    position: Option<u64>,
+) -> R<ApplyOutcome> {
+    state.sync.nudge();
+    let target = version_of(&state, notebook_id, page_id, revision, position)?;
+    let r = lib!(state).restore_page_content(notebook_id, page_id, &target)?;
+    state.search.page_changed(notebook_id, page_id);
+    Ok(r)
+}
+
+/// Brings a whole notebook back to a past time. Pages made since go to the trash.
+/// `from_account` asks for the state in the account's operation log, for times this
+/// device has no record of.
+#[tauri::command(async)]
+pub fn restore_notebook_version(
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    at: Timestamp,
+    from_account: bool,
+) -> R<NotebookRestore> {
+    state.sync.nudge();
+    let r = if from_account {
+        let (nb, pages) = crate::sync::notebook_at(&state, notebook_id, at)?
+            .ok_or_else(|| invalid("that version isn't available"))?;
+        let targets = pages.into_iter().map(|p| (p.id, p)).collect();
+        lib!(state).restore_notebook_content(notebook_id, &nb.title, &nb.page_order, &targets)?
+    } else {
+        lib!(state).restore_notebook_version(notebook_id, at)?
+    };
+    state.search.notebook_changed(notebook_id);
+    Ok(r)
+}
+
+/// Bytes a notebook's history takes on this device.
+#[tauri::command(async)]
+pub fn history_stats(state: State<'_, AppState>, notebook_id: Uuid) -> R<HistoryStats> {
+    Ok(lib!(state).history_stats(notebook_id)?)
+}
+
+/// Deletes a notebook's history on this device.
+#[tauri::command(async)]
+pub fn clear_history(state: State<'_, AppState>, notebook_id: Uuid) -> R<()> {
+    Ok(lib!(state).clear_history(notebook_id)?)
+}
+
+/// Thins old versions in the background, one notebook at a time so the editor is
+/// never kept waiting on the library for long.
+pub fn start_history_retention(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // leave the first moments after launch to the editor and to sync
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        let state = app.state::<AppState>();
+        let ids = lib_ids(&state);
+        for id in ids {
+            let retention = HistoryRetention::default();
+            let Ok(mut lib) = state.lib.lock() else {
+                return;
+            };
+            if let Err(e) = lib.compact_history(id, now_ms(), &retention) {
+                lib.recovery.warnings.push(format!(
+                    "old versions of notebook {id} were not thinned: {e}"
+                ));
+            }
+        }
+    });
+}
+
+fn lib_ids(state: &State<'_, AppState>) -> Vec<Uuid> {
+    state
+        .lib
+        .lock()
+        .map(|l| l.notebook_ids())
+        .unwrap_or_default()
 }
 
 /// Imports a `.penroam` archive (≤ 2 GiB) as a new notebook.

@@ -172,8 +172,13 @@ assets/<sha256>     original attachment bytes (PDFs are never rasterised)
 ```
 
 * Format 1 archives (pages as `pages/<uuid>.json`) are still imported.
-* The archive is a snapshot of live pages; trashed pages, thumbnails and journals are not
-  included. Only assets referenced by exported pages are included.
+* A normal export is a snapshot of live pages; trashed pages, thumbnails, journals and version
+  history are not included. Only assets referenced by exported pages are included.
+* Backups write trashed pages as well, as `pages/<uuid>.prp` entries listed under an extra
+  `trashedPages` manifest key, and keep the notebook's `deletedAt`. Older builds ignore both and
+  import the live pages. Without the restore option, import drops the trash with a warning.
+* An export can be limited to selected pages, and can be made reproducible by using the
+  notebook's `updatedAt` as `exportedAt`. See [`portability.md`](portability.md).
 * Import checks: entry names are whitelisted (`mimetype`, `manifest.json`,
   `pages/<uuid>.prp`, `pages/<uuid>.json` (format 1), `assets/<sha256>`; anything with `..`, `\`, `:`, NUL or a leading `/` is
   rejected; other safe names are ignored with a warning); ≤ 25 000 entries; per-entry limits

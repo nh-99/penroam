@@ -5,6 +5,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import LibraryView from "./views/LibraryView.vue";
 import EditorView from "./views/EditorView.vue";
 import Toasts from "./components/Toasts.vue";
+import ImportResultsDialog from "./components/ImportResultsDialog.vue";
+import PlaintextExportDialog from "./components/PlaintextExportDialog.vue";
 import UpgradeDialog from "./components/UpgradeDialog.vue";
 import { useLibrary } from "./stores/library";
 import { useSettings } from "./stores/settings";
@@ -13,9 +15,12 @@ import { useSync } from "./stores/sync";
 import { useSearch } from "./stores/search";
 import { api, hasHost } from "./platform/ipc";
 import { flushEverything } from "./platform/lifecycle";
+import { startAutoBackup, watchProgress } from "./platform/backup";
 import { detectNativeInk } from "./platform/nativeInk";
 
 const lib = useLibrary();
+watchProgress(lib);
+startAutoBackup();
 const settings = useSettings();
 const ui = useUi();
 const sync = useSync();
@@ -106,8 +111,15 @@ onBeforeUnmount(() => {
   <EditorView v-if="lib.current" :key="lib.current.id" />
   <LibraryView v-else :native-kind="nativeKind" />
   <Toasts />
+  <PlaintextExportDialog v-if="lib.plaintextQuestion" @answer="(ok) => lib.plaintextQuestion?.(ok)" />
+  <ImportResultsDialog v-if="lib.importResults" :results="lib.importResults" @close="lib.importResults = null" />
   <UpgradeDialog v-if="sync.upgradeOpen" />
   <div v-if="lib.busy" class="fixed inset-0 z-[70] flex items-center justify-center bg-black/20 epaper:bg-white/70" role="alert" aria-busy="true">
-    <div class="flex items-center gap-3 rounded-xl border border-line bg-surface px-5 py-4 text-sm shadow-lg"><LoaderCircle :size="18" class="animate-spin" />{{ lib.busy }}</div>
+    <div class="w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-line bg-surface px-5 py-4 text-sm shadow-lg">
+      <div class="flex items-center gap-3"><LoaderCircle :size="18" class="shrink-0 animate-spin" /><span class="min-w-0">{{ lib.progress?.label ?? lib.busy }}</span></div>
+      <div v-if="lib.progress?.fraction != null" class="mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2 epaper:border" role="progressbar" aria-label="Progress" :aria-valuenow="Math.round(lib.progress.fraction * 100)" aria-valuemin="0" aria-valuemax="100">
+        <div class="h-full rounded-full bg-brand transition-[width] epaper:bg-black" :style="{ width: `${lib.progress.fraction * 100}%` }" />
+      </div>
+    </div>
   </div>
 </template>

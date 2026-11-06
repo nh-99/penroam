@@ -10,7 +10,7 @@ Design: [`architecture/overview.md`](architecture/overview.md).
 
 ```text
 apps/desktop-mobile/   Tauri app (Vue frontend in src/, Rust shell in src-tauri/)
-crates/                penroam-core · penroam-storage · penroam-pdf · penroam-search · penroam-sync-protocol · penroam-sync-testkit · penroam-sync
+crates/                penroam-core · penroam-storage · penroam-pdf · penroam-interchange · penroam-webdav · penroam-search · penroam-sync-protocol · penroam-sync-testkit · penroam-sync
 plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters) · tauri-plugin-native-print (system print dialogs)
 android/               BooxInkView (Onyx Pen SDK module used by the native ink plugin)
 ios/                   InkKit (Swift ink core and Pencil surface used by the native ink plugin)
@@ -337,6 +337,21 @@ repository are skipped because the branch push already ran; pull requests from f
 
 ## Fuzzing
 
-`fuzz/` holds cargo-fuzz targets (`decode_page`, `journal_open`, `sync_batch_frame`); they need a
+`fuzz/` holds cargo-fuzz targets (`decode_page`, `journal_open`, `sync_batch_frame` and one per importer); they need a
 nightly toolchain (`cargo +nightly fuzz run decode_page`). A deterministic fuzz smoke runs as part
 of `cargo test`. The scheduled workflow is `.github/workflows/fuzz.yml`.
+
+## Testing importers on real files
+
+Third-party samples have their own licences, so they stay out of this repository. Download some
+into a folder (Xournal++'s `test/files`, the `.enex` files in Joplin's
+`packages/app-cli/tests/enex_to_md`, evernote2md's `encoding/enex/testdata`) and run:
+
+```sh
+PENROAM_IMPORT_CORPUS=/path/to/files cargo test -p penroam-interchange --test real_files -- --nocapture
+```
+
+Each file is listed as imported or refused. A panic, or output that fails validation, fails the
+test. Add `PENROAM_IMPORT_PDF_DIR=/path/to/out` to write each result as an annotated PDF for
+comparing with the original application. A real `.jex` can be made with the Joplin command line,
+`joplin export --format jex`; run third-party tools like these in a container.

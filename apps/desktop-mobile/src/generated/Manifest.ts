@@ -38,4 +38,9 @@ pages: Array<ManifestPage>,
 /**
  * Every asset entry with its checksum.
  */
-assets: Array<ManifestAsset>, };
+assets: Array<ManifestAsset>, 
+/**
+ * Trashed pages, when the archive was written with
+ * [`ExportOptions::include_trash`]. Same shape as `pages`.
+ */
+trashedPages?: Array<ManifestPage>, };

@@ -84,7 +84,7 @@ function recolor(nb: NotebookSummary) {
         <h1 class="mr-auto text-lg font-semibold tracking-tight">Penroam</h1>
         <IconBtn label="Search notebooks" :shortcut="`${mod}+K`" @click="search.panelOpen = true"><Search :size="20" /></IconBtn>
         <Btn variant="primary" @click="showNew = true"><BookPlus :size="18" /><span class="hidden sm:inline">New notebook</span></Btn>
-        <IconBtn label="Import .penroam notebook" @click="lib.importNotebook()"><Import :size="20" /></IconBtn>
+        <IconBtn label="Import notebooks and documents" @click="lib.importFiles()"><Import :size="20" /></IconBtn>
         <IconBtn :label="`Trash (${lib.trashed.length + sync.cloudTrash.length})`" @click="showTrash = true"><Trash :size="20" /></IconBtn>
         <IconBtn label="Settings" @click="showSettings = true"><Settings :size="20" /></IconBtn>
       </template>
@@ -110,7 +110,7 @@ function recolor(nb: NotebookSummary) {
           <p class="mt-2 text-sm leading-relaxed text-muted">Create a notebook to start writing by hand or typing on the same page. Everything stays on this device; nothing needs an account.</p>
           <div class="mt-5 flex justify-center gap-2">
             <Btn variant="primary" @click="showNew = true"><BookPlus :size="18" />New notebook</Btn>
-            <Btn variant="outline" @click="lib.importNotebook()"><Import :size="18" />Import .penroam</Btn>
+            <Btn variant="outline" @click="lib.importFiles()"><Import :size="18" />Import</Btn>
           </div>
         </div>
         <div v-else class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">

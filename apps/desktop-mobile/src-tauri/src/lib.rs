@@ -21,6 +21,7 @@ const _: () = assert!(
     "release builds must compile out DEBUG/TRACE logging"
 );
 
+mod backup;
 mod bench;
 mod commands;
 mod models;
@@ -96,6 +97,7 @@ pub fn run() {
             search::start(app.handle());
             models::start(app.handle());
             sync::resume_on_launch(app.handle());
+            commands::start_history_retention(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -114,6 +116,28 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::library_status,
+            commands::export_pages,
+            backup::export_backup,
+            backup::preview_backup,
+            backup::restore_backup,
+            backup::auto_backup,
+            backup::webdav_connect,
+            backup::webdav_disconnect,
+            backup::webdav_backups,
+            backup::webdav_fetch,
+            backup::discard_fetched,
+            commands::inspect_notebook,
+            commands::import_document,
+            commands::export_notebook_text,
+            commands::page_plain_text,
+            commands::export_page_svg,
+            commands::save_rendered_file,
+            commands::page_history,
+            commands::page_version,
+            commands::restore_page_version,
+            commands::restore_notebook_version,
+            commands::history_stats,
+            commands::clear_history,
             commands::list_notebooks,
             commands::get_notebook,
             commands::create_notebook,

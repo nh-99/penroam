@@ -6,6 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { Monitor, Sun, Moon, Tablet, ShieldCheck } from "@lucide/vue";
 import Modal from "./ui/Modal.vue";
 import Tabs from "./ui/Tabs.vue";
+import BackupSection from "./BackupSection.vue";
 import SyncSection from "./SyncSection.vue";
 import SearchSection from "./SearchSection.vue";
 import AdvancedSection from "./AdvancedSection.vue";
@@ -28,6 +29,7 @@ const tabs = computed(() => [
   { id: "general", label: "General" },
   ...(hasHost() ? [{ id: "search", label: "Search" }] : []),
   ...(sync.available ? [{ id: "sync", label: "Sync" }] : []),
+  ...(hasHost() ? [{ id: "backup", label: "Backup" }] : []),
   ...(hasHost() ? [{ id: "advanced", label: "Advanced" }] : []),
   { id: "about", label: "About" },
 ]);
@@ -112,6 +114,7 @@ function versionTapped() {
       </div>
       <SearchSection v-else-if="tab === 'search'" />
       <SyncSection v-else-if="tab === 'sync'" />
+      <BackupSection v-else-if="tab === 'backup'" />
       <AdvancedSection v-else-if="tab === 'advanced'" />
       <div v-else class="space-y-6">
         <section class="flex gap-3 rounded-xl bg-surface-2 p-3 text-xs leading-relaxed text-muted epaper:border">

@@ -19,8 +19,10 @@ apps/desktop-mobile/            Tauri 2 app
   src-tauri/                    Rust shell: typed commands, structured errors, flush-on-close
     gen/android/                generated Android project (+ scripts/patch-android.py)
 crates/penroam-core             schema, validation, page ops, operation schema + merge model (replica), binary page codec, geometry, text and Markdown layout, migrations
-crates/penroam-storage          live library: device-wide operation journal, checkpoints, trash, recovery, outbox counters, .penroam archive
+crates/penroam-storage          live library: device-wide operation journal, checkpoints, trash, recovery, outbox counters, version history, .penroam archive, full-library backups
 crates/penroam-pdf              PDF inspection (import) and annotated vector export (lopdf)
+crates/penroam-interchange      other formats: Xournal++, Markdown and text import with loss reports; text and SVG export
+crates/penroam-webdav           backup files on a WebDAV server (backup storage only, nothing merges)
 crates/penroam-sync-protocol    public sync wire contract: versions, ids, limits, envelope header, canonical bytes, framing, DTOs, errors
 crates/penroam-sync-testkit     development test server (in memory / persisted, HTTP, fault injection) + fixture generator
 crates/penroam-sync             sync client: crypto, key log, operation log, transports, reconcile engine, dev CLI

@@ -38,6 +38,7 @@
 use crate::commands::CmdError;
 use crate::AppState;
 use penroam_core::replica::{Conflict, ConflictTarget};
+use penroam_core::{Notebook, Page};
 use penroam_storage::ErrorCode;
 use penroam_sync::auth;
 use penroam_sync::secrets::KeychainSecretStore;
@@ -164,6 +165,9 @@ fn browser_sign_in(
 /// that channel.
 enum Cmd {
     Nudge,
+    PageVersions(Uuid, Uuid, Reply<Vec<penroam_sync::SyncedVersion>>),
+    PageAt(Uuid, Uuid, u64, Reply<Option<Page>>),
+    NotebookAt(Uuid, i64, Reply<Option<(Notebook, Vec<Page>)>>),
     SyncNow,
     Pause(bool),
     Status(Reply<SyncStatus>),
@@ -198,6 +202,11 @@ pub struct SyncSlot {
 }
 
 impl SyncSlot {
+    /// Whether sync is set up and its worker is running.
+    pub fn running(&self) -> bool {
+        self.tx.lock().is_ok_and(|g| g.is_some())
+    }
+
     /// Tells the worker that local data changed (debounced there).
     pub fn nudge(&self) {
         if let Ok(g) = self.tx.lock() {
@@ -240,6 +249,37 @@ fn ask<T>(slot: &SyncSlot, make: impl FnOnce(Reply<T>) -> Cmd) -> Result<T, CmdE
     rx.recv_timeout(Duration::from_secs(120))
         .map_err(|_| err("the sync worker did not answer"))?
         .map_err(err)
+}
+
+/// Versions of a page in the account's operation log. Empty when sync isn't running.
+pub fn page_versions(
+    state: &State<'_, AppState>,
+    nb: Uuid,
+    page: Uuid,
+) -> Result<Vec<penroam_sync::SyncedVersion>, CmdError> {
+    if !state.sync.running() {
+        return Ok(Vec::new());
+    }
+    ask(&state.sync, |r| Cmd::PageVersions(nb, page, r))
+}
+
+/// A page as of a position in the account's operation log.
+pub fn page_at(
+    state: &State<'_, AppState>,
+    nb: Uuid,
+    page: Uuid,
+    position: u64,
+) -> Result<Option<Page>, CmdError> {
+    ask(&state.sync, |r| Cmd::PageAt(nb, page, position, r))
+}
+
+/// A notebook and its pages as of a time, from the account's operation log.
+pub fn notebook_at(
+    state: &State<'_, AppState>,
+    nb: Uuid,
+    at: i64,
+) -> Result<Option<(Notebook, Vec<Page>)>, CmdError> {
+    ask(&state.sync, |r| Cmd::NotebookAt(nb, at, r))
 }
 
 /// The sync server of this app: Penroam Cloud.
@@ -321,7 +361,10 @@ const DEVICE_SECRET: &str = "sync-device-keys";
 /// Keys left in the older file store are moved into it (then the file is
 /// deleted). Without an OS keychain sync is refused, unless
 /// `PENROAM_SYNC_ALLOW_FILE_SECRETS=1` (headless development only).
-fn secrets(app: &AppHandle, root: &std::path::Path) -> Result<Box<dyn SecretStore>, CmdError> {
+pub(crate) fn secrets(
+    app: &AppHandle,
+    root: &std::path::Path,
+) -> Result<Box<dyn SecretStore>, CmdError> {
     let file = FileSecretStore::new(SyncStore::dir_for(root).join("secrets"));
     // scope by the library's device id so profiles on one machine never share keys
     let scope = app
@@ -670,6 +713,22 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 };
                 let _ = r.send(res.map_err(|e| e.to_string()));
                 due = Some(Instant::now());
+                continue;
+            }
+            Ok(Cmd::PageVersions(nb, page, r)) => {
+                let _ = r.send(engine.page_versions(nb, page).map_err(|e| e.to_string()));
+                continue;
+            }
+            Ok(Cmd::PageAt(nb, page, position, r)) => {
+                let _ = r.send(
+                    engine
+                        .page_at(nb, page, position)
+                        .map_err(|e| e.to_string()),
+                );
+                continue;
+            }
+            Ok(Cmd::NotebookAt(nb, at, r)) => {
+                let _ = r.send(engine.notebook_at(nb, at).map_err(|e| e.to_string()));
                 continue;
             }
             Ok(Cmd::Conflicts(nb, r)) => {

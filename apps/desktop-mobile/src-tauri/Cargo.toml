@@ -28,6 +28,8 @@ uuid.workspace = true
 penroam-core.workspace = true
 penroam-storage.workspace = true
 penroam-pdf.workspace = true
+penroam-interchange.workspace = true
+penroam-webdav = { path = "../../../crates/penroam-webdav" }
 penroam-sync = { path = "../../../crates/penroam-sync", features = ["keychain"] }
 penroam-sync-protocol = { path = "../../../crates/penroam-sync-protocol" }
 # `windows-ink` only has an effect on Windows (on-device handwriting recognition);
@@ -61,3 +63,6 @@ windows = { version = "0.62", features = ["Win32_System_Power", "Win32_System_Th
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

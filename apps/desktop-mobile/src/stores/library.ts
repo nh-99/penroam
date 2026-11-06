@@ -9,8 +9,28 @@ import type { Template } from "../generated/Template";
 import type { RecoveryReport } from "../generated/RecoveryReport";
 import { renderMathTable } from "../editor/math";
 import { api, CommandError } from "../platform/ipc";
-import { pickFile, pickSaveLocation, safeFileName } from "../platform/files";
+import { pickFile, pickImportFiles, pickSaveLocation, safeFileName, type Picked } from "../platform/files";
+import type { Kept } from "../generated/Kept";
+import { useSync } from "./sync";
+import { useSettings } from "./settings";
 import { useUi } from "./ui";
+
+/** A long operation's progress. `fraction` is null while there's no count to show. */
+export interface Progress {
+  label: string;
+  fraction: number | null;
+}
+
+/** How one imported file went. */
+export interface ImportResult {
+  file: string;
+  title: string;
+  format: string;
+  kept?: Kept;
+  /** What did not come across, in plain language. */
+  lost: string[];
+  error?: string;
+}
 
 export const useLibrary = defineStore("library", () => {
   const ui = useUi();
@@ -21,6 +41,27 @@ export const useLibrary = defineStore("library", () => {
   const currentPageId = ref<string | null>(null);
   const recovery = ref<RecoveryReport | null>(null);
   const busy = ref<string | null>(null);
+  /** Results of the last import that has something to report. */
+  const importResults = ref<ImportResult[] | null>(null);
+  /** Shown as a bar with `busy`, for operations that report progress. */
+  const progress = ref<Progress | null>(null);
+  /** Answers the plaintext export question. Set while it's on screen. */
+  const plaintextQuestion = ref<((ok: boolean) => void) | null>(null);
+
+  /**
+   * Exported files leave end-to-end encryption, so with sync on the user is asked first.
+   * It's their data and they may export it: this only makes sure they know.
+   */
+  async function confirmPlaintext(): Promise<boolean> {
+    const settings = useSettings();
+    if (!useSync().configured || settings.s.plaintextExportOk) return true;
+    return new Promise((resolve) => {
+      plaintextQuestion.value = (ok) => {
+        plaintextQuestion.value = null;
+        resolve(ok);
+      };
+    });
+  }
   /** pageId -> object URL */
   const thumbs = ref<Record<string, string>>({});
   /** notebookId -> object URL of its first page */
@@ -276,6 +317,7 @@ export const useLibrary = defineStore("library", () => {
   }
 
   async function exportNotebook(id: string, title: string, beforeExport?: () => Promise<void>) {
+    if (!(await confirmPlaintext())) return;
     const path = await pickSaveLocation("penroam", safeFileName(title));
     if (!path) return;
     busy.value = "Exporting…";
@@ -291,6 +333,7 @@ export const useLibrary = defineStore("library", () => {
   }
 
   async function exportPdf(id: string, title: string, beforeExport?: () => Promise<void>) {
+    if (!(await confirmPlaintext())) return;
     const path = await pickSaveLocation("pdf", safeFileName(title));
     if (!path) return;
     busy.value = "Writing PDF…";
@@ -323,19 +366,122 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
-  async function importNotebook() {
-    const f = await pickFile("penroam");
-    if (!f) return;
-    busy.value = "Importing notebook…";
+  /**
+   * Imports the chosen files, each into a new notebook. One failing doesn't stop the
+   * others, and the library's existing notebooks are never touched.
+   */
+  async function importFiles() {
+    const files = await pickImportFiles();
+    if (!files.length) return;
+    const results: ImportResult[] = [];
     try {
-      const r = await api.importNotebook(f.path);
-      await refresh();
-      ui.success(`Imported “${r.notebook.title}”.`);
-      for (const w of r.warnings) ui.toast("info", w);
-    } catch (e) {
-      fail(e, "Import failed");
+      for (const [i, f] of files.entries()) {
+        busy.value = files.length > 1 ? `Importing ${i + 1} of ${files.length}…` : "Importing…";
+        results.push(await importOne(f));
+      }
     } finally {
       busy.value = null;
+    }
+    await refresh();
+    const clean = results.length === 1 && !results[0].error && !results[0].lost.length;
+    if (clean) ui.success(`Imported “${results[0].title}”.`);
+    else importResults.value = results;
+  }
+
+  async function importOne(f: Picked): Promise<ImportResult> {
+    try {
+      if (f.name.toLowerCase().endsWith(".penroam")) {
+        const r = await api.importNotebook(f.path);
+        return { file: f.name, title: r.notebook.title, format: "Penroam notebook", lost: r.warnings };
+      }
+      const { notebook, report } = await api.importDocument(f.path, f.name);
+      return { file: f.name, title: notebook.title, format: report.format, kept: report.kept, lost: report.lost };
+    } catch (e) {
+      return { file: f.name, title: "", format: "", lost: [], error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** Lossy exports: the words only, with what's missing spelled out afterwards. */
+  async function exportText(id: string, title: string, markdown: boolean, beforeExport?: () => Promise<void>) {
+    if (!(await confirmPlaintext())) return;
+    const path = await pickSaveLocation(markdown ? "md" : "txt", safeFileName(title));
+    if (!path) return;
+    busy.value = "Exporting…";
+    try {
+      await beforeExport?.();
+      const r = await api.exportNotebookText(id, path, markdown);
+      ui.success(`Saved ${r.textBlocks} text block${r.textBlocks === 1 ? "" : "s"} from ${r.pages} page${r.pages === 1 ? "" : "s"}.`);
+      for (const w of r.warnings) ui.toast("info", w, { ms: 9000 });
+    } catch (e) {
+      fail(e, "Export failed");
+    } finally {
+      busy.value = null;
+    }
+  }
+
+  async function exportPageSvg(pageId: string, title: string, beforeExport?: () => Promise<void>) {
+    const nb = current.value;
+    if (!nb || !(await confirmPlaintext())) return;
+    const path = await pickSaveLocation("svg", safeFileName(title));
+    if (!path) return;
+    try {
+      await beforeExport?.();
+      const warnings = await api.exportPageSvg(nb.id, pageId, path);
+      ui.success("Page saved as SVG.");
+      for (const w of warnings) ui.toast("info", w, { ms: 9000 });
+    } catch (e) {
+      fail(e, "Export failed");
+    }
+  }
+
+  async function exportPagePng(title: string, render: () => Promise<Uint8Array | null>, beforeExport?: () => Promise<void>) {
+    if (!(await confirmPlaintext())) return;
+    const path = await pickSaveLocation("png", safeFileName(title));
+    if (!path) return;
+    busy.value = "Exporting…";
+    try {
+      await beforeExport?.();
+      const png = await render();
+      if (!png) throw new Error("the page could not be drawn");
+      await api.saveRenderedFile(path, png);
+      ui.success("Page saved as PNG.");
+    } catch (e) {
+      fail(e, "Export failed");
+    } finally {
+      busy.value = null;
+    }
+  }
+
+  async function exportPage(pageId: string, title: string, beforeExport?: () => Promise<void>) {
+    const nb = current.value;
+    if (!nb || !(await confirmPlaintext())) return;
+    const path = await pickSaveLocation("penroam", safeFileName(title));
+    if (!path) return;
+    try {
+      await beforeExport?.();
+      await api.exportPages(nb.id, [pageId], path);
+      ui.success("Page saved as a notebook.");
+    } catch (e) {
+      fail(e, "Export failed");
+    }
+  }
+
+  async function copyPageText(pageId: string, beforeCopy?: () => Promise<void>) {
+    const nb = current.value;
+    if (!nb) return;
+    try {
+      await beforeCopy?.();
+      const r = await api.pagePlainText(nb.id, pageId);
+      const body = r.text.split("\n\n").slice(2).join("\n\n").trim();
+      if (!body) {
+        ui.toast("info", "This page has no typed text to copy.");
+        return;
+      }
+      await navigator.clipboard.writeText(body);
+      ui.success("Copied the page's text.");
+      for (const w of r.warnings) ui.toast("info", w, { ms: 9000 });
+    } catch (e) {
+      fail(e, "Could not copy");
     }
   }
 
@@ -366,7 +512,16 @@ export const useLibrary = defineStore("library", () => {
     restorePage,
     reorder,
     importPdf,
-    importNotebook,
+    importFiles,
+    importResults,
+    progress,
+    plaintextQuestion,
+    confirmPlaintext,
+    exportText,
+    exportPageSvg,
+    exportPagePng,
+    exportPage,
+    copyPageText,
     exportNotebook,
     exportPdf,
     printNotebook,

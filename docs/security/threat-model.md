@@ -120,6 +120,16 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
 
 ## Known limitations and risks
 
+* `.penroam` files and `.penroam-backup` files are plaintext by design, whatever sync does. They
+  are as private as the place they are saved, including a WebDAV server, and with sync on the app
+  warns before an export.
+* Version history is plaintext on the device, like the notebook itself, and keeps erased content
+  until retention drops it or the user deletes it. Those chains are never uploaded, but the
+  account's encrypted operation log holds the same edits and isn't thinned, so erasing something
+  doesn't remove it from the account. See [`../formats/portability.md`](../formats/portability.md).
+* The WebDAV password is in the OS keychain with the sync keys, and a device that can read those can
+  read it.
+
 * **Not reviewed** (see status). Constructions are standard but their combination is custom.
 * **Removed devices** keep everything they downloaded and every key of earlier epochs. Removal
   protects only *new* writes (new epoch). Re-encrypting history is not implemented.

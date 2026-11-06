@@ -92,6 +92,8 @@ export interface EditorCallbacks {
   onError(message: string): void;
   /** Debounced: the page content changed (thumbnail refresh). */
   onPageEdited(): void;
+  /** Bytes of a notebook attachment, for images on the page. */
+  readAsset?(hash: string): Promise<Uint8Array>;
 }
 
 export const ERASER_RADIUS_PX = 8;
@@ -398,7 +400,18 @@ export class InkEditor {
       this.syncNativeTransform();
     }
     this.updateNative();
+    void this.loadImages();
     if (this.background) await this.renderPdf();
+  }
+
+  private async loadImages() {
+    const s = this.session;
+    if (!s || !this.cb.readAsset) return;
+    const read = (hash: string) => this.cb.readAsset!(hash);
+    if ((await this.renderer.loadImages(s.page.elements, read)) && this.session === s) {
+      this.renderer.renderInkProgressive(this.visibleDocRect());
+      this.cb.onPageEdited();
+    }
   }
 
   /** True while a stroke, erase, drag or text edit is in progress. */
@@ -413,10 +426,12 @@ export class InkEditor {
     for (const id of [...this.selection]) if (!s.elementById(id)) this.selection.delete(id);
     this.renderer.template = s.page.template;
     this.renderer.renderAll(this.visibleDocRect());
+    void this.loadImages();
     this.scheduleSettle(); // the redraw replaced any change of resolution in progress
     if (this.native?.ownsCommittedInk && this.nativeMounted) this.nativeCall((n) => n.loadCommittedInk(this.inkElements()));
     if (this.selection.size) this.updateSelectionBox();
     this.emitAll();
+    this.cb.onPageEdited();
   }
 
   private inkElements(): InkStroke[] {

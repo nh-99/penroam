@@ -29,7 +29,13 @@ account, a server or a subscription.
 - **Print your notes.** Print a whole notebook or just some pages, with ink as sharp as on
   screen.
 - **Your files, your choice.** Export any notebook as a `.penroam` file (a documented,
-  lossless format) and open it on another device.
+  lossless format) and open it on another device, or back up your whole library to one file.
+  Export pages as PNG or SVG and text as Markdown.
+- **Bring your notes with you.** Import Xournal++ documents, Evernote and Joplin exports,
+  Markdown, text and PDFs. Penroam
+  tells you exactly what came across and what didn't.
+- **Go back in time.** Every page keeps its earlier versions, and you can bring back a page or
+  a whole notebook without losing what you have now.
 - **Light, dark and ePaper themes**, with layouts for desktop, tablet and phone.
 
 | Your library | Annotating a PDF |
@@ -174,8 +180,53 @@ have both, and checks for model updates, installs a model from a file, or remove
 remove stays removed.
 
 **Moving notebooks between devices.** Use **Export → Notebook (.penroam)** to save a
-notebook as a file. On the other device, click **Import** in the library. Everything comes
-across exactly as you left it: ink, text, PDFs and page order.
+notebook as a file, or **This page (.penroam)** for a single page. On the other device, click
+**Import** in the library. Everything comes across exactly as you left it: ink, text, PDFs and
+page order.
+
+**Importing from other apps.** Click **Import** in the library and choose one or more files.
+Each one becomes a new notebook, so nothing you already have changes. Penroam reads `.penroam`
+notebooks, PDFs, Xournal++ (`.xopp`) and Xournal (`.xoj`) documents, Evernote exports (`.enex`),
+Joplin exports (`.jex`), Markdown and plain text.
+Other formats never come across perfectly, so after importing, Penroam lists what it kept and
+what it couldn't bring. For example, a Xournal++ document keeps a PDF stored inside the file, but one
+kept elsewhere on your disk arrives without it, because Penroam won't open a file just because a
+document names it. Bring that PDF in with **Import PDF as pages**. LaTeX from Xournal++ comes in
+as formulas you can edit. PDFs attached to Evernote and Joplin notes become pages after their
+note. Markdown image links aren't followed either.
+
+**Other ways to export.** The **Export** menu also has **Markdown** and **Plain text**, which
+hold your typed words and whatever search has read from your handwriting, which may contain
+mistakes. Handwriting it hasn't read yet is left out, and Penroam tells you how much. There's also
+**This page as PNG** or **SVG**. PNG keeps a PDF behind the page; SVG doesn't, and shows formulas as
+their LaTeX source. **Copy this page's text** puts the typed text on the clipboard. Only a
+`.penroam` file or a backup can be edited again as it was. A PDF, image or text export is a
+copy to read, not a backup.
+
+**Backing up everything.** **Settings → Backup → Back up…** saves every notebook, including
+the trash, to one `.penroam-backup` file, then reads it back to check it. It needs no account
+and no connection. The file isn't encrypted, so keep it somewhere you trust. To restore, choose
+**Choose a backup…**: you'll see what's in the file before anything changes, including any
+notebook that is damaged. Notebooks you already have are left alone unless you ask for separate
+copies. Search rebuilds itself afterwards and keeps your corrections. Version history isn't in
+backups. If you use sync, Penroam reminds you before any export that the file won't be encrypted
+the way your synced notes are; you can go ahead, and can turn the reminder off.
+
+**Automatic backups.** Under **Settings → Backup**, choose a folder or a WebDAV server such as
+Nextcloud. While Penroam is open it saves a backup once a day and keeps the last seven. These are
+ordinary backup files: they aren't encrypted, nothing syncs through them, and a WebDAV address
+needs `https://`. Your password stays in your system's keychain. Backups on a WebDAV server are
+listed there, ready to restore. Folders aren't available on phones and tablets.
+
+**Version history.** Click the clock in a notebook's top bar to see this page's earlier
+versions, grouped by writing session. Pick one to preview it, then restore the page, or the
+whole notebook as it was at that time (pages added since move to the trash). Restoring is a new
+edit, so the version you had stays in the list and the change syncs like any other. Everything
+from the last week is available, then one version a day for a month, then one a week for a year.
+With sync on, history is part of your encrypted account, so a new device can reach versions made
+on devices you no longer have. **Delete history…** removes a notebook's history from this device
+straight away, and permanently deleting a notebook removes it too. Whatever has already synced
+stays in your encrypted account, including things you've erased, until the account is deleted.
 
 **Saving.** There is no save button to remember. Changes are written to disk as you make
 them, and the top bar shows **Saved** once they are safe. `Ctrl+S` writes everything
