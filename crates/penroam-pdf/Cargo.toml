@@ -9,6 +9,8 @@ license.workspace = true
 [dependencies]
 penroam-core.workspace = true
 lopdf.workspace = true
+flate2 = "1"
+png = "0.18"
 thiserror.workspace = true
 serde.workspace = true
 ts-rs.workspace = true

@@ -547,3 +547,552 @@ fn page_texts_follow_page_order_and_reject_garbage() {
     }
     assert!(page_texts(b"not a pdf").is_err());
 }
+
+// ---------------------------------------------------------------- images --
+
+const PIXEL_RED: [u8; 3] = [200, 30, 40];
+
+fn image(hash: &str, x: f64, y: f64, width: f64, height: f64) -> Element {
+    Element::Image(ImageElement {
+        id: Uuid::new_v4(),
+        z: 1,
+        x,
+        y,
+        width,
+        height,
+        asset_hash: hash.into(),
+        extra: Default::default(),
+    })
+}
+
+fn plain_page(elements: Vec<Element>) -> Page {
+    let mut page = Page::new(
+        Uuid::new_v4(),
+        Paper::Letter,
+        Size {
+            width: 612.0,
+            height: 792.0,
+        },
+        Template::default(),
+        0,
+    );
+    page.elements = elements;
+    page
+}
+
+fn png_of(
+    width: u32,
+    height: u32,
+    colour: png::ColorType,
+    depth: png::BitDepth,
+    pixels: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(colour);
+    encoder.set_depth(depth);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(pixels).unwrap();
+    writer.finish().unwrap();
+    out
+}
+
+fn red_png(width: u32, height: u32) -> Vec<u8> {
+    let pixels = PIXEL_RED.repeat((width * height) as usize);
+    png_of(
+        width,
+        height,
+        png::ColorType::Rgb,
+        png::BitDepth::Eight,
+        &pixels,
+    )
+}
+
+/// A PNG that declares a size but holds no image data.
+fn png_header_only(width: u32, height: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    drop(encoder.write_header().unwrap());
+    out
+}
+
+/// One JPEG marker segment.
+fn segment(marker: u8, body: &[u8]) -> Vec<u8> {
+    let mut out = vec![0xff, marker];
+    out.extend(((body.len() + 2) as u16).to_be_bytes());
+    out.extend(body);
+    out
+}
+
+/// The headers of a JPEG with a stub scan: enough for the exporter, which never decodes one.
+fn jpeg_with(sof: u8, precision: u8, components: u8, size: (u16, u16), extra: &[u8]) -> Vec<u8> {
+    let mut frame = vec![precision];
+    frame.extend(size.1.to_be_bytes());
+    frame.extend(size.0.to_be_bytes());
+    frame.push(components);
+    for c in 0..components {
+        frame.extend([c + 1, 0x11, 0]);
+    }
+    let mut out = vec![0xff, 0xd8];
+    out.extend(extra);
+    out.extend(segment(sof, &frame));
+    out.extend(segment(0xda, &[1, 1, 0, 0, 63, 0]));
+    out.extend([0x12, 0x34, 0xff, 0xd9]);
+    out
+}
+
+fn jpeg(components: u8, extra: &[u8]) -> Vec<u8> {
+    jpeg_with(0xc0, 8, components, (640, 480), extra)
+}
+
+/// An APP1 segment holding an EXIF block with the given orientation.
+fn exif(orientation: u16, little: bool) -> Vec<u8> {
+    let u16b = |v: u16| {
+        if little {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        }
+    };
+    let u32b = |v: u32| {
+        if little {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        }
+    };
+    let mut body = b"Exif\0\0".to_vec();
+    body.extend(if little { b"II*\0" } else { b"MM\0*" });
+    body.extend(u32b(8));
+    body.extend(u16b(1)); // one directory entry
+    body.extend(u16b(0x0112)); // orientation
+    body.extend(u16b(3)); // SHORT
+    body.extend(u32b(1));
+    body.extend(u16b(orientation));
+    body.extend([0, 0]);
+    body.extend(u32b(0));
+    segment(0xe1, &body)
+}
+
+fn hash_of(n: u8) -> String {
+    format!("{n:0>64x}")
+}
+
+fn export_with(pages: &[Page], assets: &[(&str, Vec<u8>)]) -> (Vec<u8>, ExportReport) {
+    export_annotated(pages, &[], |h| {
+        assets
+            .iter()
+            .find(|(hash, _)| *hash == h)
+            .map(|(_, bytes)| bytes.clone())
+    })
+    .unwrap()
+}
+
+fn first_content(doc: &Document) -> String {
+    let id = *doc.get_pages().values().next().unwrap();
+    String::from_utf8_lossy(&doc.get_page_content(id)).into_owned()
+}
+
+/// The stream a page's `/XObject` resource points to.
+fn xobject<'a>(doc: &'a Document, page: u32, resource: &str) -> (lopdf::ObjectId, &'a Stream) {
+    let page = doc.get_dictionary(doc.get_pages()[&page]).unwrap();
+    let id = page
+        .get_deref(b"Resources", doc)
+        .and_then(Object::as_dict)
+        .and_then(|r| r.get_deref(b"XObject", doc))
+        .and_then(Object::as_dict)
+        .and_then(|x| x.get(resource.as_bytes()))
+        .and_then(Object::as_reference)
+        .unwrap();
+    (id, doc.get_object(id).unwrap().as_stream().unwrap())
+}
+
+fn image_count(doc: &Document) -> usize {
+    doc.objects
+        .values()
+        .filter_map(|o| o.as_stream().ok())
+        .filter(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image"))
+        .count()
+}
+
+fn name_of<'a>(stream: &'a Stream, key: &[u8]) -> &'a [u8] {
+    stream.dict.get(key).unwrap().as_name().unwrap()
+}
+
+#[test]
+fn image_lands_in_its_box_between_ink_and_text() {
+    let hash = hash_of(1);
+    // written out of paint order on purpose
+    let page = plain_page(vec![
+        text(40.0, 300.0, "Caption"),
+        image(&hash, 30.0, 40.0, 100.0, 50.0),
+        stroke(&[(10.0, 10.0), (20.0, 20.0)], "#000000", InkTool::Pen),
+    ]);
+    let (bytes, report) = export_with(&[page], &[(&hash, red_png(3, 2))]);
+    assert_eq!(
+        (report.images, report.strokes, report.text_blocks),
+        (1, 1, 1)
+    );
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let doc = Document::load_mem(&bytes).unwrap();
+    let content = first_content(&doc);
+    assert!(content.contains("1 0 0 -1 0 792 cm"), "{content}");
+    // the unit square's top edge (v = 1) goes to y = 40, its bottom edge to y = 90
+    let draw = content
+        .find("q 100 0 0 -50 30 90 cm /PRim0 Do Q")
+        .expect(&content);
+    assert!(content.find(" S\n").unwrap() < draw, "ink under the image");
+    assert!(draw < content.find("BT").unwrap(), "text over the image");
+
+    let (_, stream) = xobject(&doc, 1, "PRim0");
+    assert_eq!(name_of(stream, b"Filter"), b"FlateDecode");
+    assert_eq!(name_of(stream, b"ColorSpace"), b"DeviceRGB");
+    assert_eq!(stream.dict.get(b"Width").unwrap().as_i64().unwrap(), 3);
+    assert_eq!(stream.dict.get(b"Height").unwrap().as_i64().unwrap(), 2);
+    assert_eq!(stream.decompressed_content().unwrap(), PIXEL_RED.repeat(6));
+    assert!(!stream.dict.has(b"SMask"));
+}
+
+#[test]
+fn image_on_a_rotated_pdf_page_is_placed_in_display_coordinates() {
+    let pdf = make_pdf(&[(300.0, 200.0, 90)], false);
+    let hash = penroam_storage_free_sha(&pdf);
+    let info = inspect(&pdf).unwrap();
+    let picture = hash_of(2);
+    let page = pdf_page(
+        &info[0],
+        &hash,
+        vec![image(&picture, 20.0, 30.0, 60.0, 40.0)],
+    );
+    let m = page.background.as_ref().unwrap().doc_to_pdf_matrix();
+    let (bytes, report) = export_with(&[page], &[(&hash, pdf.clone()), (&picture, red_png(2, 2))]);
+    assert_eq!(report.images, 1);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let doc = Document::load_mem(&bytes).unwrap();
+    let content = first_content(&doc);
+    assert!(content.contains("Source page 1"), "source content kept");
+    let outer = m.map(|v| v.to_string()).join(" ");
+    let cm = content.find(&format!("{outer} cm")).expect(&content);
+    let draw = content
+        .find("q 60 0 0 -40 20 70 cm /PRim0 Do Q")
+        .expect(&content);
+    assert!(cm < draw, "drawn inside the page's display transform");
+    let _ = xobject(&doc, 1, "PRim0");
+
+    // The real test of the matrices: does a renderer put it there, on the rotated page?
+    if let Some((dims, px)) = rasterise(&bytes) {
+        assert_eq!(dims, [200, 300]);
+        let (r, g, b) = px(50, 50);
+        assert!(r > 150 && g < 80 && b < 80, "image at (50,50): {r},{g},{b}");
+        let (r, g, b) = px(50, 150);
+        assert!(r > 200 && g > 200 && b > 200, "paper below: {r},{g},{b}");
+    }
+}
+
+/// Renders page one at 72 dpi with poppler: its size and a pixel lookup. None if not installed.
+#[allow(clippy::type_complexity)]
+fn rasterise(pdf: &[u8]) -> Option<([usize; 2], Box<dyn Fn(usize, usize) -> (u8, u8, u8)>)> {
+    let dir = std::env::temp_dir().join(format!("penroam-pdf-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.pdf"), pdf).unwrap();
+    let status = std::process::Command::new("pdftoppm")
+        .args(["-r", "72"])
+        .arg(dir.join("a.pdf"))
+        .arg(dir.join("out"))
+        .status();
+    if status.is_err() {
+        let _ = std::fs::remove_dir_all(dir);
+        return None;
+    }
+    assert!(status.unwrap().success());
+    let ppm = std::fs::read(dir.join("out-1.ppm")).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    let start = ppm
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| **b == b'\n')
+        .nth(2)
+        .unwrap()
+        .0
+        + 1;
+    let header = String::from_utf8_lossy(&ppm[..start]).into_owned();
+    let dims: Vec<usize> = header
+        .split_whitespace()
+        .skip(1)
+        .take(2)
+        .map(|v| v.parse().unwrap())
+        .collect();
+    let width = dims[0];
+    Some((
+        [dims[0], dims[1]],
+        Box::new(move |x, y| {
+            let i = start + (y * width + x) * 3;
+            (ppm[i], ppm[i + 1], ppm[i + 2])
+        }),
+    ))
+}
+
+#[test]
+fn png_alpha_becomes_a_soft_mask() {
+    let hash = hash_of(3);
+    let rgba = [255, 0, 0, 128, 0, 255, 0, 0];
+    let bytes = png_of(2, 1, png::ColorType::Rgba, png::BitDepth::Eight, &rgba);
+    let page = plain_page(vec![image(&hash, 0.0, 0.0, 10.0, 10.0)]);
+    let (pdf, report) = export_with(&[page], &[(&hash, bytes)]);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let doc = Document::load_mem(&pdf).unwrap();
+    let (_, stream) = xobject(&doc, 1, "PRim0");
+    assert_eq!(
+        stream.decompressed_content().unwrap(),
+        [255, 0, 0, 0, 255, 0]
+    );
+    let mask = stream.dict.get(b"SMask").unwrap().as_reference().unwrap();
+    let mask = doc.get_object(mask).unwrap().as_stream().unwrap();
+    assert_eq!(name_of(mask, b"Subtype"), b"Image");
+    assert_eq!(name_of(mask, b"ColorSpace"), b"DeviceGray");
+    assert_eq!(name_of(mask, b"Filter"), b"FlateDecode");
+    assert_eq!(mask.decompressed_content().unwrap(), [128, 0]);
+}
+
+#[test]
+fn every_png_colour_type_decodes_to_eight_bit_rgb() {
+    use png::{BitDepth::*, ColorType::*};
+    let gray16 = png_of(1, 1, Grayscale, Sixteen, &[0x80, 0xff]);
+    let gray_alpha = png_of(1, 1, GrayscaleAlpha, Eight, &[7, 255]);
+    let rgb16 = png_of(1, 1, Rgb, Sixteen, &[1, 0, 2, 0, 3, 0]);
+    // fully opaque alpha adds nothing, so it gets no mask
+    let opaque = png_of(1, 1, Rgba, Eight, &[9, 8, 7, 255]);
+    let mut indexed = Vec::new();
+    let mut encoder = png::Encoder::new(&mut indexed, 2, 1);
+    encoder.set_color(Indexed);
+    encoder.set_depth(Eight);
+    encoder.set_palette(vec![10, 20, 30, 40, 50, 60]);
+    encoder.set_trns(vec![255, 0]);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&[0, 1]).unwrap();
+    writer.finish().unwrap();
+
+    let cases: [(Vec<u8>, Vec<u8>, bool); 5] = [
+        (gray16, vec![0x80; 3], false),
+        (gray_alpha, vec![7; 3], false),
+        (rgb16, vec![1, 2, 3], false),
+        (opaque, vec![9, 8, 7], false),
+        (indexed, vec![10, 20, 30, 40, 50, 60], true),
+    ];
+    for (i, (bytes, expected, masked)) in cases.into_iter().enumerate() {
+        let hash = hash_of(i as u8);
+        let page = plain_page(vec![image(&hash, 0.0, 0.0, 10.0, 10.0)]);
+        let (pdf, report) = export_with(&[page], &[(&hash, bytes)]);
+        assert!(
+            report.warnings.is_empty(),
+            "case {i}: {:?}",
+            report.warnings
+        );
+        let doc = Document::load_mem(&pdf).unwrap();
+        let (_, stream) = xobject(&doc, 1, "PRim0");
+        assert_eq!(stream.decompressed_content().unwrap(), expected, "case {i}");
+        assert_eq!(stream.dict.has(b"SMask"), masked, "case {i}");
+    }
+}
+
+#[test]
+fn jpeg_keeps_its_bytes_and_colour_space() {
+    let adobe = segment(0xee, b"Adobe\0\x64\0\0\0\0\0");
+    let cases = [
+        (1, Vec::new(), &b"DeviceGray"[..], false),
+        (3, Vec::new(), b"DeviceRGB", false),
+        (4, Vec::new(), b"DeviceCMYK", false),
+        (4, adobe, b"DeviceCMYK", true),
+    ];
+    for (i, (components, extra, colour, inverted)) in cases.into_iter().enumerate() {
+        let original = jpeg(components, &extra);
+        let hash = hash_of(i as u8);
+        let page = plain_page(vec![image(&hash, 5.0, 5.0, 64.0, 48.0)]);
+        let (pdf, report) = export_with(&[page], &[(&hash, original.clone())]);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(report.images, 1);
+        let doc = Document::load_mem(&pdf).unwrap();
+        let (_, stream) = xobject(&doc, 1, "PRim0");
+        assert_eq!(name_of(stream, b"Filter"), b"DCTDecode");
+        assert_eq!(stream.content, original, "bytes untouched");
+        assert_eq!(name_of(stream, b"ColorSpace"), colour);
+        assert_eq!(stream.dict.get(b"Width").unwrap().as_i64().unwrap(), 640);
+        assert_eq!(stream.dict.get(b"Height").unwrap().as_i64().unwrap(), 480);
+        assert_eq!(stream.dict.has(b"Decode"), inverted);
+    }
+}
+
+#[test]
+fn jpeg_exif_orientation_turns_the_placement_not_the_bytes() {
+    // every matrix sends the stored top-left corner (0, 1) where EXIF says it belongs,
+    // in a box at (10, 20) sized 40 x 80
+    let cases = [
+        (1, "40 0 0 -80 10 100"),
+        (2, "-40 0 0 -80 50 100"),
+        (3, "-40 0 0 80 50 20"),
+        (4, "40 0 0 80 10 20"),
+        (5, "0 80 -40 0 50 20"),
+        (6, "0 80 40 0 10 20"),
+        (7, "0 -80 40 0 10 100"),
+        (8, "0 -80 -40 0 50 100"),
+        // out of range: treated as upright
+        (9, "40 0 0 -80 10 100"),
+    ];
+    for (orientation, matrix) in cases {
+        for little in [true, false] {
+            let original = jpeg(3, &exif(orientation, little));
+            let hash = hash_of(1);
+            let page = plain_page(vec![image(&hash, 10.0, 20.0, 40.0, 80.0)]);
+            let (pdf, _) = export_with(&[page], &[(&hash, original.clone())]);
+            let doc = Document::load_mem(&pdf).unwrap();
+            let content = first_content(&doc);
+            assert!(
+                content.contains(&format!("q {matrix} cm /PRim0 Do Q")),
+                "orientation {orientation}: {content}"
+            );
+            assert_eq!(xobject(&doc, 1, "PRim0").1.content, original);
+        }
+    }
+}
+
+#[test]
+fn an_image_is_embedded_once_however_often_it_is_used() {
+    let (a, b) = (hash_of(4), hash_of(5));
+    let pages = [
+        plain_page(vec![
+            image(&a, 0.0, 0.0, 10.0, 10.0),
+            image(&b, 0.0, 20.0, 10.0, 10.0),
+            image(&a, 0.0, 40.0, 10.0, 10.0),
+        ]),
+        plain_page(vec![image(&a, 5.0, 5.0, 20.0, 20.0)]),
+    ];
+    let mut reads = Vec::new();
+    let (pdf, report) = export_annotated(&pages, &[], |h| {
+        reads.push(h.to_string());
+        Some(if h == a { red_png(4, 4) } else { red_png(2, 2) })
+    })
+    .unwrap();
+    assert_eq!(report.images, 4);
+    assert_eq!(reads.len(), 2, "each asset read once: {reads:?}");
+
+    let doc = Document::load_mem(&pdf).unwrap();
+    assert_eq!(image_count(&doc), 2);
+    assert_eq!(xobject(&doc, 1, "PRim0").0, xobject(&doc, 2, "PRim0").0);
+    let content = first_content(&doc);
+    assert!(content.contains("/PRim1 Do"), "{content}");
+    assert_eq!(content.matches("/PRim0 Do").count(), 2, "{content}");
+
+    // printing one page keeps its image and drops the other page's
+    let kept = keep_pages(&pdf, &[1]).unwrap();
+    let doc = Document::load_mem(&kept).unwrap();
+    assert_eq!(image_count(&doc), 1);
+    assert_eq!(
+        name_of(xobject(&doc, 1, "PRim0").1, b"Filter"),
+        b"FlateDecode"
+    );
+}
+
+#[test]
+fn a_reimported_export_keeps_its_own_images() {
+    let (old, new) = (hash_of(6), hash_of(7));
+    let page = plain_page(vec![image(&old, 0.0, 0.0, 100.0, 100.0)]);
+    let (source, _) = export_with(&[page], &[(&old, red_png(2, 2))]);
+    let source_hash = penroam_storage_free_sha(&source);
+    let info = inspect(&source).unwrap();
+    let page = pdf_page(
+        &info[0],
+        &source_hash,
+        vec![image(&new, 0.0, 200.0, 100.0, 100.0)],
+    );
+    let (pdf, report) = export_with(
+        &[page],
+        &[(&source_hash, source.clone()), (&new, red_png(5, 5))],
+    );
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let doc = Document::load_mem(&pdf).unwrap();
+    let width = |r| {
+        let dict = &xobject(&doc, 1, r).1.dict;
+        dict.get(b"Width").unwrap().as_i64().unwrap()
+    };
+    assert_eq!(width("PRim0"), 2, "the source page's image is untouched");
+    assert_eq!(width("PRim1"), 5);
+    assert!(first_content(&doc).contains("/PRim1 Do"));
+}
+
+#[test]
+fn unusable_images_warn_and_the_export_still_succeeds() {
+    let good = red_png(2, 2);
+    let mut truncated = red_png(50, 50);
+    truncated.truncate(truncated.len() - 30);
+    let cases: Vec<(&str, Option<Vec<u8>>)> = vec![
+        ("missing", None),
+        ("damaged", Some(b"\x89PNG\r\n\x1a\n not really".to_vec())),
+        ("damaged", Some(truncated)),
+        ("damaged", Some(vec![0xff, 0xd8, 0xff])),
+        ("damaged", Some(jpeg_with(0xc0, 8, 3, (0, 10), &[]))),
+        ("not a PNG or JPEG", Some(b"GIF89a".to_vec())),
+        ("100 megapixel", Some(png_header_only(20_000, 20_000))),
+        ("100 megapixel", Some(png_header_only(u32::MAX >> 1, 3))),
+        (
+            "100 megapixel",
+            Some(jpeg_with(0xc0, 8, 3, (u16::MAX, u16::MAX), &[])),
+        ),
+        ("JPEG variant", Some(jpeg_with(0xc9, 8, 3, (10, 10), &[]))),
+        ("JPEG variant", Some(jpeg_with(0xc3, 8, 3, (10, 10), &[]))),
+        ("JPEG variant", Some(jpeg_with(0xc1, 12, 3, (10, 10), &[]))),
+    ];
+    for (reason, bytes) in cases {
+        let (bad, fine) = (hash_of(8), hash_of(9));
+        let pages = [
+            plain_page(vec![]),
+            plain_page(vec![
+                image(&bad, 0.0, 0.0, 10.0, 10.0),
+                image(&bad, 0.0, 20.0, 10.0, 10.0),
+                image(&fine, 0.0, 40.0, 10.0, 10.0),
+            ]),
+            plain_page(vec![image(&bad, 0.0, 0.0, 10.0, 10.0)]),
+        ];
+        let (pdf, report) = export_annotated(&pages, &[], |h| {
+            if h == fine {
+                Some(good.clone())
+            } else {
+                bytes.clone()
+            }
+        })
+        .unwrap();
+        assert_eq!(report.images, 1, "{reason}");
+        assert_eq!(report.pages, 3);
+        assert_eq!(report.warnings.len(), 1, "{reason}: {:?}", report.warnings);
+        let warning = &report.warnings[0];
+        assert!(warning.starts_with("Page 2: "), "{warning}");
+        assert!(warning.contains(reason), "{reason}: {warning}");
+        let doc = Document::load_mem(&pdf).unwrap();
+        assert_eq!(image_count(&doc), 1);
+    }
+}
+
+#[test]
+fn cut_off_images_never_panic() {
+    let exif_jpeg = jpeg(3, &exif(6, true));
+    let mut indexed = Vec::new();
+    let mut encoder = png::Encoder::new(&mut indexed, 4, 4);
+    encoder.set_color(png::ColorType::Indexed);
+    encoder.set_palette(vec![1, 2, 3]);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&[0; 16]).unwrap();
+    writer.finish().unwrap();
+    let hash = hash_of(1);
+    for whole in [exif_jpeg, indexed, red_png(4, 4)] {
+        for len in 0..whole.len() {
+            let page = plain_page(vec![image(&hash, 0.0, 0.0, 10.0, 10.0)]);
+            let (_, report) = export_with(&[page], &[(&hash, whole[..len].to_vec())]);
+            assert!(report.images <= 1, "len {len}");
+        }
+    }
+}

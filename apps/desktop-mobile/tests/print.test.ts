@@ -10,7 +10,7 @@ vi.mock("../src/platform/ipc", () => ({
   api: { printNotebook: (...args: unknown[]) => printNotebook(...args), notebookMath: async () => [] },
 }));
 
-const report = (warnings: string[] = []) => ({ pages: 2, strokes: 1, textBlocks: 0, replacedCharacters: 0, warnings });
+const report = (warnings: string[] = []) => ({ pages: 2, strokes: 1, textBlocks: 0, replacedCharacters: 0, images: 0, warnings });
 
 describe("printing a notebook", () => {
   beforeEach(() => {

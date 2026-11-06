@@ -7,8 +7,10 @@
 //!   pages are copied intact (their content streams are wrapped in `q … Q`
 //!   and left unmodified) and the Penroam ink and text are appended as
 //!   **vector** content in the same document-space transform the editor uses.
-//!   Blank/template pages become new PDF pages. The editable data stays in
-//!   the notebook; the PDF is a one-way rendering.
+//!   Image elements are embedded at full resolution (see [`MAX_IMAGE_PIXELS`]);
+//!   one that can't be used is left out with a warning. Blank/template pages
+//!   become new PDF pages. The editable data stays in the notebook; the PDF is
+//!   a one-way rendering.
 //! * [`keep_pages`] cuts such an export down to chosen pages, for printing.
 //!
 //! # Coordinates
@@ -21,18 +23,23 @@
 //! [`PdfBackgroundRef::doc_to_pdf_matrix`] maps display coordinates to user
 //! space for each of the four rotations. Template-only pages use a plain
 //! y-flip (`1 0 0 -1 0 height`). Export writes all annotations inside a
-//! single `cm` with that matrix, so ink and text are emitted in display
+//! single `cm` with that matrix, so ink, images and text are emitted in display
 //! coordinates and land exactly where the editor drew them.
 
 #![warn(missing_docs)]
 
+mod images;
+
+pub use images::MAX_IMAGE_PIXELS;
+
+use images::{ImageSet, PageImages};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use penroam_core::geometry::{stroke_pieces, Piece};
 use penroam_core::markdown::{self, MathBox, Paint};
 use penroam_core::text::{metrics, Face};
 use penroam_core::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use ts_rs::TS;
 
@@ -249,7 +256,10 @@ pub struct ExportReport {
     /// Characters outside the PDF's standard-font character set that were
     /// replaced with "?" (the editable notebook keeps the original text).
     pub replaced_characters: u32,
-    /// Things that could not be exported (e.g. image elements).
+    /// Image elements drawn. An image placed twice counts twice; one left
+    /// out for being missing, damaged or too large isn't counted.
+    pub images: u32,
+    /// Things that could not be exported, for example a damaged image.
     pub warnings: Vec<String>,
 }
 
@@ -258,7 +268,7 @@ fn name(s: &str) -> Object {
 }
 
 /// Builds the annotated PDF for `pages`, in the given order. `asset`
-/// returns the bytes of a stored asset by SHA-256 (the PDF backgrounds).
+/// returns the bytes of a stored asset by SHA-256 (PDF backgrounds and images).
 ///
 /// Formulas are drawn from `math` (see [`RenderedMath`]); one that isn't listed
 /// is written as its TeX source.
@@ -267,7 +277,11 @@ fn name(s: &str) -> Object {
 /// inherited page attributes resolved first) and its pages are reused with
 /// their original content wrapped in `q … Q`, followed by one Penroam content
 /// stream. Opacity (highlighter) uses `ExtGState` entries; text uses the
-/// standard Helvetica and Courier fonts with WinAnsi encoding.
+/// standard Helvetica and Courier fonts with WinAnsi encoding. Each distinct
+/// PNG or JPEG image becomes one XObject shared by the pages that show it.
+///
+/// A missing background PDF is an error, but a missing, damaged or oversized
+/// image only adds a warning to the report: the export still succeeds without it.
 pub fn export_annotated(
     pages: &[Page],
     math: &[RenderedMath],
@@ -290,12 +304,27 @@ pub fn export_annotated(
     });
     // source documents merged into `out`, keyed by asset hash -> page object ids
     let mut sources: HashMap<String, Vec<ObjectId>> = HashMap::new();
+    let mut images = ImageSet::default();
     let mut kids = Vec::new();
 
-    for page in pages {
+    for (index, page) in pages.iter().enumerate() {
+        let source = page
+            .background
+            .as_ref()
+            .map(|bg| source_page(&mut out, &mut sources, bg, &mut asset))
+            .transpose()?;
+        let taken = source.map_or_else(BTreeSet::new, |id| xobject_names(&out, id));
+        let page_images = images.place_on_page(
+            &mut out,
+            page,
+            index + 1,
+            &taken,
+            &mut asset,
+            &mut report.warnings,
+        );
         // ExtGState names (one per distinct opacity) used by this page's annotations
         let mut gs: BTreeMap<String, f64> = BTreeMap::new();
-        let annot = annotation_content(page, &formulas, &mut gs, &mut report);
+        let annot = annotation_content(page, &formulas, &page_images, &mut gs, &mut report);
         let annot_id = out
             .add_object(Stream::new(Dictionary::new(), annot.into_bytes()).with_compression(true));
         let mut ext = Dictionary::new();
@@ -310,46 +339,7 @@ pub fn export_annotated(
             );
         }
 
-        let page_dict = if let Some(bg) = &page.background {
-            if !sources.contains_key(&bg.asset_hash) {
-                let bytes = asset(&bg.asset_hash)
-                    .ok_or_else(|| PdfError::MissingSource(bg.asset_hash.clone()))?;
-                let mut src = load(&bytes)?;
-                // move the source's object ids above ours so both can live in one document
-                src.renumber_objects_with(out.max_id + 1);
-                let ids: Vec<ObjectId> = src.get_pages().values().copied().collect();
-                out.max_id = out.max_id.max(src.max_id);
-                // resolve inherited attributes now, while the source page tree exists
-                let mut resolved = Vec::new();
-                for id in &ids {
-                    let mut d = src
-                        .get_dictionary(*id)
-                        .map_err(|e| PdfError::Parse(e.to_string()))?
-                        .clone();
-                    for key in [&b"Resources"[..], b"MediaBox", b"CropBox", b"Rotate"] {
-                        if !d.has(key) {
-                            if let Some(v) = inherited(&src, *id, key) {
-                                d.set(key.to_vec(), v.clone());
-                            }
-                        }
-                    }
-                    resolved.push((*id, d));
-                }
-                out.objects.extend(src.objects);
-                for (id, d) in resolved {
-                    out.objects.insert(id, Object::Dictionary(d));
-                }
-                sources.insert(bg.asset_hash.clone(), ids);
-            }
-            let src_id = *sources[&bg.asset_hash]
-                .get(bg.page_index as usize)
-                .ok_or_else(|| {
-                    PdfError::MissingSource(format!(
-                        "page {} of {}",
-                        bg.page_index + 1,
-                        bg.asset_hash
-                    ))
-                })?;
+        let page_dict = if let Some(src_id) = source {
             let mut d = out
                 .get_dictionary(src_id)
                 .map_err(|e| PdfError::Parse(e.to_string()))?
@@ -377,13 +367,13 @@ pub fn export_annotated(
                     .unwrap_or_default(),
                 Err(_) => Dictionary::new(),
             };
-            merge_resources(&out, &mut res, &fonts, ext);
+            merge_resources(&out, &mut res, &fonts, ext, page_images.xobjects);
             d.set("Resources", Object::Dictionary(res));
             d.set("Parent", Object::Reference(pages_root));
             d
         } else {
             let mut res = Dictionary::new();
-            merge_resources(&out, &mut res, &fonts, ext);
+            merge_resources(&out, &mut res, &fonts, ext, page_images.xobjects);
             Dictionary::from_iter(vec![
                 ("Type", name("Page")),
                 ("Parent", Object::Reference(pages_root)),
@@ -428,9 +418,75 @@ pub fn export_annotated(
     Ok((buf, report))
 }
 
-/// Adds the Penroam fonts and opacity states to a page's resources without
+/// The output-document id of `bg`'s page, merging its source PDF into `out` the
+/// first time that PDF is used.
+fn source_page(
+    out: &mut Document,
+    sources: &mut HashMap<String, Vec<ObjectId>>,
+    bg: &PdfBackgroundRef,
+    asset: &mut impl FnMut(&str) -> Option<Vec<u8>>,
+) -> Result<ObjectId, PdfError> {
+    if !sources.contains_key(&bg.asset_hash) {
+        let bytes =
+            asset(&bg.asset_hash).ok_or_else(|| PdfError::MissingSource(bg.asset_hash.clone()))?;
+        let mut src = load(&bytes)?;
+        // move the source's object ids above ours so both can live in one document
+        src.renumber_objects_with(out.max_id + 1);
+        let ids: Vec<ObjectId> = src.get_pages().values().copied().collect();
+        out.max_id = out.max_id.max(src.max_id);
+        // resolve inherited attributes now, while the source page tree exists
+        let mut resolved = Vec::new();
+        for id in &ids {
+            let mut d = src
+                .get_dictionary(*id)
+                .map_err(|e| PdfError::Parse(e.to_string()))?
+                .clone();
+            for key in [&b"Resources"[..], b"MediaBox", b"CropBox", b"Rotate"] {
+                if !d.has(key) {
+                    if let Some(v) = inherited(&src, *id, key) {
+                        d.set(key.to_vec(), v.clone());
+                    }
+                }
+            }
+            resolved.push((*id, d));
+        }
+        out.objects.extend(src.objects);
+        for (id, d) in resolved {
+            out.objects.insert(id, Object::Dictionary(d));
+        }
+        sources.insert(bg.asset_hash.clone(), ids);
+    }
+    sources[&bg.asset_hash]
+        .get(bg.page_index as usize)
+        .ok_or_else(|| {
+            PdfError::MissingSource(format!("page {} of {}", bg.page_index + 1, bg.asset_hash))
+        })
+        .copied()
+}
+
+/// The `/XObject` resource names a page already uses.
+fn xobject_names(out: &Document, page: ObjectId) -> BTreeSet<Vec<u8>> {
+    fn dict<'a>(out: &'a Document, parent: &'a Dictionary, key: &[u8]) -> Option<&'a Dictionary> {
+        let (_, object) = out.dereference(parent.get(key).ok()?).ok()?;
+        object.as_dict().ok()
+    }
+    out.get_dictionary(page)
+        .ok()
+        .and_then(|page| dict(out, page, b"Resources"))
+        .and_then(|resources| dict(out, resources, b"XObject"))
+        .map(|xobjects| xobjects.iter().map(|(key, _)| key.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// Adds the Penroam fonts, opacity states and images to a page's resources without
 /// disturbing the source page's own entries.
-fn merge_resources(out: &Document, res: &mut Dictionary, fonts: &[ObjectId], ext: Dictionary) {
+fn merge_resources(
+    out: &Document,
+    res: &mut Dictionary,
+    fonts: &[ObjectId],
+    ext: Dictionary,
+    xobjects: Dictionary,
+) {
     let sub = |key: &[u8], res: &Dictionary| -> Dictionary {
         res.get(key)
             .ok()
@@ -449,6 +505,13 @@ fn merge_resources(out: &Document, res: &mut Dictionary, fonts: &[ObjectId], ext
             gs.set(k.clone(), v.clone());
         }
         res.set("ExtGState", Object::Dictionary(gs));
+    }
+    if !xobjects.is_empty() {
+        let mut dict = sub(b"XObject", res);
+        for (k, v) in xobjects.iter() {
+            dict.set(k.clone(), v.clone());
+        }
+        res.set("XObject", Object::Dictionary(dict));
     }
 }
 
@@ -520,11 +583,12 @@ pub fn keep_pages(pdf: &[u8], keep: &[u32]) -> Result<Vec<u8>, PdfError> {
     Ok(out)
 }
 
-/// Content stream with the page template, ink and text in display
+/// Content stream with the page template, ink, images and text in display
 /// coordinates (y down), mapped to PDF user space by one `cm`.
 fn annotation_content(
     page: &Page,
     math: &MathTable<'_>,
+    images: &PageImages<'_>,
     gs: &mut BTreeMap<String, f64>,
     report: &mut ExportReport,
 ) -> String {
@@ -566,9 +630,7 @@ fn annotation_content(
                 report.text_blocks += 1;
                 text_content(&mut s, t, math, report);
             }
-            Element::Image(_) => report
-                .warnings
-                .push("image elements are not included in the PDF export yet".into()),
+            Element::Image(image) => report.images += u32::from(images.draw(&mut s, image)),
         }
     }
     s.push_str("Q\n");

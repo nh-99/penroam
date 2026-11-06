@@ -22,6 +22,11 @@ textBlocks: number,
  */
 replacedCharacters: number, 
 /**
- * Things that could not be exported (e.g. image elements).
+ * Image elements drawn. An image placed twice counts twice; one left
+ * out for being missing, damaged or too large isn't counted.
+ */
+images: number, 
+/**
+ * Things that could not be exported, for example a damaged image.
  */
 warnings: Array<string>, };
