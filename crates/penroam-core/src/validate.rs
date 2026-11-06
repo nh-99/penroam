@@ -22,6 +22,8 @@ pub mod limits {
     pub const MAX_ELEMENTS_PER_PAGE: usize = 500_000;
     /// UTF-8 bytes per text block.
     pub const MAX_TEXT_BYTES: usize = 1 << 20;
+    /// Smallest row pitch of a text block. Keeps a line's row count small.
+    pub const MIN_ROW_PITCH_PT: f64 = 4.0;
     /// Characters per notebook title.
     pub const MAX_TITLE_CHARS: usize = 300;
     /// Pages per notebook (live and trashed).
@@ -139,6 +141,13 @@ pub fn validate_element(e: &Element) -> Result<(), ValidationError> {
             }
             if !(t.font_size.is_finite() && (2.0..=400.0).contains(&t.font_size)) {
                 return err(format!("text {} font size out of range", t.id));
+            }
+            if let Some(p) = t.row_pitch {
+                if !(p.is_finite()
+                    && (limits::MIN_ROW_PITCH_PT..=limits::MAX_PAGE_SIDE_PT).contains(&p))
+                {
+                    return err(format!("text {} row pitch out of range", t.id));
+                }
             }
             if t.text.len() > limits::MAX_TEXT_BYTES {
                 return err(format!("text {} is too long", t.id));

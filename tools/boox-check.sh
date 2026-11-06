@@ -41,6 +41,8 @@ Manual part (needs the pen):
  1. Open the "BOOX check" notebook, pen tool: write a few words. Ink must appear
     immediately (hardware preview), stay after pen-up, never blink or double.
  2. Eraser tool + pen eraser button: strokes vanish as you cross them.
+ 2b. Erase and undo a few times: only the changed area refreshes, ink stays clean, and
+     there is no full-screen flash. After 30 of them one full refresh is expected.
  3. Switch to Text, type with the keyboard; switch back to Pen: ink, text and
     template stay aligned (check all four page corners after zooming/panning).
  4. Rotate the device, open/close the page drawer, background and resume the app:

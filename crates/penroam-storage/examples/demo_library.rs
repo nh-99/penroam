@@ -258,6 +258,7 @@ impl Pen<'_> {
             font_size: size,
             color: color.into(),
             align: TextAlign::Left,
+            row_pitch: None,
             extra: Extra::new(),
         })
     }
@@ -408,15 +409,19 @@ fn physics(lib: &mut Library, pen: &mut Pen) {
         2.0,
     ));
     e.extend(pen.write("N", bx + 46.0, by - 98.0, 7.0, GREEN, 2.0).0);
-    e.push(pen.text(
+    let mut note = pen.text(
         86.0,
-        ruled(18) + 6.0,
+        72.0 + 24.0 * 17.0,
         430.0,
-        66.0,
-        "Units: force in newtons (N = kg·m/s²). Net force zero means constant velocity, not necessarily rest.\nReview problems 3 to 7 before Thursday.",
+        96.0,
+        "**Units:** force in newtons, $N = kg \\cdot m/s^2$. Net force zero means *constant velocity*, not necessarily rest.\n\n- [ ] Review problems 3 to 7 before Thursday",
         12.0,
         INK,
-    ));
+    );
+    if let Element::Text(t) = &mut note {
+        t.row_pitch = Some(24.0);
+    }
+    e.push(note);
     e.extend(
         pen.write(
             "Q: why does a book on a table not fall?",

@@ -1,0 +1,1 @@
+-keep class ink.penroam.nativeprint.** { *; }

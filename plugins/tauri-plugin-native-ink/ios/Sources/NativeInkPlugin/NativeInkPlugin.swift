@@ -6,18 +6,22 @@
 // strokes are therefore drawn natively; Vue/Rust keep document semantics.
 //
 //  * A UIGestureRecognizer on the web view with allowedTouchTypes = [.pencil]
-//    claims Pencil touches inside the editor rect (cancelsTouchesInView), so
-//    the web canvas never sees them twice; fingers still reach the web view
-//    (pan/zoom/UI). Palm contacts are fingers, so they never draw.
+//    captures Pencil touches inside the editor rect; fingers reach the web view
+//    (pan/zoom/UI). cancelsTouchesInView does not stop WKWebView's own touch
+//    handling, so the Pencil also arrives there as pen pointer events, and the
+//    editor ignores those while this surface is visible. Pen-down/up are sent
+//    as "pen" events: the editor needs them to give fingers to pan/zoom and to
+//    ignore palms.
 //  * Coalesced touches are recorded; predicted touches are drawn only on the
 //    preview; estimated force updates patch recorded points.
 //  * On pen-up the stroke is sent to the web editor ("stroke" event); it stays
 //    on the preview until the editor calls `commitAck` after painting its
 //    committed copy (HandoffQueue; 2 s timeout as a safety net).
 //
-// Status: implemented and compiled against the iOS SDK only where a macOS +
-// Xcode toolchain is available; see docs/platforms/ipad.md for what has and
-// has not been validated on hardware.
+//  * Double-tap on the Pencil follows the system preference (UIPencilInteraction)
+//    and is reported as a "pencilTap" event.
+//
+// See docs/platforms/ipad.md for what has and has not been validated on hardware.
 #if canImport(UIKit)
 import InkCore
 import PencilSurface
@@ -106,10 +110,11 @@ final class PencilCapture: UIGestureRecognizer {
     }
 }
 
-class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
+class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
     private weak var webview: WKWebView?
     private var preview: PencilPreviewView?
     private var capture: PencilCapture?
+    private var pencilInteraction: UIPencilInteraction?
     private var cssRect = CGRect.zero
     private var brush = Brush()
     private var transform = ViewTransform()
@@ -140,8 +145,33 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
                 "pencilSurface": UIDevice.current.userInterfaceIdiom == .pad,
                 "maximumFramesPerSecond": UIScreen.main.maximumFramesPerSecond,
                 "webFrameRate": WebFrameRate.lastHookApply as Any,
+                "device": ["model": UIDevice.current.model, "system": UIDevice.current.systemVersion],
             ])
         }
+    }
+
+    /// Power state, for scheduling background work. Rust cannot read this on iOS.
+    @objc public func getPower(_ invoke: Invoke) {
+        DispatchQueue.main.async {
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            var result: [String: Any] = ["saver": ProcessInfo.processInfo.isLowPowerModeEnabled]
+            switch UIDevice.current.batteryState {
+            case .unplugged: result["onBattery"] = true
+            case .charging, .full: result["onBattery"] = false
+            default: break // unknown: leave it out
+            }
+            invoke.resolve(result)
+        }
+    }
+
+    func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
+        let action: String
+        switch UIPencilInteraction.preferredTapAction {
+        case .switchEraser: action = "switchEraser"
+        case .switchPrevious: action = "switchPrevious"
+        default: return // palettes and shortcuts belong to other apps
+        }
+        trigger("pencilTap", data: ["action": action])
     }
 
     @objc public func attach(_ invoke: Invoke) throws {
@@ -164,8 +194,16 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
                 wv.addGestureRecognizer(g)
                 capture = g
             }
+            if pencilInteraction == nil {
+                let i = UIPencilInteraction()
+                i.delegate = self
+                wv.addInteraction(i)
+                pencilInteraction = i
+            }
             place()
             setShown(false)
+            // attach runs again whenever the surface is remounted
+            expireTimer?.invalidate()
             expireTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.expire() }
             invoke.resolve(["mode": "UIKIT_PENCIL"])
         }
@@ -176,6 +214,9 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
             expireTimer?.invalidate(); expireTimer = nil
             if let g = capture { g.view?.removeGestureRecognizer(g) }
             capture = nil
+            if let i = pencilInteraction { i.view?.removeInteraction(i) }
+            pencilInteraction = nil
+            for s in handoff.pending { handoff.ack(s.id) }
             preview?.removeFromSuperview(); preview = nil
             invoke.resolve()
         }
@@ -270,6 +311,7 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
         p.live = s
         p.setNeedsDisplay()
         metrics["strokes_begun", default: 0] += 1
+        trigger("pen", data: ["down": true])
         return true
     }
 
@@ -283,6 +325,7 @@ class NativeInkPlugin: Plugin, UIGestureRecognizerDelegate {
     }
 
     func end(_ t: UITouch, _ event: UIEvent, cancelled: Bool) {
+        trigger("pen", data: ["down": false])
         guard let p = preview, let s = p.live else { return }
         if !cancelled { s.add((event.coalescedTouches(for: t) ?? [t]).map(sample), coalesced: true) }
         p.live = nil

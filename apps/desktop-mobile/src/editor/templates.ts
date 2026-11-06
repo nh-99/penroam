@@ -55,3 +55,17 @@ export function drawTemplate(ctx: CanvasRenderingContext2D, t: Template, w: numb
   }
   ctx.restore();
 }
+
+/** The pitch text locks to on this paper, or undefined when it has no writing rows. */
+export function rowPitchOf(t: Template): number | undefined {
+  return t.kind === "ruled" || t.kind === "dotted" ? t.spacing : undefined;
+}
+
+/**
+ * The top of a row-locked block near `y`. A one-row line's baseline is then one
+ * pitch below the top, and on ruled paper the first rule is the third row.
+ */
+export function snapToRow(y: number, t: Template, pitch: number, round: (v: number) => number = Math.round): number {
+  const first = t.kind === "ruled" ? 2 : 0;
+  return Math.max(first, round(y / pitch)) * pitch;
+}

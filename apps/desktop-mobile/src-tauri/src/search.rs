@@ -304,7 +304,7 @@ fn on_battery() -> Option<bool> {
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
-        None
+        crate::power::on_battery()
     }
 }
 

@@ -2,6 +2,7 @@
 // defaults. Stored in localStorage; notebooks themselves live in Rust storage.
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
+import type { Tool } from "../editor/engine";
 import type { PenOnlyMode } from "../editor/input";
 import type { Paper } from "../generated/Paper";
 import type { TemplateKind } from "../generated/TemplateKind";
@@ -12,7 +13,11 @@ const KEY = "penroam.settings.v1";
 
 interface Persisted {
   theme: ThemePref;
+  /** The last tool used on this device. */
+  tool: Tool;
   penOnly: PenOnlyMode;
+  /** A stylus has been used on this device, so "auto" gives fingers pan and zoom from the start. */
+  penSeen: boolean;
   useNativeInk: boolean;
   pressure: boolean;
   penColor: string;
@@ -21,6 +26,8 @@ interface Persisted {
   highlighterWidth: number;
   textColor: string;
   textSize: number;
+  /** New text is placed anywhere on ruled and dotted paper instead of on its rows. */
+  textFreePlacement: boolean;
   paper: Paper;
   template: TemplateKind;
   sidebarOpen: boolean;
@@ -31,7 +38,9 @@ interface Persisted {
 
 const defaults: Persisted = {
   theme: "system",
+  tool: "pen",
   penOnly: "auto",
+  penSeen: false,
   useNativeInk: true,
   pressure: true,
   penColor: "#111111",
@@ -40,6 +49,7 @@ const defaults: Persisted = {
   highlighterWidth: 14,
   textColor: "#111111",
   textSize: 16,
+  textFreePlacement: false,
   paper: "letter",
   template: "ruled",
   sidebarOpen: true,

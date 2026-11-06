@@ -1,0 +1,21 @@
+[package]
+name = "tauri-plugin-native-print"
+description = "Penroam printing: hands a finished PDF to the operating system's print dialog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+links = "tauri-plugin-native-print"
+
+[dependencies]
+tauri = { version = "2.12.5" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# GTK is already in the Linux build through Tauri and supplies the print dialog.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+penroam-pdf.workspace = true
+
+[build-dependencies]
+tauri-plugin = { version = "2.7.2", features = ["build"] }

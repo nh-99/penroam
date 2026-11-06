@@ -143,6 +143,7 @@ fn text(x: f64, y: f64, s: &str) -> Element {
         font_size: 16.0,
         color: "#1d4ed8".into(),
         align: TextAlign::Left,
+        row_pitch: None,
         extra: Default::default(),
     })
 }
@@ -245,7 +246,8 @@ fn annotated_export_keeps_source_pages_and_adds_vector_annotations() {
     ];
     pages.insert(2, blank);
 
-    let (bytes, report) = export_annotated(&pages, |h| (h == hash).then(|| pdf.clone())).unwrap();
+    let (bytes, report) =
+        export_annotated(&pages, &[], |h| (h == hash).then(|| pdf.clone())).unwrap();
     assert_eq!(report.pages, 6);
     assert_eq!(report.strokes, 7);
     assert_eq!(report.text_blocks, 5);
@@ -327,6 +329,129 @@ fn annotated_export_keeps_source_pages_and_adds_vector_annotations() {
 }
 
 #[test]
+fn keep_pages_leaves_only_the_chosen_pages() {
+    let source = make_pdf(
+        &[(612.0, 792.0, 0), (400.0, 500.0, 0), (300.0, 300.0, 0)],
+        true,
+    );
+    let infos = inspect(&source).unwrap();
+    let hash = penroam_storage_free_sha(&source);
+    let pages: Vec<Page> = infos
+        .iter()
+        .map(|info| pdf_page(info, &hash, vec![text(50.0, 50.0, "kept note")]))
+        .collect();
+    let (pdf, _) = export_annotated(&pages, &[], |_| Some(source.clone())).unwrap();
+
+    // out of order and repeated indexes, and one past the end, still give document order
+    let cut = keep_pages(&pdf, &[2, 0, 2, 9]).unwrap();
+    let doc = Document::load_mem(&cut).unwrap();
+    assert_eq!(doc.get_pages().len(), 2);
+    assert!(doc.extract_text(&[1]).unwrap().contains("Source page 1"));
+    assert!(doc.extract_text(&[2]).unwrap().contains("Source page 3"));
+    assert_eq!(inspect(&cut).unwrap()[1].media_box, infos[2].media_box);
+
+    // what was cut is gone from the file, not just unlinked
+    let streams = |d: &Document| d.objects.values().filter(|o| o.as_stream().is_ok()).count();
+    assert!(streams(&doc) < streams(&Document::load_mem(&pdf).unwrap()));
+
+    assert!(matches!(keep_pages(&pdf, &[]), Err(PdfError::NoPages)));
+    assert!(matches!(keep_pages(&pdf, &[3]), Err(PdfError::NoPages)));
+    assert!(matches!(keep_pages(b"junk", &[0]), Err(PdfError::Parse(_))));
+}
+
+/// A blank page holding one text block.
+fn text_page(text: &str, row_pitch: Option<f64>) -> Page {
+    let mut element = self::text(40.0, 48.0, text);
+    if let Element::Text(t) = &mut element {
+        t.width = 400.0;
+        t.row_pitch = row_pitch;
+    }
+    let mut page = Page::new(
+        Uuid::new_v4(),
+        Paper::Letter,
+        Size {
+            width: 612.0,
+            height: 792.0,
+        },
+        Template::default(),
+        0,
+    );
+    page.elements.push(element);
+    page
+}
+
+fn content_of(pages: &[Page], math: &[RenderedMath]) -> (String, ExportReport) {
+    let (bytes, report) = export_annotated(pages, math, |_| None).unwrap();
+    let doc = lopdf::Document::load_mem(&bytes).unwrap();
+    let id = *doc.get_pages().values().next().unwrap();
+    let content = doc.get_page_content(id);
+    (String::from_utf8_lossy(&content).into_owned(), report)
+}
+
+#[test]
+fn markdown_uses_the_matching_standard_fonts() {
+    let page = text_page("# Title\n\n**b** *i* ***bi*** `c` plain", None);
+    let (bytes, _) = export_annotated(&[page], &[], |_| None).unwrap();
+    let doc = lopdf::Document::load_mem(&bytes).unwrap();
+    let id = *doc.get_pages().values().next().unwrap();
+    let content = String::from_utf8_lossy(&doc.get_page_content(id)).into_owned();
+    for font in ["PRHelv ", "PRHelvB ", "PRHelvI ", "PRHelvBI ", "PRCour "] {
+        assert!(content.contains(&format!("/{font}")), "{font} in {content}");
+    }
+    assert!(content.contains("(Title) Tj"));
+    assert!(!content.contains('#'), "the heading marker is not text");
+    let fonts = doc.get_page_fonts(id).unwrap();
+    assert_eq!(fonts.len(), 5);
+    let base = |n: &[u8]| {
+        fonts[n]
+            .get(b"BaseFont")
+            .unwrap()
+            .as_name()
+            .unwrap()
+            .to_vec()
+    };
+    assert_eq!(base(b"PRHelvBI"), b"Helvetica-BoldOblique");
+    assert_eq!(base(b"PRCour"), b"Courier");
+}
+
+#[test]
+fn row_locked_text_lands_on_the_rows() {
+    let (content, _) = content_of(&[text_page("one\ntwo", Some(24.0))], &[]);
+    assert!(content.contains("1 0 0 -1 40 72 Tm (one) Tj"), "{content}");
+    assert!(content.contains("1 0 0 -1 40 96 Tm (two) Tj"), "{content}");
+}
+
+#[test]
+fn formulas_are_filled_outlines_from_the_table() {
+    let math = [RenderedMath {
+        tex: "x".into(),
+        display: false,
+        width: 1.0,
+        height: 0.5,
+        depth: 0.1,
+        path: "M 0 0 L 1 0 C 1 -0.25 0.5 -0.5 0 -0.5 Z".into(),
+    }];
+    let (content, _) = content_of(&[text_page("a $x$ b", None)], &math);
+    // 16 pt: "a " is 13.344 wide and the first baseline is 15.52 down
+    assert!(content.contains("53.344 63.52 m"), "{content}");
+    assert!(content.contains("69.344 63.52 l"), "{content}");
+    assert!(
+        content.contains("69.344 59.52 61.344 55.52 53.344 55.52 c"),
+        "{content}"
+    );
+    assert!(content.contains("h\nf"), "{content}");
+    assert!(!content.contains('$'), "{content}");
+}
+
+#[test]
+fn a_formula_outside_the_table_is_written_as_source() {
+    let (content, report) = content_of(&[text_page("$x$", None)], &[]);
+    assert!(content.contains("/PRCour"));
+    assert!(content.contains("($x$) Tj"), "{content}");
+    assert_eq!(report.replaced_characters, 0);
+}
+
+#[test]
 fn render_with_pdftoppm_if_available() {
     // Visual smoke test: rasterise the export and check that annotation pixels
     // land where expected. Skipped when poppler is not installed.
@@ -351,7 +476,7 @@ fn render_with_pdftoppm_if_available() {
             InkTool::Pen,
         )],
     );
-    let (bytes, _) = export_annotated(&[page], |_| Some(pdf.clone())).unwrap();
+    let (bytes, _) = export_annotated(&[page], &[], |_| Some(pdf.clone())).unwrap();
     let dir = std::env::temp_dir().join(format!("penroam-pdf-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.pdf"), &bytes).unwrap();

@@ -12,10 +12,13 @@ account, a server or a subscription.
 ## Highlights
 
 - **Write naturally.** A pressure-sensitive pen, a highlighter and a stroke eraser (including
-  your stylus's eraser button). On BOOX e-ink tablets, ink is drawn by the device's own
-  low-latency pen layer.
-- **Ink and typing together.** Drop a text box anywhere on the page, then move it, resize it,
-  recolour it or change its size alongside your handwriting.
+  your stylus's eraser end or side button). On BOOX e-ink tablets, ink is drawn by the device's
+  own low-latency pen layer.
+- **Ink and typing together.** Type on the rows of ruled or dotted paper, or place text
+  anywhere on the page, then move it, resize it, recolour it or change its size alongside your
+  handwriting.
+- **Markdown and LaTeX.** Text boxes understand Markdown, including tables and task lists, and
+  LaTeX formulas. They look the same on screen, in exported PDFs and on paper.
 - **Annotate PDFs.** Import a PDF as pages, then write and type on it. Export an annotated PDF
   in which your ink stays sharp vector lines. The original PDF is kept unchanged.
 - **Paper that suits the note.** Letter or A4 pages, blank, ruled, grid or dotted.
@@ -23,6 +26,8 @@ account, a server or a subscription.
 - **Never lose work.** Every stroke is saved to disk as you go, and the indicator in the top
   bar tells you when it has been. If the app or computer crashes, your notebook reopens with
   everything you'd written.
+- **Print your notes.** Print a whole notebook or just some pages, with ink as sharp as on
+  screen.
 - **Your files, your choice.** Export any notebook as a `.penroam` file (a documented,
   lossless format) and open it on another device.
 - **Light, dark and ePaper themes**, with layouts for desktop, tablet and phone.
@@ -80,11 +85,54 @@ to download the notebook.
 | Highlighter | `M` | Translucent marker |
 | Eraser | `E` | Removes whole strokes |
 | Select | `V` | Drag a box around ink or text to move or delete it |
-| Text | `T` | Click anywhere to type. `Esc` finishes the text box |
+| Lasso | `L` | Draw a loop around ink or text to select it, then drag inside the selection to move it |
+| Text | `T` | Click where you want to type, click a text box to edit it, or drag one to move it. `Esc` finishes the text box |
 | Pan | `H` | Move around the page |
 
-Undo and redo with `Ctrl+Z` / `Ctrl+Shift+Z`. Zoom with `Ctrl` and the mouse wheel, a pinch,
-or `Ctrl+=` / `Ctrl+-`. `Ctrl+0` fits the page to the window width.
+**Typing on rows.** On ruled and dotted paper, text sits on the paper's rows: each line lands
+on a row, large text takes more than one row, and dragging a text box moves it a row at a time.
+The rows button in the toolbar turns this off, so new text can go anywhere on the page. With a
+text box selected, the same button frees that box or puts it on the rows. Text boxes written
+freely, including those from earlier versions of Penroam, stay where they are until you do.
+Blank paper, grid paper and PDF pages have no rows, so text goes anywhere on them.
+
+**Lining up text.** When you drag a text box or click to start a new one close to another text
+box, it snaps into line with it and a pink guide shows what it lined up with. Dragged boxes
+match left edges, centres and right edges, and free text also matches tops and baselines. Hold
+`Alt` to place text without snapping.
+
+**Formatting text.** Write Markdown in a text box. You see the source while you type and the
+formatted result when you finish the box. Press `Enter` for a new line and leave a blank line
+for a gap. While you edit, dragging inside the box selects text; drag the area just around it
+to move the box instead.
+
+| Write | To get |
+|---|---|
+| `# Title` to `###### Title` | Headings |
+| `**bold**`, `*italic*`, `~~struck~~`, `` `code` `` | Inline styles |
+| `- item`, `1. item`, `- [ ] task`, `- [x] done` | Lists and task lists |
+| `> quote` | A quotation |
+| ` ``` ` on the lines above and below | A block of code |
+| `\| a \| b \|`, then `\|---\|---\|`, then rows | A table |
+| `---` | A horizontal line |
+| `$E = mc^2$` | An inline formula |
+| `$$\sum_i x_i$$` | A formula on its own line |
+
+Formulas use LaTeX with the AMS math environments. One Penroam can't draw, such as a typo in a
+command, is shown as you wrote it. A dollar sign followed by a digit or a space stays a dollar
+sign, and `\$` always does. Links are underlined but don't open, and images show their
+description, because Penroam doesn't fetch anything from the web for a note.
+
+Undo and redo with `Ctrl+Z` / `Ctrl+Shift+Z`. Zoom with `Ctrl` and the mouse wheel, a pinch on a
+touchpad or touchscreen, or `Ctrl+=` / `Ctrl+-`. `Ctrl+0` fits the page to the window width.
+
+Penroam remembers your last tool on each device.
+
+**Pens.** A pen's eraser end erases, and so does holding its side button, including on an S Pen.
+If your pen hovers, a ring shows where it will touch down. On an iPad, double-tapping the Apple
+Pencil does what you chose in iPadOS Settings: switch to the eraser or to your previous tool.
+**Settings → General** shows how pen input works on your device. S Pen and desktop pen support
+has not been tested on real hardware yet, so tell us how it goes.
 
 On a touchscreen, **Settings** decides what your fingers do:
 
@@ -101,12 +149,18 @@ between pages.
 notebook, then write on it like any other page. To get the PDF back with your notes on it,
 choose **Export → Annotated PDF**.
 
+**Printing.** Press `Ctrl+P` in a notebook, or choose **Print…** from the **Export** menu in the
+top bar or from a notebook's **⋮** menu in the library. Your system's print dialog opens, so
+you choose the printer, the number of copies and which pages to print there. A printout matches
+**Export → Annotated PDF**, and Penroam tells you if anything couldn't be included. On Windows
+and macOS the notebook opens in your default PDF viewer instead, and you print from there.
+
 **Searching.** Click the magnifying glass (`Ctrl+K` in the library, `Ctrl+F` in a notebook)
 and type. Penroam searches every notebook's titles, typed text and the text of imported PDFs.
 It also reads your handwriting: on Windows with the handwriting recognizer built into Windows,
-and on devices without one with a handwriting model, a file you install under
-**Settings → Advanced** (it runs on your device and is used as a fallback on Windows too).
-Choose a result to open its page with the matching words outlined. Quoted words
+and on devices without one with a handwriting model, which Penroam downloads once, shortly after
+you first open it. The model runs on your device, and the download sends none of your notes. On
+Windows it is optional, as a fallback; get it under **Settings → Advanced**. Choose a result to open its page with the matching words outlined. Quoted words
 (`"budget review"`) match as a phrase, and close misspellings still find handwriting that was
 read slightly wrong (marked *similar spelling*). If a handwritten line was read wrongly, click
 the pencil next to the result and type what it says; search uses your reading from then on, and
@@ -116,7 +170,8 @@ search index. Without a recognizer or an installed model, Penroam searches title
 PDF text, but not handwriting.
 
 **Settings → Advanced** chooses between your device's recognizer and the Penroam model where you
-have both, and installs or removes the model.
+have both, and checks for model updates, installs a model from a file, or removes it. A model you
+remove stays removed.
 
 **Moving notebooks between devices.** Use **Export → Notebook (.penroam)** to save a
 notebook as a file. On the other device, click **Import** in the library. Everything comes
@@ -131,7 +186,8 @@ immediately if you want extra reassurance.
 Notebooks are stored in the app's private data folder on your device and nowhere else.
 Penroam has no accounts and no analytics. Search works entirely on your device: the
 search index is kept in the app's cache folder, and neither it nor anything you search for is
-uploaded or included in exports. The `.penroam` format is documented
+uploaded or included in exports. When you print, your device's print system receives a copy of
+what you print. The `.penroam` format is documented
 in [docs/formats/](docs/formats/), so your notes are never locked into this app.
 
 ## Contributing

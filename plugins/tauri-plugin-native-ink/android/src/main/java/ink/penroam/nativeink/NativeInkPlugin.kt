@@ -1,6 +1,11 @@
 package ink.penroam.nativeink
 
 import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.PowerManager
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -89,6 +94,18 @@ class NativeInkPlugin(private val activity: Activity) : Plugin(activity) {
     fun getCapabilities(invoke: Invoke) = ui(invoke) {
         val caps = ink?.getCapabilities() ?: BooxCapabilities.detect(activity).toJson()
         invoke.resolve(JSObject(caps.put("initErrors", JSONArray(BooxInk.initErrors)).toString()))
+    }
+
+    /** Power state, for scheduling background work. Rust cannot read this on Android. */
+    @Command
+    fun getPower(invoke: Invoke) = ui(invoke) {
+        // the sticky broadcast needs no receiver and no permission
+        val battery = activity.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val plugged = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val saver = (activity.getSystemService(Context.POWER_SERVICE) as PowerManager).isPowerSaveMode
+        val result = JSObject().put("saver", saver)
+        if (battery != null) result.put("onBattery", plugged == 0)
+        invoke.resolve(result)
     }
 
     @Command

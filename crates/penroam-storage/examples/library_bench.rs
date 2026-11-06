@@ -135,6 +135,7 @@ fn main() {
         font_size: 16.0,
         color: "#111111".into(),
         align: TextAlign::Left,
+        row_pitch: None,
         extra: Default::default(),
     };
     rev = lib

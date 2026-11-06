@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { EllipsisVertical, SquarePen, Download, FileDown, Trash, Palette } from "@lucide/vue";
+import { EllipsisVertical, SquarePen, Download, FileDown, Printer, Trash, Palette } from "@lucide/vue";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import Menu from "./ui/Menu.vue";
 import MenuItem from "./ui/MenuItem.vue";
 
 const props = defineProps<{ nb: NotebookSummary; cover?: string }>();
-const emit = defineEmits<{ open: []; rename: []; export: []; exportPdf: []; trash: []; recolor: [] }>();
+const emit = defineEmits<{ open: []; rename: []; export: []; exportPdf: []; print: []; trash: []; recolor: [] }>();
 const updated = computed(() => {
   const d = new Date(props.nb.updatedAt);
   const days = Math.floor((Date.now() - d.getTime()) / 86400000);
@@ -44,6 +44,7 @@ const updated = computed(() => {
         <MenuItem @click="emit('recolor')"><Palette :size="16" />Change cover colour</MenuItem>
         <MenuItem @click="emit('export')"><Download :size="16" />Export .penroam…</MenuItem>
         <MenuItem @click="emit('exportPdf')"><FileDown :size="16" />Export annotated PDF…</MenuItem>
+        <MenuItem @click="emit('print')"><Printer :size="16" />Print…</MenuItem>
         <MenuItem danger @click="emit('trash')"><Trash :size="16" />Move to trash</MenuItem>
       </Menu>
     </div>

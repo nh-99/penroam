@@ -116,7 +116,7 @@ function recolor(nb: NotebookSummary) {
         <div v-else class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           <NotebookCard v-for="nb in list" :key="nb.id" :nb="nb" :cover="lib.covers[nb.id]"
             @open="lib.open(nb.id)" @rename="renaming = nb" @recolor="recolor(nb)"
-            @export="lib.exportNotebook(nb.id, nb.title)" @export-pdf="lib.exportPdf(nb.id, nb.title)" @trash="lib.trash(nb.id)" />
+            @export="lib.exportNotebook(nb.id, nb.title)" @export-pdf="lib.exportPdf(nb.id, nb.title)" @print="lib.printNotebook(nb.id)" @trash="lib.trash(nb.id)" />
           <CloudNotebookCard v-for="nb in sync.cloudNotebooks" :key="nb.notebookId" :nb="nb"
             :downloading="sync.downloading.includes(nb.notebookId)" @download="download(nb.notebookId)" />
         </div>

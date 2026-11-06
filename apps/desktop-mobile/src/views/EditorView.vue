@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Settings, LoaderCircle, TriangleAlert, Search } from "@lucide/vue";
+import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search } from "@lucide/vue";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
@@ -117,6 +117,7 @@ watch(
 
 const exportNb = () => lib.exportNotebook(nb.value.id, nb.value.title, host.flush);
 const exportPdf = () => lib.exportPdf(nb.value.id, nb.value.title, host.flush);
+const print = () => lib.printNotebook(nb.value.id, lib.currentPageId, host.flush);
 
 const templates: { kind: TemplateKind; label: string }[] = [
   { kind: "blank", label: "Blank" },
@@ -153,6 +154,9 @@ function onKey(e: KeyboardEvent) {
   } else if (m && k === "s") {
     e.preventDefault();
     host.flush().then(() => ui.success("All changes saved to disk."), (err) => ui.error(`Save failed: ${err.message}`));
+  } else if (m && !e.shiftKey && k === "p") {
+    e.preventDefault();
+    void print();
   } else if (m && e.shiftKey && k === "n") {
     e.preventDefault();
     void addPage();
@@ -170,7 +174,7 @@ function onKey(e: KeyboardEvent) {
     ed.setTool("select");
     ed.selectAll();
   } else if (!m && !e.altKey) {
-    const tools: Record<string, Tool> = { p: "pen", m: "highlighter", e: "eraser", v: "select", t: "text", h: "hand" };
+    const tools: Record<string, Tool> = { p: "pen", m: "highlighter", e: "eraser", v: "select", l: "lasso", t: "text", h: "hand" };
     if (tools[k]) ed.setTool(tools[k]);
     else if (k === "delete" || k === "backspace") ed.deleteSelection();
     else if (k === "escape") ed.clearSelection();
@@ -218,19 +222,20 @@ watch(narrow, (n) => {
             </MenuItem>
           </Menu>
           <IconBtn label="Import PDF as pages" @click="importPdf"><FileUp :size="20" /></IconBtn>
-          <Menu label="Export">
+          <Menu label="Export and print">
             <template #trigger="{ toggle, open }">
-              <IconBtn label="Export" :aria-expanded="open" aria-haspopup="menu" @click="toggle"><Download :size="20" /></IconBtn>
+              <IconBtn label="Export and print" :aria-expanded="open" aria-haspopup="menu" @click="toggle"><Download :size="20" /></IconBtn>
             </template>
             <MenuItem @click="exportNb"><Download :size="16" />Notebook (.penroam, editable)…</MenuItem>
             <MenuItem @click="exportPdf"><FileDown :size="16" />Annotated PDF…</MenuItem>
+            <MenuItem @click="print"><Printer :size="16" />Print…</MenuItem>
           </Menu>
           <IconBtn class="hidden sm:inline-flex" label="Settings" @click="showSettings = true"><Settings :size="20" /></IconBtn>
         </div>
       </div>
       <Toolbar v-if="!narrow" class="border-t border-line" :state="st" @tool="setTool" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
-        @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" />
+        @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" @free-placement="(f) => host.editor.value?.setSelectionFreePlacement(f)" />
       <CloudBanner compact class="border-t border-b-0" />
     </header>
 
@@ -271,7 +276,7 @@ watch(narrow, (n) => {
     <footer v-if="narrow" class="safe-bottom relative z-30 border-t border-line bg-surface">
       <Toolbar compact :state="st" @tool="setTool" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
-        @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" />
+        @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" @free-placement="(f) => host.editor.value?.setSelectionFreePlacement(f)" />
     </footer>
 
     <ConflictsDialog v-if="showConflicts" :notebook-id="nb.id" :current-title="nb.title" @close="showConflicts = false" @resolved="lib.reloadCurrent(); lib.currentPageId && host.markChanged([lib.currentPageId])" />

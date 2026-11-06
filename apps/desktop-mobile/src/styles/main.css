@@ -11,6 +11,34 @@
   font-style: normal;
   font-display: block;
 }
+@font-face {
+  font-family: "PenroamSans";
+  src: url("../assets/fonts/LiberationSans-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "PenroamSans";
+  src: url("../assets/fonts/LiberationSans-Italic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: block;
+}
+@font-face {
+  font-family: "PenroamSans";
+  src: url("../assets/fonts/LiberationSans-BoldItalic.ttf") format("truetype");
+  font-weight: 700;
+  font-style: italic;
+  font-display: block;
+}
+@font-face {
+  font-family: "PenroamMono";
+  src: url("../assets/fonts/LiberationMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
 
 @theme {
   --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, "Roboto", "Helvetica Neue", sans-serif;
@@ -197,6 +225,14 @@ body {
   user-select: text;
   -webkit-user-select: text;
   touch-action: manipulation;
+}
+/* The grab strip around a box being edited. Sized with --inv to stay the same on screen. */
+.penroam-editframe {
+  box-sizing: content-box;
+  padding: calc(10px * var(--inv, 1));
+  margin: calc(-10px * var(--inv, 1));
+  cursor: move;
+  touch-action: none;
 }
 [data-tool="text"] {
   cursor: text;

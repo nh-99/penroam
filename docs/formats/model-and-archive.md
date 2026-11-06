@@ -84,7 +84,8 @@ The page is shown here as JSON — the form used over IPC, in operations, and in
 
 * `points` are the original input samples mapped to page points (rounded to 0.001 pt; pressure
   to 1e-4). Predicted samples are never stored. `pressure` is normalised 0..1 (mouse 0.5); raw
-  platform ranges live in `input` (e.g. `maxTouchPressure` from Onyx).
+  platform ranges live in `input` (e.g. `maxTouchPressure` from Onyx; `maximumForce` and
+  `pressureCurve` from Apple Pencil, whose strokes are stored through a curve).
 * `flags`: bit 1 = pressure was an estimate refined later (iOS), bit 2 = sample came from a
   coalesced event list.
 * Rendering (all ports): width = `pressure ? max(0.5, width·(0.4 + 1.2·p)) : width`; midpoint
@@ -95,14 +96,46 @@ The page is shown here as JSON — the form used over IPC, in operations, and in
 
 ```jsonc
 { "type": "text", "id": "…", "z": 13, "x": 72, "y": 120, "width": 280, "height": 40,
-  "text": "Plain multiline text\nsecond line", "fontSize": 16, "color": "#111111", "align": "left" }
+  "text": "A **Markdown** note\nsecond line", "fontSize": 16, "color": "#111111", "align": "left",
+  "rowPitch": 24 }  // optional
 ```
 
-Layout is deterministic: widths from `crates/penroam-core/data/text-metrics.json` (Liberation
-Sans = Helvetica metrics); explicit `\n` breaks; greedy wrapping at spaces; over-long words
-break between characters; trailing spaces don't count. Line height 1.25 em, first baseline
-0.97 em below `y`. Golden: `tests/fixtures/text-layout-golden.json`. `height` is the laid-out
+`text` is Markdown source: CommonMark with GFM tables, strikethrough and task lists, plus
+LaTeX formulas. Source is all that is stored, so a client that doesn't render Markdown still
+shows the note, and search indexes what was typed. Rules for rendering it:
+
+* A soft line break is a line break: Enter starts a new line in a note. Blocks are one line
+  apart, and several blank lines count as one.
+* HTML is shown as text. Links are underlined and don't open. Images show their alt text.
+  Containers nested past 16 levels join their parent.
+* `$…$` is an inline formula: it closes on its line, opens before a non-space, and closes after
+  a non-space and not before a digit. `$$…$$` is a display formula on its own line and may span
+  lines up to a blank line. `\$`, code spans and fences are left alone. A formula that can't be
+  drawn shows its source in the code face.
+
+Layout is deterministic and lives in `penroam_core::markdown`, with a TypeScript port in
+`apps/desktop-mobile/src/editor/markdown.ts`: widths from
+`crates/penroam-core/data/text-metrics.json` (Liberation Sans and Mono = Helvetica and Courier
+metrics); greedy wrapping at spaces; over-long words break between characters; trailing spaces
+don't count. Line height 1.25 em, first baseline 0.97 em below `y`. `height` is the laid-out
 content height (renderers never clip).
+
+`rowPitch` locks a block to the paper's rows. Every line then takes
+`ceil(tallest / rowPitch)` rows, where `tallest` is its largest font size or formula, and its
+baseline sits on the last of them. Block gaps are one row, and `y` is a whole number of pitches,
+so baselines stay on the paper's rows. Ruled paper's first rule is the third row, so locked text
+starts at `y = 2 × spacing`; dotted paper's is the first, so it can start at 0. When a page's
+template changes to ruled or dotted paper, locked blocks take its spacing in the same operation
+batch. Without `rowPitch` a block uses the natural line height. A client that predates the field
+keeps it as an unknown key and draws the block with natural line height.
+
+Goldens: `tests/fixtures/markdown-layout-golden.json` (Markdown) and
+`tests/fixtures/text-layout-golden.json` (plain wrapping).
+
+Formulas aren't stored. MathJax renders them in the webview to outlines in em, for the canvas and
+for each PDF export or print, which passes them to Rust as `RenderedMath` values
+(`apps/desktop-mobile/src/editor/math.ts`, `crates/penroam-pdf`). The PDF exporter uses the
+standard Helvetica and Courier fonts and fills formula outlines as vector paths.
 
 ### Image (minimal)
 

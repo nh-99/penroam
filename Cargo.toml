@@ -10,6 +10,7 @@ members = [
   "crates/penroam-search",
   "apps/desktop-mobile/src-tauri",
   "plugins/tauri-plugin-native-ink",
+  "plugins/tauri-plugin-native-print",
 ]
 
 [workspace.package]

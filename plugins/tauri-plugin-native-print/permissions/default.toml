@@ -1,0 +1,3 @@
+[default]
+description = "Grants nothing: the print plugin has no commands for the WebView."
+permissions = []

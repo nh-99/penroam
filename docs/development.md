@@ -1,8 +1,8 @@
 # Development
 
 Stack: Tauri 2 · Vue 3 (Composition API) + TypeScript · Vite · Tailwind CSS 4 · `@lucide/vue` ·
-Pinia · PDF.js · Rust (`penroam-core`, `penroam-storage`, `penroam-pdf`, `penroam-search`, `lopdf`, `zip`,
-SQLite via `rusqlite`) ·
+Pinia · PDF.js · markdown-it · MathJax · Rust (`penroam-core`, `penroam-storage`, `penroam-pdf`,
+`penroam-search`, `lopdf`, `pulldown-cmark`, `zip`, SQLite via `rusqlite`) ·
 native ink adapters (BOOX Onyx SDK on Android, UIKit Pencil layer on iPadOS).
 Design: [`architecture/overview.md`](architecture/overview.md).
 
@@ -11,7 +11,7 @@ Design: [`architecture/overview.md`](architecture/overview.md).
 ```text
 apps/desktop-mobile/   Tauri app (Vue frontend in src/, Rust shell in src-tauri/)
 crates/                penroam-core · penroam-storage · penroam-pdf · penroam-search · penroam-sync-protocol · penroam-sync-testkit · penroam-sync
-plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters)
+plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters) · tauri-plugin-native-print (system print dialogs)
 android/               BooxInkView (Onyx Pen SDK module used by the native ink plugin)
 ios/                   InkKit (Swift ink core and Pencil surface used by the native ink plugin)
 tests/fixtures/        geometry/text goldens, benchmark scenes, PDF fixture, .prp golden, legacy libraries
@@ -55,7 +55,9 @@ cd ../../android && ./gradlew :boox-ink:testDebugUnitTest          # JVM tests o
 tools/boox-check.sh                                                # on-device plumbing check + manual checklist
 ```
 
-Details: [`platforms/boox.md`](platforms/boox.md).
+Details: [`platforms/boox.md`](platforms/boox.md). Other Android tablets, including the S Pen:
+[`platforms/android.md`](platforms/android.md). What is verified on which device:
+[`platforms/capabilities.md`](platforms/capabilities.md).
 
 ## iOS / iPadOS
 
@@ -67,6 +69,21 @@ cd ios/InkKit && swift test        # Linux or macOS: InkCore + PencilSurface tes
 ```
 
 Details and the device checklist: [`platforms/ipad.md`](platforms/ipad.md).
+
+## Text layout
+
+Text block layout exists twice, in `crates/penroam-core/src/markdown.rs` and
+`apps/desktop-mobile/src/editor/markdown.ts`. Change them together, then regenerate the golden
+file both are checked against:
+
+```sh
+UPDATE_GOLDEN=1 cargo test -p penroam-core --test markdown
+pnpm --filter penroam test
+```
+
+Add a line to `CORPUS` in `crates/penroam-core/tests/markdown.rs` when the two parsers turn out to
+disagree on something. After changing a bundled font, regenerate the widths with
+`node tools/gen-font-metrics.mjs apps/desktop-mobile/src/assets/fonts crates/penroam-core/data/text-metrics.json`.
 
 ## Benchmarks
 
@@ -87,9 +104,8 @@ Raw output goes to the git-ignored `benchmarks/results/`; the method is in
 The app downloads models from a signed catalog (§12c of
 [`protocol/sync-protocol-v1.md`](protocol/sync-protocol-v1.md)). Penroam Cloud publishes the model
 promoted in OtterML by itself; the `sign` command below is for testing and for other servers. It trusts the public keys in
-`TRUSTED_KEYS` (`apps/desktop-mobile/src-tauri/src/models.rs`). **That list is empty until a real
-key is added**: with no key, the app makes no model requests, and models can only be installed
-from a file.
+`TRUSTED_KEYS` (`apps/desktop-mobile/src-tauri/src/models.rs`). A build with no key would make no
+model requests, and models could then only be installed from a file.
 
 ```bash
 # once: the secret file must never reach a server that answers clients; the public key goes
@@ -267,6 +283,18 @@ npm package; it is not vendored). Synthetic pages test the pipeline. They are no
 handwriting, and numbers from them are not accuracy claims. Real measurements need pages
 written by people who agreed to it, kept outside the repository. Reports and corpora stay
 local (`benchmarks/` is git-ignored).
+
+`examples/make_eval_corpus.rs` builds such a corpus from exported notebooks in which each writer
+copied a fixed set of prompts, one prompt line per written line:
+
+```bash
+cargo run -p penroam-search --example make_eval_corpus -- --prompts prompts.txt --out corpus.json writer-a=a.penroam writer-b=b.penroam
+```
+
+It matches each page's regions to its prompt from the top down and leaves out, with a message,
+any page where the counts differ. The writer becomes the page's `style`, so reports come out per
+writer. Handwriting models are compared with the benchmark that sits beside the trainers in the
+private models repository; on the same corpus and bundle its numbers agree with this tool's.
 
 ## README screenshots
 

@@ -9,7 +9,7 @@ Tauri was chosen over Flutter after an evaluation of both on the target devices.
 ```text
 apps/desktop-mobile/            Tauri 2 app
   src/                          Vue 3 + TS + Vite + Tailwind 4 + @lucide/vue
-    editor/                     framework-free editor: engine, renderer, session, geometry, text layout, PDF.js
+    editor/                     framework-free editor: engine, renderer, session, geometry, text and Markdown layout, math, PDF.js
     components/ views/          UI (library, editor, toolbar, sidebar, dialogs)
     composables/                editor host (page loading, flushing, native surface wiring)
     stores/                     Pinia: library + UI state + device preferences (UI state only)
@@ -18,7 +18,7 @@ apps/desktop-mobile/            Tauri 2 app
     bench/                      Workload D benchmark harness (docs/benchmarks/protocol.md)
   src-tauri/                    Rust shell: typed commands, structured errors, flush-on-close
     gen/android/                generated Android project (+ scripts/patch-android.py)
-crates/penroam-core             schema, validation, page ops, operation schema + merge model (replica), binary page codec, geometry, text layout, migrations
+crates/penroam-core             schema, validation, page ops, operation schema + merge model (replica), binary page codec, geometry, text and Markdown layout, migrations
 crates/penroam-storage          live library: device-wide operation journal, checkpoints, trash, recovery, outbox counters, .penroam archive
 crates/penroam-pdf              PDF inspection (import) and annotated vector export (lopdf)
 crates/penroam-sync-protocol    public sync wire contract: versions, ids, limits, envelope header, canonical bytes, framing, DTOs, errors
@@ -26,8 +26,9 @@ crates/penroam-sync-testkit     development test server (in memory / persisted, 
 crates/penroam-sync             sync client: crypto, key log, operation log, transports, reconcile engine, dev CLI
 crates/penroam-search           local search: handwriting regions, recognizers (Windows ink, Apple Vision, Penroam model), SQLite FTS5 index
 plugins/tauri-plugin-native-ink NativeInkSurface: Rust bridge, android/ (Kotlin), ios/ (Swift/UIKit)
+plugins/tauri-plugin-native-print system print dialogs: GTK (Rust), android/ (Kotlin), ios/ (Swift/UIKit)
 android/  ios/                  native ink modules used by the plugin: BooxInkView (Kotlin, Gradle root for its tests), InkKit (Swift)
-tests/fixtures/                 shared fixtures (strokes, geometry and text-layout goldens, scenes, PDF, .prp golden, legacy libraries)
+tests/fixtures/                 shared fixtures (strokes, geometry, text and Markdown layout goldens, scenes, PDF, .prp golden, legacy libraries)
 fuzz/                           cargo-fuzz targets (page decoder, journal open, sync batch frame)
 tools/linux-e2e/                XTest input driver + session runner for real-app E2E on Linux
 tools/  docs/                   dev tools, documentation (benchmarks/ = local, git-ignored benchmark output)
@@ -155,15 +156,49 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
 * **Hand-off**: on pen-up the stroke is committed to the session, which paints it into the
   page cache synchronously; the preview is cleared in the same task, so both changes reach the
   same frame (no flash, no double). Native surfaces use an explicit acknowledgement (§6).
-* Text blocks are rendered from a deterministic layout (`textLayout.ts` = `penroam-core::text`,
-  same metrics file, golden-tested) with the bundled Liberation Sans (metric-compatible with
-  Helvetica, which the PDF export uses). Editing uses a textarea overlay positioned in the same
-  page coordinate system; the canvas copy is hidden while editing.
+* The page itself must never zoom. WebView2's pinch zoom is off and WKWebView doesn't magnify
+  unless asked to, but WebKitGTK zooms the page natively on a touchpad pinch and tells nobody. On
+  Linux `src-tauri/src/pinch.rs` takes pinches from GDK before GTK dispatches them and forwards
+  them to `InkEditor.platformPinch`, which zooms the canvas.
+* Text blocks are Markdown, rendered from a deterministic layout (`markdown.ts` =
+  `penroam-core::markdown`, built on the metrics in `textLayout.ts` = `penroam-core::text`), so
+  wrapping is identical on every OS and in the PDF. The two ports use different parsers
+  (markdown-it and pulldown-cmark) and are held together by a shared golden file; formulas are
+  scanned out before either parser runs, so they can't disagree about TeX. Rendering uses bundled
+  Liberation fonts, metric-compatible with the Helvetica and Courier that the PDF export uses. A
+  layout is cached by its inputs, because hit tests and dirty-rect redraws need a block's bounds.
+  Editing uses a textarea overlay in the same coordinates, showing the Markdown source; text
+  locked to the paper's rows uses the row pitch as its line height there too.
+* Formulas come from MathJax, loaded on first use because it is the largest dependency. It runs
+  only in the webview, so PDF export and printing first ask Rust which formulas a notebook has,
+  render them, and pass the outlines back. Until MathJax is ready a formula shows its source.
+* Text blocks align with each other as they are dragged or placed (`snap.ts`). This only moves
+  them: it adds nothing to the page model. Row-locked text snaps across only, since its rows
+  are already aligned.
 * Paint order is ink → images → text (same in the PDF exporter).
-* Input rules: pen eraser button erases; palm-sized touches are ignored; touches are ignored
-  while the pen is down; "pen-only" mode (auto after the first pen event) makes fingers pan and
+* Input rules: pen eraser button erases; palm-sized touches are ignored (not on iOS, where
+  fingertips report palm-like sizes); touches are ignored
+  while the pen is down; "pen-only" mode (auto after the first pen use on the device, remembered
+  across launches; native surfaces report it themselves) makes fingers pan and
   zoom; `pointercancel`, lost capture, window blur and app backgrounding finish or cancel
   gestures so no stroke is ever left stuck.
+
+**Sharp past the canvas limit.** Page canvases are capped by pixel area (8 Mpx on mobile, about
+200 % zoom on an iPad with a Letter page). Beyond that, two detail canvases cover the viewport plus
+a margin at full resolution, and a clip-path cuts their area out of the page layers. They sit in the
+viewport rather than the scaled page element, shown 1:1 with device pixels, because a compositor can
+stretch a `will-change: transform` element from a fixed scale. On iOS they are used for any zoom past
+fit width. Selection outlines and the text editor sit in the page element, so ink draws above them
+while this layer is up. The page layers stay complete underneath, so a pan past the detail area shows
+softer ink until the next settle, never missing ink. The template and PDF background stay on the
+page layer and soften past the limit.
+
+**Redraws never hold up the pen.** A settled zoom draws the visible region into a detached canvas
+in slices of about 8 ms and swaps it in with the other layers in one task; the rest of the page
+follows in bands, nearest first, and shows the old pixels scaled until then. A stroke added
+meanwhile is queued on the job, and any other ink change restarts it. Only the open page stays in memory,
+so a notebook's size does not affect this. There is no separate tile cache: the page-sized canvas
+already covers pan, and the cost is in drawing, not in finding what to draw.
 
 ## 5. Search
 
@@ -236,6 +271,9 @@ the native view covers exactly the editor element's CSS rect; both sides use
 Non-BOOX Android devices use the web canvas (the generalised native Mode C exists in
 `BooxInkView` but is not enabled by default until validated).
 
+Android and iOS also serve `getPower`, since Rust cannot read power state there. The webview passes
+the answer to `power_report` (`src-tauri/src/power.rs`) for the search and sync workers.
+
 ## 7. Platform constraints
 
 * **Linux/Windows/macOS desktop**: WebKitGTK / WebView2 / WKWebView. Web canvas only.
@@ -246,3 +284,28 @@ Non-BOOX Android devices use the web canvas (the generalised native Mode C exist
   flag is lifted (`WebTuning` hook in `ios/InkKit`; App Store risk) — hence the native preview layer.
 * **Offline**: strict CSP (`connect-src ipc:` only), PDF.js data files bundled. Search and
   handwriting recognition make no network calls.
+
+## 8. Printing
+
+Printing reuses the annotated PDF export, so a printout matches an exported PDF: ink stays
+vector, and whatever the export replaces or leaves out is replaced or left out on paper too. The
+`print_notebook` command renders the PDF, releases the library lock, writes the PDF to the
+library's staging folder and passes it on. The renderer never sees that path.
+
+| Platform | Route | Who applies a page range |
+|---|---|---|
+| Linux | GTK print dialog, then CUPS | Penroam (`penroam_pdf::keep_pages`) |
+| Android | `PrintManager` system UI | The print spooler |
+| iOS, iPadOS | `UIPrintInteractionController` | The system |
+| Windows, macOS | Default PDF viewer, via the opener plugin | The viewer |
+
+* **No WebView access.** `tauri-plugin-native-print` has no commands; only Rust calls it. The
+  generic `call` command of the ink plugin is reachable from the WebView, which is why printing
+  is not a method there: a renderer must not be able to name a file to print.
+* **Page ranges on Linux.** A job made from a finished PDF is not cut down by GTK, and the range
+  is not sent to CUPS. So the file is reduced to the chosen pages, after the dialog closes and off
+  the main thread. `keep_pages` prunes unreferenced objects, so pages that were not chosen do not
+  reach the print system. Copies, collation, reverse order and pages per sheet stay with CUPS.
+* **Temporary file.** The plugin deletes the file when the print system has finished with it or
+  the dialog is cancelled. Because the staging folder is emptied every time the library opens, a
+  file left by a crash or still held for a PDF viewer goes on the next launch.

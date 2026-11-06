@@ -32,6 +32,7 @@ files.
 | `persistent_render_completed_ms` | stroke end → committed ink drawn (BOOX hardware mode: → ePaper refresh issued) |
 | `callback_to_software_render_ms` | BOOX: Onyx end callback → stroke in the native bitmap |
 | per-stroke `samples`, `medianDtMs`, `maxDtMs`, `timeGaps`, `spatialJumps` | sample rate and continuity |
+| `rescaleTotalMs`, `rescaleLongestSliceMs` | a settled zoom's redraw: time until the whole page is sharp, and the longest the main thread was held |
 | Workload D: generate, full redraw, visible-first redraw, replay frames, memory | large-document cost |
 
 **Physical pen-to-ink latency is not in any file.** Measure it with a camera (≥120 fps, 240
@@ -52,3 +53,29 @@ full-screen refreshes separately from handwriting latency.
 | F | Palm resting while writing | unwanted marks, missing input, accidental pan |
 | G | (BOOX) 10 short strokes in a row | disappearing, duplicate, offset, ghost, flicker between strokes |
 | H | (BOOX) Edges and corners, then zoom 1.5 / 0.75 | preview vs committed alignment (photograph), out-of-bounds |
+
+## Device scorecard
+
+Fill this in for each device before listing it as Tested in
+[`../platforms/capabilities.md`](../platforms/capabilities.md). Keep the results out of the
+repository; `benchmarks/` is git-ignored.
+
+| Item | Record |
+|---|---|
+| Device, OS, build ID, WebView or firmware | exact versions |
+| Rendering backend | native surface or web canvas, from Settings → General |
+| Input | event sample rate, preview frame cadence, sample loss and jumps (`timeGaps`, `spatialJumps`) |
+| Latency | camera pen-to-photon if available; otherwise label it a **latency proxy**, never physical latency |
+| Commit hand-off | no doubled, missing, ghost or misaligned ink, on 100 strokes |
+| Palm | resting hand while writing, Workload F |
+| Long stroke | 15 s continuous, Workload E |
+| Large pages | load and redraw at 1k and 10k strokes, `rescaleLongestSliceMs`, writing over 10k |
+| Resources | RSS, battery drop over 30 min of writing |
+| Lifecycle | rotation, split screen, keyboard, background and resume mid-stroke, low-memory kill |
+| Overlay alignment (native surfaces) | all four page corners, zoomed and panned, in each rotation |
+| ePaper | flashes per page turn and per erase, ghosting after 50 erases |
+| Files | `.penroam` round trip with `tools/compare-penroam.py`, sync, annotated PDF export |
+
+**Regression gate:** no visibly missing or doubled strokes on any row, and no worse than the
+previous run on the same hardware by the same method. Earlier framework-evaluation timings are
+event timings, not pen-to-photon, so they cannot be compared with camera results.

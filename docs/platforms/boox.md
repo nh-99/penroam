@@ -17,9 +17,16 @@ devicePixelRatio 1.875), on adb as `c5927068`.
 * Shown for pen/highlighter/eraser; hidden (View.GONE + raw drawing disabled) for text, select
   and pan, and whenever a dialog, menu, drawer or busy overlay is open.
 * Undo/redo/delete/move made in the web editor are mirrored with `addStrokes`/`removeStrokes`.
+* ePaper refresh (`EpdRefreshPlanner`): a full GC refresh is held back for 150 ms so that a page
+  change, pan or zoom flashes once. Erasing and undo refresh only the changed rectangle, unless it
+  covers half the view; every 30th regional refresh is full, to clear ghosting. This replaced a
+  full flash per erase and has **not been tried on a device yet**.
 * Finger pan/pinch inside the native view is handled natively and reported back
   (`viewport` event) so web layers follow.
 * ePaper theme is selected automatically on first launch when BOOX hardware ink is detected.
+* Search waits for charging by default, and the sync poll slows from 1 to 5 minutes in battery
+  saver. Power state comes from the plugin's `getPower` (`src-tauri/src/power.rs`).
+* Hover rings and animation are off in the ePaper theme.
 * Release APKs have **no INTERNET permission** (`gen/android/app/src/release/AndroidManifest.xml`).
 
 ## Build / install
@@ -33,12 +40,15 @@ cd android && ./gradlew :boox-ink:testDebugUnitTest   # 14 JVM tests
 
 ## Known risks
 
+* Printing has not been tried on a BOOX. It needs Android's print spooler, which some e-ink
+  firmware may leave out; without one, printing shows an error. With no print service installed
+  the system dialog offers only "Save as PDF".
 * Native view covers the whole canvas element including the desk area outside the page; ink
   drawn off-page is kept (the web canvas clips its rendering to the page).
 * Highlighter preview on the EPD pen layer is opaque (the hardware layer has no alpha); the
   committed stroke is translucent.
-* Whole-page web redraw on the BOOX is slow at 10k strokes (≈ 3 s at device resolution);
-  it is only visible when a non-pen tool is active, but switching tools on huge pages lags.
-  Lower the web backing resolution on ePaper or keep it viewport-sized there.
+* Whole-page web redraw on the BOOX was slow at 10k strokes (≈ 3 s at device resolution). A
+  settled zoom now redraws in slices, off screen, which should stop the lag when switching
+  tools; this has not been measured on a BOOX. Expect the sharper page to take longer to appear.
 * Text editing hides the native layer; switching back re-shows it after the view repaints
   (one ePaper refresh).

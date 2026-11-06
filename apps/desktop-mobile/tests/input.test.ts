@@ -27,6 +27,7 @@ describe("pointer normalisation", () => {
     expect(classifyPointer(touch, { ...base, penSeen: true })).toBe("navigate");
     expect(classifyPointer(touch, { ...base, penOnly: "on" })).toBe("navigate");
     expect(classifyPointer({ ...touch, width: 60 }, base)).toBe("ignore");
+    expect(classifyPointer({ ...touch, width: 60 }, { ...base, penSeen: true, palmPx: Infinity })).toBe("navigate");
     expect(classifyPointer(touch, { ...base, penDown: true })).toBe("ignore");
     expect(classifyPointer({ pointerType: "pen", button: 0, width: 1, height: 1 }, { ...base, drawingActive: true })).toBe("ignore");
     expect(classifyPointer({ pointerType: "mouse", button: 1, width: 1, height: 1 }, base)).toBe("navigate");

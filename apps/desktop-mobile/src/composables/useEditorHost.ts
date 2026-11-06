@@ -1,10 +1,13 @@
+import { listen } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, type Ref } from "vue";
 import { InkEditor, type EditorState } from "../editor/engine";
+import { PALM_CONTACT_PX } from "../editor/input";
 import { PdfCache, PdfPageRenderer } from "../editor/pdf";
 import { PageRenderer } from "../editor/renderer";
 import type { Page } from "../generated/Page";
 import { PageSession, errorMessage } from "../editor/session";
-import { api } from "../platform/ipc";
+import { api, hasHost } from "../platform/ipc";
+import { isIOS } from "../platform/device";
 import { detectNativeInk, type NativeInkSurface } from "../platform/nativeInk";
 import { registerFlusher } from "../platform/lifecycle";
 import { useLibrary } from "../stores/library";
@@ -12,6 +15,13 @@ import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
 import { useSync } from "../stores/sync";
 import { benchHooks } from "../bench/hooks";
+
+interface PinchEvent {
+  phase: "begin" | "update" | "end";
+  scale: number;
+  x: number;
+  y: number;
+}
 
 export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: Ref<boolean>) {
   const lib = useLibrary();
@@ -24,7 +34,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     canUndo: false,
     canRedo: false,
     selectionCount: 0,
-    selectionHasText: false,
+    selectionHasText: false, selectionTextFree: true, pageHasRows: false,
     editingText: false,
     saveState: "saved",
     saveError: null,
@@ -48,6 +58,10 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       penOnly: s.penOnly,
       mono: settings.effectiveTheme() === "epaper",
       useNativeInk: s.useNativeInk,
+      // iPad fingertips exceed the size limit; palms are rejected by the Pencil-down rules instead
+      palmContactPx: isIOS() ? Infinity : PALM_CONTACT_PX,
+      pencilCurve: isIOS(),
+      detailWhenZoomed: isIOS(),
       maxCanvasPixels: /Android|iPad|iPhone/i.test(navigator.userAgent) ? 8_000_000 : 16_000_000,
     });
     e.setToolSettings({
@@ -56,6 +70,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       highlighterColor: s.highlighterColor,
       highlighterWidth: s.highlighterWidth,
       textColor: s.textColor,
+      textFreePlacement: s.textFreePlacement,
       textSize: s.textSize,
       pressure: s.pressure,
     });
@@ -195,6 +210,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   }
 
   let offChanged: (() => void) | null = null;
+  let offPinch: (() => void) | null = null;
   let unregister: (() => void) | null = null;
   const onVisibility = () => {
     if (document.visibilityState === "hidden") void flush().catch(() => {});
@@ -208,7 +224,9 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     });
     editor.value = e;
     benchHooks.editor = e;
+    e.penSeen = settings.s.penSeen;
     applySettings();
+    e.setTool(settings.s.tool);
     unregister = registerFlusher(flush);
     if (sync.available) {
       offChanged = sync.onChanged((c) => {
@@ -218,6 +236,13 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       });
     }
     document.addEventListener("visibilitychange", onVisibility);
+    // Linux hands touchpad pinches over from GTK; see src-tauri/src/pinch.rs
+    if (hasHost()) {
+      void listen<PinchEvent>("penroam://pinch", ({ payload: p }) => editor.value?.platformPinch(p.phase, p.scale, p.x, p.y)).then((off) => {
+        if (editor.value === e) offPinch = off;
+        else off();
+      });
+    }
     await openPage(lib.currentPageId);
     if (lib.current) void fillMissingThumbs(lib.current.id);
     const n = await detectNativeInk();
@@ -230,6 +255,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   onBeforeUnmount(() => {
     unregister?.();
     offChanged?.();
+    offPinch?.();
     if (remoteTimer) clearTimeout(remoteTimer);
     document.removeEventListener("visibilitychange", onVisibility);
     const e = editor.value;
@@ -250,8 +276,16 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     (b) => editor.value?.setOverlayBlocked(b),
   );
   watch(
+    () => state.tool,
+    (t) => (settings.s.tool = t),
+  );
+  watch(
     () => state.penSeen,
-    (seen) => seen && settings.s.penOnly === "auto" && console.info("pen detected: fingers now pan/zoom"),
+    (seen) => {
+      if (!seen) return;
+      settings.s.penSeen = true;
+      if (settings.s.penOnly === "auto") console.info("pen detected: fingers now pan/zoom");
+    },
   );
 
   /** Reloads pages changed outside the editor (sync, conflict resolution) once it is idle. */

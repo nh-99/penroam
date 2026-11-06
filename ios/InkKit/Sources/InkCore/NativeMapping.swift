@@ -14,6 +14,26 @@ public enum NativeMapping {
         return min(1, max(0, f / maxForce))
     }
 
+    /// Name of the curve below, recorded in each stroke's `input` so raw force stays recoverable.
+    public static let pencilCurveName = "exp-4.6"
+    private static let pencilCurveK = 4.6
+
+    /// Apple Pencil force as a fraction of its maximum -> canonical pressure. Writing uses only
+    /// the bottom quarter of the range (measured on iPad13,4: median 0.11, 95th percentile 0.22),
+    /// which the linear mapping turned into thin, nearly uniform ink. This puts ordinary writing
+    /// mid-range, as the shared width formula expects. Same curve as `pencilPressure` in the web
+    /// editor; it is strictly increasing, so nothing is clipped.
+    public static func pencilPressure(fraction f: Double) -> Double {
+        let x = min(1, max(0, f))
+        return (1 - exp(-pencilCurveK * x)) / (1 - exp(-pencilCurveK))
+    }
+
+    /// Inverse of `pencilPressure`, for recovering the force fraction from a stored point.
+    public static func pencilFraction(pressure p: Double) -> Double {
+        let x = min(1, max(0, p))
+        return -log(1 - x * (1 - exp(-pencilCurveK))) / pencilCurveK
+    }
+
     public static func force(fromPressure p: Double, maxForce: Double = pencilMaxForce) -> Double {
         min(1, max(0, p)) * maxForce
     }

@@ -503,6 +503,46 @@ pub fn import_notebook(
     Ok(r)
 }
 
+/// Renders a notebook's live pages as a PDF with vector ink and text over the original PDF
+/// backgrounds. Returns the page order alongside, and holds the library lock only for the
+/// duration of this call.
+fn render_pdf(
+    state: &State<'_, AppState>,
+    notebook_id: Uuid,
+    math: &[penroam_pdf::RenderedMath],
+) -> R<(Vec<u8>, penroam_pdf::ExportReport, Vec<Uuid>)> {
+    let mut lib = lib!(state);
+    let order = lib.notebook(notebook_id)?.page_order.clone();
+    let mut pages = Vec::with_capacity(order.len());
+    for p in &order {
+        pages.push(lib.load_page(notebook_id, *p)?);
+    }
+    let lib = &*lib;
+    let (bytes, report) =
+        penroam_pdf::export_annotated(&pages, math, |h| lib.read_asset(notebook_id, h).ok())?;
+    Ok((bytes, report, order))
+}
+
+/// The distinct formulas on a notebook's live pages. The webview draws these
+/// and passes them to [`export_annotated_pdf`] and [`print_notebook`].
+#[tauri::command(async)]
+pub fn notebook_math(
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+) -> R<Vec<penroam_core::markdown::MathSpan>> {
+    let mut lib = lib!(state);
+    let order = lib.notebook(notebook_id)?.page_order.clone();
+    let mut seen = std::collections::HashSet::new();
+    for p in order {
+        for e in lib.load_page(notebook_id, p)?.elements {
+            if let penroam_core::Element::Text(t) = e {
+                seen.extend(penroam_core::markdown::math_in(&t.text));
+            }
+        }
+    }
+    Ok(seen.into_iter().collect())
+}
+
 /// Exports the live pages as a PDF with vector ink and text over the original
 /// PDF backgrounds.
 #[tauri::command(async)]
@@ -511,19 +551,105 @@ pub fn export_annotated_pdf(
     state: State<'_, AppState>,
     notebook_id: Uuid,
     path: String,
+    math: Vec<penroam_pdf::RenderedMath>,
 ) -> R<penroam_pdf::ExportReport> {
-    let (bytes, report) = {
-        let mut lib = lib!(state);
-        let order = lib.notebook(notebook_id)?.page_order.clone();
-        let mut pages = Vec::with_capacity(order.len());
-        for p in order {
-            pages.push(lib.load_page(notebook_id, p)?);
-        }
-        let lib = &*lib;
-        penroam_pdf::export_annotated(&pages, |h| lib.read_asset(notebook_id, h).ok())?
-    };
+    let (bytes, report, _) = render_pdf(&state, notebook_id, &math)?;
     write_user_file(&app, &path, &bytes)?;
     Ok(report)
+}
+
+/// How a print request ended.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PrintStatus {
+    /// The document reached the print system.
+    Sent,
+    /// The user closed the print dialog.
+    Cancelled,
+    /// The system print UI took over and does not report back.
+    SystemDialog,
+    /// The PDF opened in the default viewer, to be printed from there.
+    #[cfg(not(any(target_os = "linux", mobile)))]
+    Viewer,
+}
+
+/// Result of [`print_notebook`].
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrintResult {
+    status: PrintStatus,
+    report: penroam_pdf::ExportReport,
+}
+
+/// Prints a notebook: renders it the way [`export_annotated_pdf`] does, then gives the PDF to
+/// the system print dialog, where the user can pick pages. `current_page` is the page on screen,
+/// offered as a choice in dialogs that have one. Blocks until the dialog is finished with, so
+/// the library lock must not be held across that step.
+#[tauri::command(async)]
+pub fn print_notebook(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    current_page: Option<Uuid>,
+    math: Vec<penroam_pdf::RenderedMath>,
+) -> R<PrintResult> {
+    let (bytes, report, order) = render_pdf(&state, notebook_id, &math)?;
+    let (file, title) = {
+        let lib = lib!(state);
+        // The staging folder sits with the notes themselves and is emptied on every launch, which
+        // catches files a viewer still needed or a crash left behind.
+        let file = lib
+            .staging_dir()
+            .join(format!("print-{}.pdf", Uuid::new_v4()));
+        (file, lib.notebook(notebook_id)?.title.clone())
+    };
+    std::fs::write(&file, &bytes).map_err(io_err)?;
+    drop(bytes);
+    trim_heap();
+    let job = tauri_plugin_native_print::PrintJob {
+        file,
+        title,
+        pages: order.len() as u32,
+        current_page: current_page
+            .and_then(|p| order.iter().position(|o| *o == p))
+            .map(|i| i as u32),
+    };
+    Ok(PrintResult {
+        status: print_job(&window, job)?,
+        report,
+    })
+}
+
+/// Linux, Android and iOS have a print dialog in `tauri-plugin-native-print`.
+#[cfg(any(target_os = "linux", mobile))]
+fn print_job(
+    window: &tauri::WebviewWindow,
+    job: tauri_plugin_native_print::PrintJob,
+) -> R<PrintStatus> {
+    use tauri_plugin_native_print::{print, PrintOutcome};
+    let outcome = print(window, job).map_err(|message| CmdError {
+        code: ErrorCode::Io,
+        message,
+    })?;
+    Ok(match outcome {
+        PrintOutcome::Sent => PrintStatus::Sent,
+        PrintOutcome::Cancelled => PrintStatus::Cancelled,
+        PrintOutcome::SystemDialog => PrintStatus::SystemDialog,
+    })
+}
+
+/// Elsewhere the default PDF viewer prints. The viewer keeps reading the file, so it stays until
+/// the staging folder is emptied on the next launch.
+#[cfg(not(any(target_os = "linux", mobile)))]
+fn print_job(
+    _window: &tauri::WebviewWindow,
+    job: tauri_plugin_native_print::PrintJob,
+) -> R<PrintStatus> {
+    tauri_plugin_opener::open_path(&job.file, None::<&str>).map_err(|e| CmdError {
+        code: ErrorCode::Io,
+        message: e.to_string(),
+    })?;
+    Ok(PrintStatus::Viewer)
 }
 
 /// Imports a canonical stroke document (`m00-strokes` v1) onto a page.
