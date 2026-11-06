@@ -210,7 +210,7 @@ jobs:
         with: { node-version: 24, cache: pnpm }
       - uses: ./.github/actions/setup-rust
       - run: pnpm install --frozen-lockfile
-      - run: cargo test -p penroam-core -p penroam-storage -p penroam-pdf -p penroam-search --features penroam-search/windows-ink
+      - run: cargo test -p penroam-core -p penroam-storage -p penroam-pdf -p penroam-interchange -p penroam-webdav -p penroam-search --features penroam-search/windows-ink
       - run: pnpm tauri build --debug --no-bundle
 
   android-jvm:

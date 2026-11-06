@@ -42,6 +42,7 @@ pub mod transport;
 
 pub use engine::{
     DeviceView, ErasedNotebook, Phase, ReconcileReport, Setup, SyncEngine, SyncError, SyncStatus,
+    SyncedVersion,
 };
 pub use secrets::{FileSecretStore, SecretStore};
 pub use transport::{SyncTransport, TransportError};

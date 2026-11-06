@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [decode_page, journal_open, sync_batch_frame]
+        target: [decode_page, journal_open, sync_batch_frame, import_xournal, import_jex, import_text, import_backup, import_enex]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

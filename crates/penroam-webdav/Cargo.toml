@@ -1,0 +1,17 @@
+[package]
+name = "penroam-webdav"
+description = "Backup storage on a WebDAV server for Penroam"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+ts-rs.workspace = true
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+quick-xml = "0.42"
+
+[dev-dependencies]
+tempfile.workspace = true

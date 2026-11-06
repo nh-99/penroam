@@ -67,7 +67,7 @@ use std::sync::Mutex;
 
 use penroam_core::operation::{DocumentOperation, LocalOperation, OperationRef};
 use penroam_core::replica::{Conflict, ConflictTarget, Replica};
-use penroam_core::{Element, OpKind, OperationBatch, PageOperation};
+use penroam_core::{Element, Notebook, OpKind, OperationBatch, Page, PageOperation};
 use penroam_storage::journal::{decode_txn, encode_txn, RecordError, Txn, TxnTarget};
 use penroam_storage::{Library, StorageError};
 use penroam_sync_protocol::framing::{encode_batch, FrameItem};
@@ -218,6 +218,20 @@ pub struct SyncStatus {
     pub secret_store: String,
     /// E2EE has not been independently reviewed.
     pub security_review_pending: bool,
+}
+
+/// One version of a page in the account's operation log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncedVersion {
+    /// How many of the notebook's logged operations make up this version.
+    pub position: u64,
+    /// When it was made (ms since the epoch, by the writing device's clock).
+    pub at: i64,
+    /// Elements added.
+    pub added: u32,
+    /// Elements removed.
+    pub removed: u32,
 }
 
 /// A notebook the account holds that is not on this device.
@@ -2231,6 +2245,89 @@ impl<T: SyncTransport> SyncEngine<T> {
             self.event(e);
         }
         Ok(&self.replicas[&nb].0)
+    }
+
+    /// Every operation of a notebook, in log order. One log record can hold many
+    /// operations, because sync may bundle edits made close together.
+    fn notebook_ops(&self, nb: Uuid) -> Result<Vec<LocalOperation>> {
+        let mut ops = Vec::new();
+        for &i in self.store.oplog.indexes_for(&nb) {
+            let rec = self.store.oplog.record(i)?;
+            ops.extend(
+                decode_txn(&rec)
+                    .map_err(|e| SyncError::Integrity(e.to_string()))?
+                    .ops,
+            );
+        }
+        Ok(ops)
+    }
+
+    /// Replays the first `count` operations on a replica of its own, so live state
+    /// isn't touched. A rejected operation stays out, as in `replica`.
+    fn replay(nb: Uuid, ops: &[LocalOperation], count: usize) -> Replica {
+        let mut rep = Replica::new(nb);
+        for op in &ops[..count.min(ops.len())] {
+            let _ = rep.apply_delivered(op);
+        }
+        rep
+    }
+
+    /// Every version of a page in the account's operation log, oldest first. This
+    /// is the log all devices share, so it holds work done anywhere, including on
+    /// devices that no longer exist. Operations with one timestamp are one edit.
+    /// Replaying may take a moment on a long notebook, and works offline.
+    pub fn page_versions(&self, nb: Uuid, page: Uuid) -> Result<Vec<SyncedVersion>> {
+        let mut out: Vec<SyncedVersion> = Vec::new();
+        for (i, op) in self.notebook_ops(nb)?.iter().enumerate() {
+            let is_page = op.body.content_page() == Some(page)
+                || matches!(&op.body, DocumentOperation::PageCreated { page_id, .. } if *page_id == page);
+            if !is_page {
+                continue;
+            }
+            let (added, removed) = match &op.body {
+                DocumentOperation::ElementsAdded { elements, .. } => (elements.len() as u32, 0),
+                DocumentOperation::ElementsRemoved { ids, .. } => (0, ids.len() as u32),
+                _ => (0, 0),
+            };
+            match out.last_mut() {
+                Some(v) if v.at == op.at => {
+                    v.position = i as u64 + 1;
+                    v.added += added;
+                    v.removed += removed;
+                }
+                _ => out.push(SyncedVersion {
+                    position: i as u64 + 1,
+                    at: op.at,
+                    added,
+                    removed,
+                }),
+            }
+        }
+        Ok(out)
+    }
+
+    /// A page as of [`SyncedVersion::position`]. `None` when it didn't exist then.
+    pub fn page_at(&self, nb: Uuid, page: Uuid, position: u64) -> Result<Option<Page>> {
+        Ok(Self::replay(nb, &self.notebook_ops(nb)?, position as usize).page(page))
+    }
+
+    /// A notebook and all its pages as of time `at`, from the operation log.
+    /// `None` when the log has nothing that old.
+    pub fn notebook_at(&self, nb: Uuid, at: i64) -> Result<Option<(Notebook, Vec<Page>)>> {
+        let ops = self.notebook_ops(nb)?;
+        let count = ops.iter().rposition(|o| o.at <= at).map_or(0, |i| i + 1);
+        if count == 0 {
+            return Ok(None);
+        }
+        let rep = Self::replay(nb, &ops, count);
+        let Some(notebook) = rep.notebook() else {
+            return Ok(None);
+        };
+        let pages = notebook
+            .all_page_ids()
+            .filter_map(|p| rep.page(p))
+            .collect();
+        Ok(Some((notebook, pages)))
     }
 
     /// Notebooks the account holds that are not on this device and aren't about

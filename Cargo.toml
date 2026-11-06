@@ -4,6 +4,8 @@ members = [
   "crates/penroam-core",
   "crates/penroam-storage",
   "crates/penroam-pdf",
+  "crates/penroam-interchange",
+  "crates/penroam-webdav",
   "crates/penroam-sync-protocol",
   "crates/penroam-sync-testkit",
   "crates/penroam-sync",
@@ -33,6 +35,7 @@ tempfile = "3"
 penroam-core = { path = "crates/penroam-core" }
 penroam-storage = { path = "crates/penroam-storage" }
 penroam-pdf = { path = "crates/penroam-pdf" }
+penroam-interchange = { path = "crates/penroam-interchange" }
 
 [profile.release]
 codegen-units = 1

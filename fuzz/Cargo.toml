@@ -1,6 +1,11 @@
 # Coverage-guided fuzzing (cargo-fuzz, nightly). Not a workspace member:
 #   cargo +nightly fuzz run decode_page -- -max_total_time=600
 #   cargo +nightly fuzz run journal_open -- -max_total_time=600
+#   cargo +nightly fuzz run import_xournal -- -max_total_time=600
+#   cargo +nightly fuzz run import_jex -- -max_total_time=600
+#   cargo +nightly fuzz run import_text -- -max_total_time=600
+#   cargo +nightly fuzz run import_backup -- -max_total_time=600
+#   cargo +nightly fuzz run import_enex -- -max_total_time=600
 # Scheduled in .github/workflows/fuzz.yml; quick deterministic fuzz smoke
 # tests run with `cargo test` (crates/penroam-core/tests/format_v1.rs).
 [package]
@@ -17,8 +22,10 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 penroam-core = { path = "../crates/penroam-core" }
 penroam-storage = { path = "../crates/penroam-storage" }
+penroam-interchange = { path = "../crates/penroam-interchange" }
 penroam-sync-protocol = { path = "../crates/penroam-sync-protocol" }
 tempfile = "3"
+uuid = "1"
 
 [workspace]
 
@@ -39,6 +46,41 @@ bench = false
 [[bin]]
 name = "sync_batch_frame"
 path = "fuzz_targets/sync_batch_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_xournal"
+path = "fuzz_targets/import_xournal.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_text"
+path = "fuzz_targets/import_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_backup"
+path = "fuzz_targets/import_backup.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_enex"
+path = "fuzz_targets/import_enex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_jex"
+path = "fuzz_targets/import_jex.rs"
 test = false
 doc = false
 bench = false

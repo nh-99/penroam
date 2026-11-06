@@ -3383,11 +3383,13 @@ dependencies = [
  "log",
  "ort",
  "penroam-core",
+ "penroam-interchange",
  "penroam-pdf",
  "penroam-search",
  "penroam-storage",
  "penroam-sync",
  "penroam-sync-protocol",
+ "penroam-webdav",
  "serde",
  "serde_json",
  "tauri",
@@ -3398,6 +3400,7 @@ dependencies = [
  "tauri-plugin-native-ink",
  "tauri-plugin-native-print",
  "tauri-plugin-opener",
+ "tempfile",
  "uuid",
  "windows",
 ]
@@ -3418,11 +3421,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "penroam-interchange"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "md-5",
+ "penroam-core",
+ "penroam-pdf",
+ "pulldown-cmark",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "ts-rs",
+ "uuid",
+ "zip",
+]
+
+[[package]]
 name = "penroam-pdf"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "lopdf",
  "penroam-core",
+ "png",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3528,6 +3552,18 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "penroam-webdav"
+version = "0.1.0"
+dependencies = [
+ "quick-xml",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ts-rs",
+ "ureq",
 ]
 
 [[package]]

@@ -837,6 +837,29 @@ impl SearchIndex {
         Ok(())
     }
 
+    /// The text read from a page's handwriting, with the user's corrections applied,
+    /// in the order the regions were indexed. Empty when nothing has been read yet.
+    pub fn page_text(&self, nb: Uuid, page: Uuid) -> Result<String> {
+        let mut st = self.conn.prepare(
+            "SELECT CASE WHEN correction != '' THEN correction ELSE text END FROM entries
+             WHERE notebook = ?1 AND page = ?2 AND kind = 'ink' ORDER BY id",
+        )?;
+        let rows = st.query_map(params![nb.to_string(), page.to_string()], |r| {
+            r.get::<_, String>(0)
+        })?;
+        let lines: Vec<String> = rows.collect::<std::result::Result<_, _>>()?;
+        Ok(lines.join("\n"))
+    }
+
+    /// Every correction in the index as (notebook, page, region, text), for backups.
+    pub fn all_corrections(&self) -> Result<Vec<(String, String, String, String)>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT notebook, page, region, text FROM corrections ORDER BY 1, 2, 3")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// Drops corrections whose region no longer exists on an indexed, complete page.
     pub fn prune_corrections(&mut self) -> Result<usize> {
         Ok(self.conn.execute(

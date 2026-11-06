@@ -1,0 +1,24 @@
+[package]
+name = "penroam-interchange"
+description = "Importers and lossy exporters between Penroam notebooks and other file formats"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+penroam-core.workspace = true
+penroam-pdf.workspace = true
+serde.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+ts-rs.workspace = true
+quick-xml = "0.42"
+md-5 = "0.11"
+flate2 = "1"
+zip.workspace = true
+pulldown-cmark = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+serde_json.workspace = true

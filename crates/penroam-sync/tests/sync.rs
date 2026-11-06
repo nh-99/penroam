@@ -1163,3 +1163,172 @@ fn a_notebook_is_offered_back_after_its_purge_leaves_the_journal() {
     settle(&mut [&mut a, &mut b]);
     assert_eq!(ink_count(&mut b.lib, nb), 2, "and it keeps receiving edits");
 }
+
+#[test]
+fn rolling_back_a_page_reaches_every_device_and_can_be_undone() {
+    let s = server();
+    let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-rollback");
+    for i in 2..6 {
+        add(
+            &mut a.lib,
+            nb,
+            p,
+            vec![stroke(i, i as f64 * 10.0, "#111111")],
+        );
+    }
+    let keep = a.lib.load_page(nb, p).unwrap().revision;
+    settle(&mut [&mut a, &mut b]);
+    // a change from the other device, seen here as an install from sync
+    add(&mut b.lib, nb, p, vec![stroke(90, 400.0, "#b91c1c")]);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut a.lib, nb), 6);
+    let newest = a.lib.page_history(nb, p).unwrap().last().unwrap().revision;
+
+    a.lib.restore_page_version(nb, p, keep).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut b.lib, nb), 5, "the rollback synced");
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert_eq!(a.status().conflicts, 0);
+
+    // restoring what was removed brings it back everywhere
+    a.lib.restore_page_version(nb, p, newest).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(ink_count(&mut b.lib, nb), 6);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+
+    // history keeps working on the other device too, after all of that
+    let on_b = b.lib.page_history(nb, p).unwrap();
+    let first = on_b[0].revision;
+    b.lib.restore_page_version(nb, p, first).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+}
+
+#[test]
+fn encrypted_cloud_plus_recovery_code_rebuilds_everything_after_losing_all_devices() {
+    let s = server();
+    let acct = account(&s, "acct-disaster");
+    let (mut a, code) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Everything", PageDefaults::default(), None)
+        .unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    let q = a.lib.create_page(nb.id, None, None, None).unwrap().1;
+    add(&mut a.lib, nb.id, q.id, vec![text(7, "typed")]);
+    a.sync().unwrap();
+    let want = view(&mut a.lib);
+    drop(a);
+
+    let mut c = Client::recovered(&s, &acct, &code);
+    c.sync().unwrap();
+    assert_eq!(view(&mut c.lib), want);
+
+    // the rebuilt library backs up and restores like any other
+    let mut out = std::io::Cursor::new(Vec::new());
+    c.lib.export_backup(&mut out, "test").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut fresh = penroam_storage::Library::open(dir.path().join("lib")).unwrap();
+    let r = fresh
+        .restore_backup(
+            std::io::Cursor::new(out.into_inner()),
+            &penroam_storage::RestoreOptions::default(),
+        )
+        .unwrap();
+    assert!(r.failed.is_empty());
+    assert_eq!(view(&mut fresh), want);
+}
+
+#[test]
+fn a_replacement_device_can_see_and_restore_versions_it_never_recorded() {
+    let s = server();
+    let acct = account(&s, "acct-history");
+    let (mut a, code) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Long lived", PageDefaults::default(), None)
+        .unwrap();
+    // a notebook's first sync uploads what it holds as one snapshot; edits after
+    // that are separate versions
+    a.sync().unwrap();
+    for i in 1..=4 {
+        // a version is an edit with its own timestamp
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        add(
+            &mut a.lib,
+            nb.id,
+            p.id,
+            vec![stroke(i, i as f64 * 10.0, "#111111")],
+        );
+    }
+    a.sync().unwrap();
+    drop(a);
+
+    let mut c = Client::recovered(&s, &acct, &code);
+    c.sync().unwrap();
+    assert!(
+        c.lib.page_history(nb.id, p.id).unwrap().is_empty(),
+        "this device has recorded nothing of its own"
+    );
+    let versions = c.engine.page_versions(nb.id, p.id).unwrap();
+    assert_eq!(versions.len(), 5, "first sync, then four strokes");
+    assert_eq!(versions.iter().map(|v| v.added).sum::<u32>(), 4);
+
+    // version with two of the four strokes
+    let target = c
+        .engine
+        .page_at(nb.id, p.id, versions[2].position)
+        .unwrap()
+        .unwrap();
+    assert_eq!(target.elements.len(), 2);
+    c.lib.restore_page_content(nb.id, p.id, &target).unwrap();
+    c.sync().unwrap();
+    assert_eq!(ink_count(&mut c.lib, nb.id), 2);
+
+    // the rollback is in the log too, so going forward again works the same way
+    let after = c.engine.page_versions(nb.id, p.id).unwrap();
+    assert_eq!(after.len(), 6);
+    let newest = c
+        .engine
+        .page_at(nb.id, p.id, versions[4].position)
+        .unwrap()
+        .unwrap();
+    c.lib.restore_page_content(nb.id, p.id, &newest).unwrap();
+    assert_eq!(ink_count(&mut c.lib, nb.id), 4);
+}
+
+#[test]
+fn a_whole_notebook_can_be_rebuilt_from_the_log_at_a_past_time() {
+    let s = server();
+    let acct = account(&s, "acct-nb-history");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Before", PageDefaults::default(), None)
+        .unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    a.sync().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let then = penroam_core::now_ms();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    a.lib.rename_notebook(nb.id, "After").unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(2, 2.0, "#111111")]);
+    let extra = a.lib.create_page(nb.id, None, None, None).unwrap().1;
+    a.sync().unwrap();
+
+    let (old, pages) = a.engine.notebook_at(nb.id, then).unwrap().unwrap();
+    assert_eq!(old.title, "Before");
+    assert_eq!(old.page_order, vec![p.id]);
+    assert_eq!(pages[0].elements.len(), 1);
+    assert!(a.engine.notebook_at(nb.id, 1).unwrap().is_none());
+
+    let targets = pages.into_iter().map(|p| (p.id, p)).collect();
+    let r = a
+        .lib
+        .restore_notebook_content(nb.id, &old.title, &old.page_order, &targets)
+        .unwrap();
+    assert_eq!((r.pages_reverted, r.pages_trashed), (1, 1));
+    let now = a.lib.notebook(nb.id).unwrap();
+    assert_eq!(now.title, "Before");
+    assert!(now.trashed_pages.iter().any(|t| t.id == extra.id));
+}
