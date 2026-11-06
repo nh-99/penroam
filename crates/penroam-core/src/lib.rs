@@ -21,6 +21,7 @@
 
 pub mod binary;
 pub mod geometry;
+pub mod markdown;
 pub mod migrate;
 pub mod model;
 pub mod operation;

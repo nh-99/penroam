@@ -4,6 +4,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { isMobile } from "./device";
 import type { ApplyOutcome } from "../generated/ApplyOutcome";
 import type { ErrorCode } from "../generated/ErrorCode";
+import type { RenderedMath } from "../generated/RenderedMath";
 import type { ExportReport } from "../generated/ExportReport";
 import type { ImportReport } from "../generated/ImportReport";
 import type { Notebook } from "../generated/Notebook";
@@ -95,8 +96,9 @@ export const api = {
     call<{ notebook: Notebook; pages: Page[] }>("import_pdf", { notebookId, path, fileName, index }),
   exportNotebook: (notebookId: string, path: string) => call<{ bytes: number; pages: number }>("export_notebook", { notebookId, path }),
   importNotebook: (path: string) => call<ImportReport>("import_notebook", { path }),
-  exportAnnotatedPdf: (notebookId: string, path: string) => call<ExportReport>("export_annotated_pdf", { notebookId, path }),
-  printNotebook: (notebookId: string, currentPage: string | null) => call<{ status: PrintStatus; report: ExportReport }>("print_notebook", { notebookId, currentPage }),
+  notebookMath: (notebookId: string) => call<{ tex: string; display: boolean }[]>("notebook_math", { notebookId }),
+  exportAnnotatedPdf: (notebookId: string, path: string, math: RenderedMath[]) => call<ExportReport>("export_annotated_pdf", { notebookId, path, math }),
+  printNotebook: (notebookId: string, currentPage: string | null, math: RenderedMath[]) => call<{ status: PrintStatus; report: ExportReport }>("print_notebook", { notebookId, currentPage, math }),
   importStrokeDocument: (notebookId: string, pageId: string, json: string) => call<ApplyOutcome>("import_stroke_document", { notebookId, pageId, json }),
   exitApp: () => call<void>("exit_app"),
   // benchmark helpers (docs/benchmarks/protocol.md methodology)

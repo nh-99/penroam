@@ -29,9 +29,13 @@ import {
 import { newId } from "./ids";
 import { classifyPointer, PALM_CONTACT_PX, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
 import { PdfCache, PdfPageRenderer } from "./pdf";
-import { drawText, elementBounds, PageRenderer, textBounds, type Ink, type Text } from "./renderer";
+import { drawText, elementBounds, PageRenderer, paintOf, textBounds, type Ink, type Text } from "./renderer";
 import type { PageSession, SaveState } from "./session";
-import { contentHeight, lineHeight, TEXT_FONT_FAMILY } from "./textLayout";
+import { rowsFor } from "./markdown";
+import { onMathReady } from "./math";
+import { alignment, SNAP_DISTANCE_PX, type Guide, type TextEdges } from "./snap";
+import { rowPitchOf, snapToRow } from "./templates";
+import { contentHeight, firstBaseline, lineHeight, metrics, TEXT_FONT_FAMILY } from "./textLayout";
 import { backingScale, clampScale, constrain, fitPage, fitWidth, toDoc, zoomAbout, type ViewTransform } from "./viewport";
 
 export type Tool = "pen" | "highlighter" | "eraser" | "select" | "text" | "hand";
@@ -44,6 +48,8 @@ export interface ToolSettings {
   highlighterWidth: number;
   textColor: string;
   textSize: number;
+  /** New text goes anywhere on ruled and dotted paper instead of locking to its rows. */
+  textFreePlacement: boolean;
   pressure: boolean;
 }
 
@@ -64,6 +70,10 @@ export interface EditorState {
   canRedo: boolean;
   selectionCount: number;
   selectionHasText: boolean;
+  /** Every selected text block is placed freely (as opposed to locked to rows). */
+  selectionTextFree: boolean;
+  /** The current page's paper has rows that text can lock to. */
+  pageHasRows: boolean;
   editingText: boolean;
   saveState: SaveState;
   saveError: string | null;
@@ -81,6 +91,10 @@ export interface EditorCallbacks {
 export const ERASER_RADIUS_PX = 8;
 const SELECT_TOLERANCE_PX = 8;
 const HIGHLIGHTER_OPACITY = 0.35;
+/** A finger stroke younger than this was the start of a pinch when a second finger lands. */
+const PINCH_GRACE_MS = 250;
+/** Contacts this soon after the pen lifts are the writing hand, not a deliberate gesture. */
+const PEN_LIFT_GRACE_MS = 400;
 
 interface ActiveStroke {
   stroke: Ink;
@@ -99,7 +113,7 @@ interface EraseGesture {
 }
 
 type SelectDrag =
-  | { kind: "move"; pointerId: number; start: [number, number]; dx: number; dy: number; moved: boolean }
+  | { kind: "move"; pointerId: number; start: [number, number]; dx: number; dy: number; moved: boolean; guides: Guide[]; tapEdits?: boolean }
   | { kind: "resize"; pointerId: number; start: [number, number]; orig: TextBlock; width: number; height: number }
   | { kind: "band"; pointerId: number; start: [number, number]; end: [number, number] };
 
@@ -125,6 +139,7 @@ export class InkEditor {
     highlighterWidth: 14,
     textColor: "#111111",
     textSize: 16,
+    textFreePlacement: false,
     pressure: true,
   };
   settings: EditorSettings = { penOnly: "auto", mono: false, maxCanvasPixels: 16_000_000, useNativeInk: true, palmContactPx: PALM_CONTACT_PX };
@@ -135,6 +150,8 @@ export class InkEditor {
   private selBox: HTMLDivElement;
   private selHandle: HTMLDivElement;
   private textarea: HTMLTextAreaElement;
+  /** The strip around the box being edited. Dragging it moves the box. */
+  private editFrame: HTMLDivElement;
   private activeCv: HTMLCanvasElement;
   private tailCv: HTMLCanvasElement;
   private actx: CanvasRenderingContext2D;
@@ -146,11 +163,16 @@ export class InkEditor {
   private active: ActiveStroke | null = null;
   private erase: EraseGesture | null = null;
   private drag: SelectDrag | null = null;
+  /** The scale when a platform pinch began. */
+  private pinchStart: number | null = null;
   private edit: TextEdit | null = null;
   private touches = new Map<number, { x: number; y: number }>();
   private pinch: { dist: number; scale: number; ax: number; ay: number } | null = null;
   private pan: { pointerId: number; x: number; y: number } | null = null;
+  /** The finger behind the stroke, erase or drag in progress, in viewport coordinates. */
+  private fingerDraw: { pointerId: number; x: number; y: number } | null = null;
   private penDown = false;
+  private penLiftedAt = -Infinity;
   private spaceDown = false;
   private frameRequested = false;
   private settleTimer: number | null = null;
@@ -198,6 +220,12 @@ export class InkEditor {
     this.selHandle.className = "penroam-handle absolute hidden";
     this.overlay.appendChild(this.selHandle);
 
+    // before the textarea, so the textarea stays on top of the strip's middle
+    this.editFrame = document.createElement("div");
+    this.editFrame.className = "penroam-editframe absolute hidden";
+    this.editFrame.title = "Drag to move";
+    this.editFrame.style.pointerEvents = "auto";
+    this.overlay.appendChild(this.editFrame);
     this.textarea = document.createElement("textarea");
     this.textarea.className = "penroam-textedit absolute hidden";
     this.textarea.setAttribute("aria-label", "Text block");
@@ -227,6 +255,13 @@ export class InkEditor {
       target.addEventListener(type, fn, opts);
       this.disposers.push(() => target.removeEventListener(type, fn, opts));
     };
+    // formulas show their source until MathJax has loaded, and then change size
+    this.disposers.push(
+      onMathReady(() => {
+        this.renderer.renderText(null);
+        this.updateSelectionBox();
+      }),
+    );
     on(viewport, "pointerdown", (e: PointerEvent) => this.onDown(e));
     on(viewport, "pointermove", (e: PointerEvent) => this.onMove(e));
     if (this.sampleEvent === "pointerrawupdate") on(viewport, "pointerrawupdate", (e: PointerEvent) => this.onMove(e));
@@ -293,6 +328,8 @@ export class InkEditor {
       canRedo: !!this.session?.canRedo,
       selectionCount: sel.length,
       selectionHasText: sel.some((e) => e.type === "text"),
+      selectionTextFree: sel.every((e) => e.type !== "text" || e.rowPitch === undefined),
+      pageHasRows: this.pageHasRows(),
       editingText: !!this.edit,
       saveState: this.session?.saveState ?? "saved",
       saveError: this.session?.lastError ?? null,
@@ -389,7 +426,34 @@ export class InkEditor {
     if (!s) return;
     const prev = s.page.template;
     if (prev.kind === t.kind && prev.spacing === t.spacing) return;
-    s.commit({ label: "Change template", forward: [{ op: "setTemplate", template: t }], inverse: [{ op: "setTemplate", template: prev }] });
+    // Locked text follows the paper's rows. Paper without rows leaves it where it is.
+    const pitch = rowPitchOf(t);
+    const before = s.page.elements.filter((e): e is Text => e.type === "text" && e.rowPitch !== undefined);
+    const after = pitch === undefined ? [] : before.map((e) => this.relockedText(e, t, pitch));
+    const blocks = after.length > 0;
+    s.commit({
+      label: "Change template",
+      forward: [{ op: "setTemplate", template: t }, ...(blocks ? [{ op: "replaceElements" as const, elements: after }] : [])],
+      inverse: [...(blocks ? [{ op: "replaceElements" as const, elements: before }] : []), { op: "setTemplate", template: prev }],
+    });
+  }
+
+  private pageHasRows(): boolean {
+    const t = this.session?.page.template;
+    return !!t && rowPitchOf(t) !== undefined;
+  }
+
+  /** `e` locked to `pitch` on paper `t`, or freed when `pitch` is undefined. */
+  private relockedText(e: Text, t: Template, pitch: number | undefined): Text {
+    const n: Text = { ...e, rowPitch: pitch };
+    if (pitch !== undefined) n.y = snapToRow(e.y, t, pitch);
+    n.height = this.textHeight(n);
+    return n;
+  }
+
+  /** The block's laid-out height. */
+  private textHeight(t: TextBlock): number {
+    return paintOf(t).height;
   }
 
   // ======================================================= viewport ==
@@ -426,6 +490,20 @@ export class InkEditor {
 
   zoomBy(factor: number) {
     this.setTransform(zoomAbout(this.transform, this.transform.scale * factor, this.viewW / 2, this.viewH / 2));
+  }
+
+  /**
+   * A pinch the platform reports itself instead of as pointer or wheel input.
+   * `scale` is relative to the start of the gesture and (`x`, `y`) is in client
+   * coordinates; `phase` "end" just stops following it.
+   */
+  platformPinch(phase: "begin" | "update" | "end", scale: number, x: number, y: number) {
+    if (phase === "begin") this.pinchStart = this.transform.scale;
+    const start = this.pinchStart;
+    if (phase === "end") this.pinchStart = null;
+    if (phase === "end" || start === null || this.active || this.erase || this.drag) return;
+    const r = this.viewport.getBoundingClientRect();
+    this.setTransform(zoomAbout(this.transform, start * scale, x - r.left, y - r.top));
   }
 
   setTransform(t: ViewTransform, fromNative = false) {
@@ -529,16 +607,46 @@ export class InkEditor {
   }
 
   setToolSettings(t: Partial<ToolSettings>) {
+    // the host sends every setting on any change; only an actual flip moves the block
+    const freed = t.textFreePlacement !== undefined && t.textFreePlacement !== this.tools.textFreePlacement;
     this.tools = { ...this.tools, ...t };
     if (this.edit) {
       // live style change for the block being edited
       const d = this.edit.draft;
       if (t.textColor) d.color = t.textColor;
       if (t.textSize) d.fontSize = t.textSize;
+      if (freed) Object.assign(d, this.placedForMode(d, this.tools.textFreePlacement));
       this.layoutTextarea();
       this.scheduleTextCommit();
     }
     if (this.native && this.nativeMounted) this.nativeCall((n) => n.setTool(this.nativeTool()));
+  }
+
+  /** `d` with the free or row-locked placement. Paper without rows only frees text. */
+  private placedForMode(d: Text, free: boolean): Text {
+    const t = this.session?.page.template;
+    if (!t) return d;
+    const pitch = free ? undefined : rowPitchOf(t);
+    if (!free && pitch === undefined) return d;
+    return this.relockedText(d, t, pitch);
+  }
+
+  /** Frees the selected text blocks, or locks them to the paper's rows. */
+  setSelectionFreePlacement(free: boolean) {
+    const s = this.session;
+    if (!s) return;
+    const before: Element[] = [];
+    const after: Element[] = [];
+    for (const id of this.selection) {
+      const e = s.elementById(id);
+      if (e?.type !== "text") continue;
+      const n = this.placedForMode(e, free);
+      if (n.rowPitch === e.rowPitch && n.y === e.y) continue;
+      before.push(e);
+      after.push(n);
+    }
+    if (after.length) s.commit({ label: free ? "Free text" : "Lock text to rows", forward: [{ op: "replaceElements", elements: after }], inverse: [{ op: "replaceElements", elements: before }] });
+    this.updateSelectionBox();
   }
 
   /** Applies colour/size to the current selection (text: colour + size; ink: colour). */
@@ -553,7 +661,7 @@ export class InkEditor {
       let n: Element | null = null;
       if (e.type === "text") n = { ...e, color: style.color ?? e.color, fontSize: style.fontSize ?? e.fontSize };
       else if (e.type === "ink" && style.color) n = { ...e, color: style.color };
-      if (n && e.type === "text" && n.type === "text") n.height = Math.max(contentHeight(n.text, n.fontSize, n.width), 1);
+      if (n?.type === "text") n.height = Math.max(this.textHeight(n), 1);
       if (n) {
         before.push(e);
         after.push(n);
@@ -591,21 +699,43 @@ export class InkEditor {
     if (!this.session) return;
     this.clearMatches();
     this.rect = this.viewport.getBoundingClientRect();
-    if (e.pointerType === "pen") this.markPenSeen();
+    if (e.pointerType === "pen") {
+      this.markPenSeen();
+      this.abandonFingerDraw();
+      // WKWebView gets the Pencil as well as the native capture, which commits the stroke itself
+      if (this.native?.kind === "ios-pencil" && this.nativeVisible) {
+        e.preventDefault();
+        this.penDown = true;
+        return;
+      }
+    }
+    const grabbed = e.target === this.editFrame ? this.edit?.id : undefined;
     // finishing a text edit consumes the tap
     if (this.edit && !(e.pointerType === "touch" && this.touches.size > 0)) {
       this.endTextEdit();
-      if (this.tool === "text") return;
+      if (this.tool === "text" && !grabbed) return;
     }
     const tool = this.effectiveTool(e);
     const busy = !!(this.active || this.erase || this.drag);
-    const cls = classifyPointer(e, { penOnly: this.settings.penOnly, penSeen: this.penSeen, penDown: this.penDown, drawingActive: busy, touches: this.touches.size, palmPx: this.settings.palmContactPx });
+    const penActive = this.penDown || performance.now() - this.penLiftedAt < PEN_LIFT_GRACE_MS;
+    const cls = classifyPointer(e, { penOnly: this.settings.penOnly, penSeen: this.penSeen, penDown: penActive, drawingActive: busy, touches: this.touches.size, palmPx: this.settings.palmContactPx });
     if (cls === "ignore") return;
     if (e.pointerType === "pen") this.penDown = true;
+    if (e.pointerType === "touch" && this.fingerDraw) {
+      // the drawing finger becomes the first half of the pinch, so it must stop drawing
+      const first = this.abandonFingerDraw(PINCH_GRACE_MS)!;
+      this.touches.set(first.pointerId, { x: first.x, y: first.y });
+    }
     if (cls === "navigate" || tool === "hand") return this.beginNavigate(e);
     if (e.pointerType === "touch" && busy) return;
     e.preventDefault();
     this.capture(e);
+    if (e.pointerType === "touch") {
+      const [x, y] = this.viewportPoint(e);
+      this.fingerDraw = { pointerId: e.pointerId, x, y };
+    }
+    // an empty box is gone once its edit ended, and then this is an ordinary press
+    if (grabbed && this.session.elementById(grabbed)) return this.beginTextMove(grabbed, e);
     switch (tool) {
       case "pen":
       case "highlighter":
@@ -620,6 +750,7 @@ export class InkEditor {
   }
 
   private onMove(e: PointerEvent) {
+    if (this.fingerDraw?.pointerId === e.pointerId) [this.fingerDraw.x, this.fingerDraw.y] = this.viewportPoint(e);
     if (this.touches.has(e.pointerId) || this.pan?.pointerId === e.pointerId) {
       if (e.type === "pointermove") this.navigate(e);
       return;
@@ -648,11 +779,12 @@ export class InkEditor {
       this.drawEraserCursor(this.docPoint(e));
       return;
     }
-    if (this.drag && this.drag.pointerId === e.pointerId) this.dragTo(this.docPoint(e));
+    if (this.drag && this.drag.pointerId === e.pointerId) this.dragTo(this.docPoint(e), e.altKey);
   }
 
   private onUp(e: PointerEvent, cancelled: boolean) {
-    if (e.pointerType === "pen") this.penDown = false;
+    if (e.pointerType === "pen") this.liftPen();
+    if (this.fingerDraw?.pointerId === e.pointerId) this.fingerDraw = null;
     if (this.touches.delete(e.pointerId)) {
       if (this.touches.size < 2) this.pinch = null;
       return;
@@ -673,6 +805,30 @@ export class InkEditor {
     if (this.drag?.pointerId === e.pointerId) return cancelled ? this.cancelDrag() : this.finishDrag();
   }
 
+  private liftPen() {
+    this.penDown = false;
+    this.penLiftedAt = performance.now();
+  }
+
+  /**
+   * Ends a finger's drawing gesture that turned out to be something else: a pinch, or a palm
+   * resting before the pen came down. Its stroke is dropped unless it has lasted `keepAfterMs`,
+   * so a real line survives a late second finger. Erasing has already happened and is kept.
+   * Returns the finger, if there was one.
+   */
+  private abandonFingerDraw(keepAfterMs = Infinity) {
+    const finger = this.fingerDraw;
+    if (!finger) return null;
+    this.fingerDraw = null;
+    if (this.active) {
+      if (performance.now() - this.active.t0 >= keepAfterMs) this.finishStroke();
+      else this.dropStroke();
+    }
+    if (this.erase) this.finishErase();
+    if (this.drag) this.cancelDrag();
+    return finger;
+  }
+
   private onLostCapture(e: PointerEvent) {
     // lost capture mid-stroke (e.g. window lost focus): keep what was drawn, never orphan it
     if (this.active?.pointerId === e.pointerId) this.finishStroke();
@@ -685,6 +841,7 @@ export class InkEditor {
     if (this.active) this.finishStroke();
     if (this.erase) this.finishErase();
     if (this.drag) this.cancelDrag();
+    this.fingerDraw = null;
     this.touches.clear();
     this.pinch = null;
     this.pan = null;
@@ -861,6 +1018,10 @@ export class InkEditor {
     // pointercancel (palm/gesture takeover): the samples so far are kept
     // only if they form a real stroke; a cancelled tap leaves nothing behind
     if (this.active && this.active.stroke.points.length > 3) return this.finishStroke();
+    this.dropStroke();
+  }
+
+  private dropStroke() {
     this.active = null;
     this.clearScreen(this.actx);
     this.clearScreen(this.tctx);
@@ -964,27 +1125,43 @@ export class InkEditor {
     const tol = SELECT_TOLERANCE_PX / this.transform.scale;
     const t = this.singleSelectedText();
     if (t) {
-      const b = textBounds(t);
-      if (Math.abs(p[0] - b[2]) <= tol * 1.5 && Math.abs(p[1] - b[3]) <= tol * 1.5) {
-        this.drag = { kind: "resize", pointerId: e.pointerId, start: p, orig: t, width: t.width, height: b[3] - b[1] };
+      const [hx, hy] = this.handlePoint(textBounds(t));
+      if (Math.abs(p[0] - hx) <= tol * 1.5 && Math.abs(p[1] - hy) <= tol * 1.5) {
+        this.drag = { kind: "resize", pointerId: e.pointerId, start: p, orig: t, width: t.width, height: t.height };
         this.hideSelection(true);
         return;
       }
     }
     const sb = this.selectionBounds();
     if (sb && p[0] >= sb[0] - tol && p[0] <= sb[2] + tol && p[1] >= sb[1] - tol && p[1] <= sb[3] + tol) {
-      this.drag = { kind: "move", pointerId: e.pointerId, start: p, dx: 0, dy: 0, moved: false };
+      this.drag = { kind: "move", pointerId: e.pointerId, start: p, dx: 0, dy: 0, moved: false, guides: [] };
       return;
     }
     const hit = this.hitElement(p[0], p[1]);
     if (hit) {
       this.selection = new Set([hit.id]);
       this.updateSelectionBox();
-      this.drag = { kind: "move", pointerId: e.pointerId, start: p, dx: 0, dy: 0, moved: false };
+      this.drag = { kind: "move", pointerId: e.pointerId, start: p, dx: 0, dy: 0, moved: false, guides: [] };
       return;
     }
     this.clearSelection();
     this.drag = { kind: "band", pointerId: e.pointerId, start: p, end: p };
+  }
+
+  /** Moves one text block from a press, in any tool. */
+  private beginTextMove(id: string, e: PointerEvent, tapEdits = false) {
+    this.selection = new Set([id]);
+    this.updateSelectionBox();
+    this.drag = { kind: "move", pointerId: e.pointerId, start: this.docPoint(e), dx: 0, dy: 0, moved: false, guides: [], tapEdits };
+  }
+
+  /**
+   * Where a block's resize handle goes: its corner, pulled back onto the page.
+   * Long text runs off the bottom of the page, and the corner with it, where
+   * nothing could reach the handle to make the box wider.
+   */
+  private handlePoint(b: Rect): [number, number] {
+    return [Math.min(b[2], this.renderer.width), Math.min(b[3], this.renderer.height)];
   }
 
   private hideSelection(hide: boolean) {
@@ -999,7 +1176,7 @@ export class InkEditor {
     }
   }
 
-  private dragTo(p: [number, number]) {
+  private dragTo(p: [number, number], freehand = false) {
     const d = this.drag!;
     if (d.kind === "band") d.end = p;
     else if (d.kind === "move") {
@@ -1009,13 +1186,64 @@ export class InkEditor {
         d.moved = true;
         this.hideSelection(true);
       }
+      d.dy = this.snappedDy(d.dy);
+      this.alignDrag(d, freehand);
     } else {
-      d.width = Math.max(24, d.orig.width + p[0] - d.start[0]);
-      const minH = contentHeight(d.orig.text, d.orig.fontSize, d.width);
-      const b = textBounds(d.orig);
-      d.height = Math.max(minH, b[3] - b[1] + p[1] - d.start[1]);
+      // never wider than the page, unless it already was
+      const widest = Math.max(d.orig.width, this.renderer.width - d.orig.x);
+      d.width = Math.max(24, Math.min(widest, d.orig.width + p[0] - d.start[0]));
+      const minH = this.textHeight({ ...d.orig, width: d.width });
+      const h = Math.max(minH, d.orig.height + p[1] - d.start[1]);
+      const pitch = d.orig.rowPitch;
+      d.height = pitch === undefined ? h : Math.ceil(h / pitch - 1e-9) * pitch;
     }
     this.scheduleFrame();
+  }
+
+  private textEdges(t: Text, dx = 0, dy = 0): TextEdges {
+    const y = t.y + dy;
+    const x = t.x + dx;
+    return { rect: [x, y, x + t.width, y + t.height], baseline: y + (paintOf(t).runs[0]?.y ?? t.height) };
+  }
+
+  /** Edges of the page's text blocks, leaving out `skip`. */
+  private otherTextEdges(skip: Set<string>): TextEdges[] {
+    const out: TextEdges[] = [];
+    for (const e of this.session?.page.elements ?? []) if (e.type === "text" && !skip.has(e.id)) out.push(this.textEdges(e));
+    return out;
+  }
+
+  /** Lines a moved selection's text up with the other text on the page. */
+  private alignDrag(d: Extract<SelectDrag, { kind: "move" }>, freehand: boolean) {
+    d.guides = [];
+    if (!d.moved || freehand) return;
+    const moving: TextEdges[] = [];
+    let onRows = false;
+    for (const id of this.selection) {
+      const e = this.session?.elementById(id);
+      if (e?.type !== "text") continue;
+      moving.push(this.textEdges(e, d.dx, d.dy));
+      onRows ||= e.rowPitch !== undefined;
+    }
+    if (!moving.length) return;
+    const a = alignment(moving, this.otherTextEdges(this.selection), SNAP_DISTANCE_PX / this.transform.scale, !onRows);
+    d.dx += a.dx;
+    d.dy += a.dy;
+    d.guides = a.guides;
+  }
+
+  /**
+   * Moves the selection by whole rows while it holds row-locked text, so the
+   * text stays on the rows and the selection keeps its shape.
+   */
+  private snappedDy(dy: number): number {
+    const s = this.session;
+    if (!s) return dy;
+    for (const id of this.selection) {
+      const e = s.elementById(id);
+      if (e?.type === "text" && e.rowPitch !== undefined) return snapToRow(e.y + dy, s.page.template, e.rowPitch) - e.y;
+    }
+    return dy;
   }
 
   private movedCopy(e: Element, dx: number, dy: number): Element {
@@ -1052,6 +1280,16 @@ export class InkEditor {
         else if (m.type === "text") drawText(ctx, m);
       }
     }
+    if (d.kind === "move" && d.guides.length) {
+      ctx.strokeStyle = "rgba(219,39,119,0.9)";
+      ctx.lineWidth = 1 / this.transform.scale;
+      ctx.beginPath();
+      for (const g of d.guides) {
+        ctx.moveTo(g.x0, g.y0);
+        ctx.lineTo(g.x1, g.y1);
+      }
+      ctx.stroke();
+    }
     const b = this.selectionBounds();
     if (b) {
       const off = d.kind === "move" ? [d.dx, d.dy] : [0, 0];
@@ -1083,6 +1321,11 @@ export class InkEditor {
       return this.updateSelectionBox();
     }
     this.hideSelection(false);
+    if (d.kind === "move" && d.tapEdits) {
+      // the Text tool: a tap edits the block, a drag moves it
+      const t = d.moved ? null : this.singleSelectedText();
+      if (t) return this.beginTextEdit(t, false);
+    }
     const before: Element[] = [];
     const after: Element[] = [];
     for (const id of this.selection) {
@@ -1096,6 +1339,8 @@ export class InkEditor {
     if (changed && after.length) {
       s.commit({ label: d.kind === "move" ? "Move" : "Resize text", forward: [{ op: "replaceElements", elements: after }], inverse: [{ op: "replaceElements", elements: before }] });
     }
+    // only the select tool keeps a selection
+    if (this.tool !== "select") this.clearSelection();
     this.updateSelectionBox();
   }
 
@@ -1138,21 +1383,39 @@ export class InkEditor {
     if (b && show) {
       const pad = 3 / this.transform.scale;
       Object.assign(this.selBox.style, { left: `${b[0] - pad}px`, top: `${b[1] - pad}px`, width: `${b[2] - b[0] + 2 * pad}px`, height: `${b[3] - b[1] + 2 * pad}px` });
-      Object.assign(this.selHandle.style, { left: `${b[2]}px`, top: `${b[3]}px` });
+      const [hx, hy] = this.handlePoint(b);
+      Object.assign(this.selHandle.style, { left: `${hx}px`, top: `${hy}px` });
     }
     const sel = [...this.selection].map((id) => this.session?.elementById(id)).filter(Boolean) as Element[];
-    this.emit({ selectionCount: sel.length, selectionHasText: sel.some((e) => e.type === "text") });
+    this.emit({
+      selectionCount: sel.length,
+      selectionHasText: sel.some((e) => e.type === "text"),
+      selectionTextFree: sel.every((e) => e.type !== "text" || e.rowPitch === undefined),
+    });
   }
 
   // ----------------------------------------------------------- text --
   private textTap(e: PointerEvent) {
     const [x, y] = this.docPoint(e);
     const hit = this.hitText(x, y);
-    if (hit) return this.beginTextEdit(hit, false);
+    if (hit) return this.beginTextMove(hit.id, e, true);
     const W = this.renderer.width;
     const fs = this.tools.textSize;
-    const bx = Math.min(Math.max(0, x), W - 40);
-    const by = Math.max(0, y - lineHeight(fs) / 2);
+    const template = this.session!.page.template;
+    const pitch = this.tools.textFreePlacement ? undefined : rowPitchOf(template);
+    let bx = Math.min(Math.max(0, x), W - 40);
+    // a tap between two rules writes on the lower one
+    let by = pitch === undefined ? Math.max(0, y - lineHeight(fs) / 2) : snapToRow(y, template, pitch, Math.floor);
+    const h = pitch === undefined ? lineHeight(fs) : rowsFor(fs, pitch) * pitch;
+    if (!e.altKey) {
+      // Lines up with the text already there. A new block's width comes from where it
+      // lands, so only left edges, tops and baselines count.
+      const here: TextEdges = { rect: [bx, by, bx, by + h], baseline: by + (pitch ?? firstBaseline(fs)) };
+      const others = this.otherTextEdges(new Set()).map((o) => ({ ...o, rect: [o.rect[0], o.rect[1], o.rect[0], o.rect[3]] as Rect }));
+      const a = alignment([here], others, SNAP_DISTANCE_PX / this.transform.scale, pitch === undefined);
+      bx = Math.max(0, bx + a.dx);
+      by = Math.max(0, by + a.dy);
+    }
     const width = Math.max(60, Math.min(280, W - bx - 12));
     const block: Text = {
       type: "text",
@@ -1161,11 +1424,12 @@ export class InkEditor {
       x: Math.round(bx * 100) / 100,
       y: Math.round(by * 100) / 100,
       width,
-      height: lineHeight(fs),
+      height: h,
       text: "",
       fontSize: fs,
       color: this.tools.textColor,
       align: "left",
+      rowPitch: pitch,
     };
     this.beginTextEdit(block, true);
   }
@@ -1185,6 +1449,7 @@ export class InkEditor {
     }
     this.textarea.value = t.text;
     this.textarea.classList.remove("hidden");
+    this.editFrame.classList.remove("hidden");
     this.layoutTextarea();
     // focus without scrolling the page under the keyboard
     this.textarea.focus({ preventScroll: true });
@@ -1194,23 +1459,32 @@ export class InkEditor {
     this.updateNative();
   }
 
+  /** Shows the block's Markdown source over the page while it is edited. */
   private layoutTextarea() {
     const d = this.edit?.draft;
     if (!d) return;
     const ta = this.textarea;
+    const fs = d.fontSize;
+    const pitch = d.rowPitch;
+    const lh = pitch === undefined ? lineHeight(fs) : rowsFor(fs, pitch) * pitch;
+    // CSS centres the font in its line box; rendered row-locked text sits on the
+    // bottom of it, so the source moves down to the same baselines.
+    const cssBaseline = ((lh - ((metrics.ascent - metrics.descent) * fs) / metrics.unitsPerEm) / 2) + (metrics.ascent * fs) / metrics.unitsPerEm;
+    const top = pitch === undefined ? d.y : d.y + lh - cssBaseline;
     Object.assign(ta.style, {
       left: `${d.x}px`,
-      top: `${d.y}px`,
+      top: `${top}px`,
       width: `${d.width}px`,
-      fontSize: `${d.fontSize}px`,
-      lineHeight: `${lineHeight(d.fontSize)}px`,
+      fontSize: `${fs}px`,
+      lineHeight: `${lh}px`,
       fontFamily: TEXT_FONT_FAMILY,
       color: d.color,
       textAlign: d.align,
     });
     ta.style.height = "0px";
-    const h = Math.max(contentHeight(d.text, d.fontSize, d.width), ta.scrollHeight, lineHeight(d.fontSize));
+    const h = Math.max(contentHeight(d.text, fs, d.width, lh), ta.scrollHeight, lh);
     ta.style.height = `${h}px`;
+    Object.assign(this.editFrame.style, { left: `${d.x}px`, top: `${top}px`, width: `${d.width}px`, height: `${h}px` });
   }
 
   private onTextInput() {
@@ -1237,7 +1511,7 @@ export class InkEditor {
     ed.timer = null;
     const d = ed.draft;
     const text = final ? d.text.replace(/\s+$/u, "") : d.text;
-    const next: Text = { ...d, text, height: contentHeight(text, d.fontSize, d.width) };
+    const next: Text = { ...d, text, height: this.textHeight({ ...d, text }) };
     const prev = ed.committed;
     const empty = text.trim().length === 0;
     if (!prev) {
@@ -1249,7 +1523,7 @@ export class InkEditor {
       return;
     } else if (empty) {
       return;
-    } else if (prev.text !== next.text || prev.color !== next.color || prev.fontSize !== next.fontSize || prev.height !== next.height) {
+    } else if (prev.text !== next.text || prev.color !== next.color || prev.fontSize !== next.fontSize || prev.height !== next.height || prev.y !== next.y || prev.rowPitch !== next.rowPitch) {
       s.commit({ label: "Edit text", forward: [{ op: "replaceElements", elements: [next] }], inverse: [{ op: "replaceElements", elements: [prev] }] });
     } else return;
     ed.committed = next;
@@ -1267,6 +1541,7 @@ export class InkEditor {
     this.edit = null;
     this.renderer.hidden.delete(ed.id);
     this.textarea.classList.add("hidden");
+    this.editFrame.classList.add("hidden");
     if (document.activeElement === this.textarea) this.textarea.blur();
     const e = this.session?.elementById(ed.id);
     this.renderer.renderText(e ? textBounds(e as Text) : textBounds(ed.draft));
@@ -1283,6 +1558,7 @@ export class InkEditor {
     if (c.templateChanged) {
       this.renderer.template = this.session!.page.template;
       this.renderer.renderBackground();
+      this.emit({ pageHasRows: this.pageHasRows() });
     }
     const els = this.session!.page.elements;
     const maxZ = els.length ? els[els.length - 1].z : 0;
@@ -1418,14 +1694,15 @@ export class InkEditor {
   }
 
   /**
-   * The native surface owns the pen, so no pen pointer events reach `onDown`; this stands in for
-   * them. A resting palm usually lands first and looks like a finger, so pen-down also drops any
-   * pan or pinch in progress: the page must not move under the nib.
+   * The native surface owns the pen and commits its strokes, so `onDown` draws nothing for it;
+   * this reports the pen as soon as the native layer sees it. A resting palm usually lands first and looks like a finger, so pen-down also drops any
+   * pan or pinch in progress, and any stroke it started: the page must not move under the nib.
    */
   private onNativePen(down: boolean) {
     this.markPenSeen();
-    this.penDown = down;
-    if (!down) return;
+    if (!down) return this.liftPen();
+    this.penDown = true;
+    this.abandonFingerDraw();
     this.touches.clear();
     this.pinch = null;
     this.pan = null;

@@ -3,14 +3,14 @@
 // under the top bar on wide screens and as a bottom tray on narrow ones (it
 // never floats over the canvas, so native ink overlays can't cover it).
 import { computed } from "vue";
-import { Pen, Highlighter, Eraser, MousePointer2, Type, Hand, Undo2, Redo2, ZoomIn, ZoomOut, Scan, Trash, SquarePen } from "@lucide/vue";
+import { Pen, Highlighter, Eraser, MousePointer2, Type, Hand, Undo2, Redo2, ZoomIn, ZoomOut, Scan, Trash, SquarePen, Rows3 } from "@lucide/vue";
 import IconBtn from "./ui/IconBtn.vue";
 import type { EditorState, Tool } from "../editor/engine";
 import { HIGHLIGHTER_COLORS, HIGHLIGHTER_WIDTHS, PEN_COLORS, PEN_WIDTHS, TEXT_SIZES, useSettings } from "../stores/settings";
 import { modKey } from "../platform/device";
 
 const props = defineProps<{ state: EditorState; compact?: boolean }>();
-const emit = defineEmits<{ tool: [t: Tool]; undo: []; redo: []; zoomIn: []; zoomOut: []; fit: []; deleteSelection: []; editText: []; restyle: [s: { color?: string; fontSize?: number }] }>();
+const emit = defineEmits<{ tool: [t: Tool]; undo: []; redo: []; zoomIn: []; zoomOut: []; fit: []; deleteSelection: []; editText: []; restyle: [s: { color?: string; fontSize?: number }]; freePlacement: [free: boolean] }>();
 const settings = useSettings();
 const mod = modKey();
 
@@ -46,6 +46,15 @@ const sizes = computed(() => {
   if (t === "pen") return PEN_WIDTHS.map((w) => ({ v: w, active: settings.s.penWidth === w, dot: Math.max(3, w * 2) }));
   return [];
 });
+// Text locks to ruled and dotted paper's rows. With the Text tool this button sets how new text
+// is placed; with text selected it changes the selection.
+const showRowLock = computed(() => props.state.pageHasRows && (props.state.tool === "text" || (props.state.tool === "select" && props.state.selectionHasText)));
+const rowLocked = computed(() => (props.state.tool === "select" ? !props.state.selectionTextFree : !settings.s.textFreePlacement));
+function toggleRowLock() {
+  const free = rowLocked.value;
+  if (props.state.tool === "select") emit("freePlacement", free);
+  else settings.s.textFreePlacement = free;
+}
 function setSize(v: number) {
   const t = props.state.tool;
   if (t === "highlighter") settings.s.highlighterWidth = v;
@@ -81,6 +90,11 @@ function setSize(v: number) {
           </button>
         </div>
       </template>
+    </template>
+
+    <template v-if="showRowLock">
+      <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+      <IconBtn :label="rowLocked ? 'Text locked to rows (click for free placement)' : 'Free text placement (click to lock to rows)'" :active="rowLocked" role="switch" :aria-checked="rowLocked" @click="toggleRowLock"><Rows3 :size="20" /></IconBtn>
     </template>
 
     <template v-if="state.tool === 'select' && state.selectionCount > 0">

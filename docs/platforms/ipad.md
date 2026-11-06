@@ -10,11 +10,14 @@ on an iPad until the checklist is filled in on a device.
   UIKit Pencil preview surface:
   * Pencil-only `UIGestureRecognizer` on the WKWebView (`allowedTouchTypes = [.pencil]`,
     `cancelsTouchesInView`) limited to the editor rect; fingers and palms go to the web view.
-    The web view never sees the Pencil, so a `pen` event reports pen-down and pen-up: the editor
-    uses it to switch fingers to pan and zoom and to ignore palms while the Pencil is down.
+    WKWebView still delivers the Pencil as pen pointer events, so the editor draws nothing from
+    them while this surface is visible; otherwise every stroke would be committed twice.
+    A `pen` event reports pen-down and pen-up: the editor uses it to switch fingers to pan and
+    zoom and to ignore palms while the Pencil is down.
     The contact-size palm filter is off on iOS: WebKit reports twice the touch radius, so
-    ordinary fingertips exceed the limit. A palm that lands between strokes can pan the page
-    until the Pencil touches down.
+    ordinary fingertips exceed the limit. Contacts that land within 400 ms of the Pencil lifting
+    are ignored instead, and pen-down drops any pan, pinch or finger stroke already under way.
+    A palm that lands later than that can still pan the page until the Pencil touches down.
   * `PencilPreviewView` (transparent, `isUserInteractionEnabled = false`) draws the live stroke
     with the shared stroke geometry (`InkCore.Geometry`), predicted touches at 50 % alpha.
   * Coalesced touches recorded; `touchesEstimatedPropertiesUpdated` patches force by

@@ -7,6 +7,7 @@ import type { NotebookSummary } from "../generated/NotebookSummary";
 import type { Paper } from "../generated/Paper";
 import type { Template } from "../generated/Template";
 import type { RecoveryReport } from "../generated/RecoveryReport";
+import { renderMathTable } from "../editor/math";
 import { api, CommandError } from "../platform/ipc";
 import { pickFile, pickSaveLocation, safeFileName } from "../platform/files";
 import { useUi } from "./ui";
@@ -295,7 +296,7 @@ export const useLibrary = defineStore("library", () => {
     busy.value = "Writing PDF…";
     try {
       await beforeExport?.();
-      const r = await api.exportAnnotatedPdf(id, path);
+      const r = await api.exportAnnotatedPdf(id, path, await renderMathTable(await api.notebookMath(id)));
       ui.success(`PDF saved: ${r.pages} page${r.pages === 1 ? "" : "s"}, ${r.strokes} strokes, ${r.textBlocks} text blocks.`);
       for (const w of r.warnings) ui.toast("info", w, { ms: 9000 });
     } catch (e) {
@@ -311,7 +312,7 @@ export const useLibrary = defineStore("library", () => {
     busy.value = "Preparing to print…";
     try {
       await beforePrint?.();
-      const { status, report } = await api.printNotebook(id, currentPage);
+      const { status, report } = await api.printNotebook(id, currentPage, await renderMathTable(await api.notebookMath(id)));
       if (status === "sent") ui.success(`Sent ${report.pages} page${report.pages === 1 ? "" : "s"} to the printer.`);
       else if (status === "viewer") ui.toast("info", "Opened in your PDF viewer. Print from there.", { ms: 9000 });
       if (status !== "cancelled") for (const w of report.warnings) ui.toast("info", w, { ms: 9000 });

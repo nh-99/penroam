@@ -7,7 +7,7 @@ const printNotebook = vi.fn();
 vi.mock("../src/platform/ipc", () => ({
   hasHost: () => false,
   CommandError: class extends Error {},
-  api: { printNotebook: (...args: unknown[]) => printNotebook(...args) },
+  api: { printNotebook: (...args: unknown[]) => printNotebook(...args), notebookMath: async () => [] },
 }));
 
 const report = (warnings: string[] = []) => ({ pages: 2, strokes: 1, textBlocks: 0, replacedCharacters: 0, warnings });
@@ -28,7 +28,7 @@ describe("printing a notebook", () => {
     });
     await useLibrary().printNotebook("nb", "pg", async () => void order.push("flush"));
     expect(order).toEqual(["flush", "print"]);
-    expect(printNotebook).toHaveBeenCalledWith("nb", "pg");
+    expect(printNotebook).toHaveBeenCalledWith("nb", "pg", []);
     expect(shown()).toEqual(["Sent 2 pages to the printer."]);
   });
 

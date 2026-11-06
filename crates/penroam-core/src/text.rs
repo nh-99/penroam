@@ -1,15 +1,16 @@
-//! Deterministic plain-text layout shared by the on-screen renderer (TS port in
-//! `apps/desktop-mobile/src/editor/textLayout.ts`) and the PDF exporter.
+//! Font metrics and deterministic plain-text wrapping, shared with the TS port in
+//! `apps/desktop-mobile/src/editor/textLayout.ts`. Text blocks are laid out by
+//! [`crate::markdown`], which applies these wrapping rules to styled text.
 //!
-//! Widths come from `data/text-metrics.json` (Liberation Sans, metric-compatible
-//! with Helvetica), never from the platform's font rasteriser, so wrapping is
+//! Widths come from `data/text-metrics.json` (the Liberation faces, metric-compatible
+//! with Helvetica and Courier), never from the platform's font rasteriser, so wrapping is
 //! identical on every OS and in exported PDFs. Golden: `tests/fixtures/text-layout-golden.json`.
 //!
 //! Rules: `\n` forces a break; otherwise greedy wrapping at spaces; a word
 //! wider than the box is broken between characters; trailing spaces of a
 //! wrapped line do not count towards its width.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -34,8 +35,52 @@ pub struct TextMetrics {
     pub fallback_width: f64,
     /// Advance per code point (decimal string keys in the JSON).
     widths: HashMap<String, f64>,
+    /// Advances of the other faces (same shape as `widths`).
+    faces: FaceWidths,
     #[serde(skip)]
     by_char: HashMap<char, f64>,
+    #[serde(skip)]
+    by_face: [HashMap<char, f64>; 4],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FaceWidths {
+    bold: HashMap<String, f64>,
+    italic: HashMap<String, f64>,
+    bold_italic: HashMap<String, f64>,
+    mono: HashMap<String, f64>,
+}
+
+/// A bundled typeface. Each one has a standard PDF font with the same widths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Face {
+    /// Liberation Sans Regular / Helvetica.
+    Regular,
+    /// Liberation Sans Bold / Helvetica-Bold.
+    Bold,
+    /// Liberation Sans Italic / Helvetica-Oblique.
+    Italic,
+    /// Liberation Sans Bold Italic / Helvetica-BoldOblique.
+    BoldItalic,
+    /// Liberation Mono / Courier.
+    Mono,
+}
+
+/// Size of code relative to the text around it.
+pub const MONO_SCALE: f64 = 0.9;
+
+fn char_map(widths: &HashMap<String, f64>) -> HashMap<char, f64> {
+    widths
+        .iter()
+        .filter_map(|(k, v)| {
+            k.parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .map(|c| (c, *v))
+        })
+        .collect()
 }
 
 /// The bundled metrics, parsed once.
@@ -43,16 +88,13 @@ pub fn metrics() -> &'static TextMetrics {
     static M: OnceLock<TextMetrics> = OnceLock::new();
     M.get_or_init(|| {
         let mut m: TextMetrics = serde_json::from_str(METRICS_JSON).expect("text-metrics.json");
-        m.by_char = m
-            .widths
-            .iter()
-            .filter_map(|(k, v)| {
-                k.parse::<u32>()
-                    .ok()
-                    .and_then(char::from_u32)
-                    .map(|c| (c, *v))
-            })
-            .collect();
+        m.by_char = char_map(&m.widths);
+        m.by_face = [
+            char_map(&m.faces.bold),
+            char_map(&m.faces.italic),
+            char_map(&m.faces.bold_italic),
+            char_map(&m.faces.mono),
+        ];
         m
     })
 }
@@ -64,6 +106,20 @@ impl TextMetrics {
             return self.advance(' ') * 4.0;
         }
         *self.by_char.get(&c).unwrap_or(&self.fallback_width)
+    }
+    /// Advance width of one character of `face` in em/1000 units.
+    pub fn advance_in(&self, face: Face, c: char) -> f64 {
+        let map = match face {
+            Face::Regular => return self.advance(c),
+            Face::Bold => &self.by_face[0],
+            Face::Italic => &self.by_face[1],
+            Face::BoldItalic => &self.by_face[2],
+            Face::Mono => &self.by_face[3],
+        };
+        if c == '\t' {
+            return self.advance_in(face, ' ') * 4.0;
+        }
+        *map.get(&c).unwrap_or(&self.fallback_width)
     }
     /// Whether the character has a metric (and a WinAnsi glyph in Helvetica).
     pub fn known(&self, c: char) -> bool {

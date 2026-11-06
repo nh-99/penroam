@@ -158,6 +158,7 @@ fn text(id: Uuid, z: i64, s: &str) -> Element {
         font_size: 14.0,
         color: "#202020".into(),
         align: TextAlign::Left,
+        row_pitch: None,
         extra: Default::default(),
     })
 }

@@ -23,6 +23,8 @@ interface Persisted {
   highlighterWidth: number;
   textColor: string;
   textSize: number;
+  /** New text is placed anywhere on ruled and dotted paper instead of on its rows. */
+  textFreePlacement: boolean;
   paper: Paper;
   template: TemplateKind;
   sidebarOpen: boolean;
@@ -43,6 +45,7 @@ const defaults: Persisted = {
   highlighterWidth: 14,
   textColor: "#111111",
   textSize: 16,
+  textFreePlacement: false,
   paper: "letter",
   template: "ruled",
   sidebarOpen: true,
