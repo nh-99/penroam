@@ -13,6 +13,7 @@
 //! <root>/notebooks/<nb>/assets/<sha256>     immutable attachments
 //! <root>/notebooks/<nb>/thumbs/<page>.png   derived thumbnail cache (never exported)
 //! <root>/notebooks/<nb>/orphans/            files found unreferenced at start-up (kept)
+//! <root>/notebooks/<nb>/history/            restorable versions (see `crate::history`)
 //! <root>/migration-backups/                 original bytes of migrated legacy files
 //! <root>/staging/                           temporary import/export work area
 //! ```
@@ -53,6 +54,7 @@
 
 use crate::error::{Result, StorageError};
 use crate::fsutil::{self, write_atomic, TMP_MARKER};
+use crate::history::{self, ChainMeta, Structure};
 use crate::journal::{Journal, JournalError, Txn, TxnTarget};
 use crate::state::*;
 use penroam_core::migrate::{notebook_from_slice, page_from_slice};
@@ -100,6 +102,32 @@ pub struct NotebookSummary {
     /// First live page, used for the cover thumbnail.
     #[ts(optional)]
     pub first_page_id: Option<Uuid>,
+}
+
+/// An attachment for [`Library::create_notebook_with`].
+#[derive(Debug, Clone)]
+pub struct NewAsset {
+    /// The bytes; stored by their SHA-256.
+    pub bytes: Vec<u8>,
+    /// MIME type.
+    pub media_type: String,
+    /// Original file name, if any.
+    pub name: Option<String>,
+}
+
+/// A page for [`Library::create_notebook_with`].
+#[derive(Debug, Clone)]
+pub struct NewPage {
+    /// Size class.
+    pub paper: Paper,
+    /// Size in points.
+    pub size: Size,
+    /// Background template.
+    pub template: Template,
+    /// Original PDF page behind this page.
+    pub background: Option<PdfBackgroundRef>,
+    /// Initial content, with z values assigned.
+    pub elements: Vec<Element>,
 }
 
 /// What start-up recovery found and did. Shown to the user only when
@@ -209,6 +237,10 @@ pub struct Library {
     installed: std::collections::BTreeMap<Uuid, u64>,
     tuning: Tuning,
     id_counter: Option<u128>,
+    /// Per-page history bookkeeping, filled lazily.
+    history_chains: HashMap<(Uuid, Uuid), ChainMeta>,
+    /// Last recorded title and page order per notebook.
+    history_structure: HashMap<Uuid, Structure>,
     _lock: File,
 }
 
@@ -341,6 +373,8 @@ impl Library {
                 min_compact_bytes: JOURNAL_MIN_COMPACT_BYTES,
             },
             id_counter: None,
+            history_chains: HashMap::new(),
+            history_structure: HashMap::new(),
             _lock: lock,
         };
         lib.installed = lib.manifest.installed.clone();
@@ -379,7 +413,7 @@ impl Library {
         self.last_seq
     }
 
-    fn nb_dir(&self, nb: Uuid) -> PathBuf {
+    pub(crate) fn nb_dir(&self, nb: Uuid) -> PathBuf {
         self.root.join("notebooks").join(nb.to_string())
     }
     fn page_path(&self, nb: Uuid, page: Uuid) -> PathBuf {
@@ -740,6 +774,7 @@ impl Library {
             DocumentOperation::NotebookPurged { .. } => {
                 self.pages.retain(|(n, _), _| *n != nb_id);
                 self.pending.retain(|(n, _), _| *n != nb_id);
+                self.forget_history(nb_id);
                 self.dirty_notebooks.remove(&nb_id);
                 self.notebooks.remove(&nb_id);
                 self.purged.insert(nb_id);
@@ -827,8 +862,19 @@ impl Library {
     fn save_notebook_snapshot(&mut self, nb_id: Uuid) -> Result<()> {
         let nb = self.notebook(nb_id)?;
         let bytes = serde_json::to_vec_pretty(nb).map_err(ioerr)?;
+        let structure = Structure {
+            at: nb.updated_at,
+            title: nb.title.clone(),
+            page_order: nb.page_order.clone(),
+        };
         write_atomic(&self.nb_dir(nb_id).join("notebook.json"), &bytes)?;
         self.dirty_notebooks.remove(&nb_id);
+        let nb_dir = self.nb_dir(nb_id);
+        let mut last = self.history_structure.remove(&nb_id);
+        history::record_structure(&nb_dir, &mut last, structure);
+        if let Some(l) = last {
+            self.history_structure.insert(nb_id, l);
+        }
         Ok(())
     }
 
@@ -914,6 +960,80 @@ impl Library {
         let nb = self.notebook(id)?.clone();
         let page = self.load_page(id, page_id)?;
         Ok((nb, page))
+    }
+
+    /// Creates a notebook that starts out holding imported content: `assets`
+    /// first, so pages can refer to them, then one page per entry of `pages`.
+    /// Everything goes through the ordinary operations, so it syncs like any
+    /// other notebook. On failure the partial notebook is erased, so an
+    /// import either arrives whole or leaves no trace.
+    pub fn create_notebook_with(
+        &mut self,
+        title: &str,
+        assets: Vec<NewAsset>,
+        pages: Vec<NewPage>,
+    ) -> Result<Notebook> {
+        validate_title(title)?;
+        if pages.is_empty() {
+            return Err(StorageError::Invalid("nothing to import".into()));
+        }
+        let id = self.new_id();
+        let cover = COVERS[self.notebooks.len() % COVERS.len()].to_string();
+        self.commit_notebook_ops(
+            id,
+            vec![DocumentOperation::NotebookCreated {
+                notebook_id: id,
+                title: title.trim().to_string(),
+                cover,
+                defaults: PageDefaults::default(),
+            }],
+        )?;
+        let res = self.fill_notebook(id, assets, pages);
+        if let Err(e) = res {
+            if let Err(cleanup) = self
+                .delete_notebook(id)
+                .and_then(|_| self.purge_notebook(id))
+            {
+                self.recovery.warnings.push(format!(
+                    "a failed import of \"{title}\" could not be cleaned up: {cleanup}"
+                ));
+            }
+            return Err(e);
+        }
+        Ok(self.notebook(id)?.clone())
+    }
+
+    fn fill_notebook(
+        &mut self,
+        id: Uuid,
+        assets: Vec<NewAsset>,
+        pages: Vec<NewPage>,
+    ) -> Result<()> {
+        for a in assets {
+            self.add_asset(id, &a.bytes, &a.media_type, a.name)?;
+        }
+        let specs = pages
+            .iter()
+            .map(|p| (p.paper, p.size, p.template.clone(), p.background.clone()))
+            .collect();
+        let (_, created) = self.create_pages(id, None, specs)?;
+        for (page, new) in created.into_iter().zip(pages) {
+            if new.elements.is_empty() {
+                continue;
+            }
+            let batch = OperationBatch {
+                batch_id: self.new_id(),
+                base_revision: page.revision,
+                ops: vec![PageOperation {
+                    op_id: self.new_id(),
+                    kind: OpKind::AddElements {
+                        elements: new.elements,
+                    },
+                }],
+            };
+            self.apply_page_operations(id, page.id, &batch)?;
+        }
+        Ok(())
     }
 
     /// Renames a notebook (the title is validated and trimmed).
@@ -1368,6 +1488,7 @@ impl Library {
         penroam_core::ops::check_batch(&c.page, batch)?;
         let revision = c.page.revision + 1;
         let bodies = bodies_from_batch(nb_id, &c.page, batch);
+        self.history_before_edit(nb_id, page_id);
         let ops = self.make_ops(bodies, now);
         let txn = Txn {
             target: TxnTarget::Page {
@@ -1379,6 +1500,7 @@ impl Library {
             ops,
         };
         let bytes = self.journal_txn(&txn)?;
+        self.history_after_edit(nb_id, page_id, &txn);
         let c = self.pages.get_mut(&(nb_id, page_id)).expect("cached");
         penroam_core::ops::apply_checked(&mut c.page, batch, Some(revision), now);
         c.journal_entries += 1;
@@ -1404,6 +1526,99 @@ impl Library {
             }
         }
         Ok(outcome)
+    }
+
+    // ------------------------------------------------------------- history --
+
+    fn history_meta(&mut self, nb_id: Uuid, page_id: Uuid) -> &mut ChainMeta {
+        let path = history::chain_path(&self.nb_dir(nb_id), page_id);
+        self.history_chains
+            .entry((nb_id, page_id))
+            .or_insert_with(|| history::scan_meta(&path))
+    }
+
+    /// Drops cached history bookkeeping after the files changed underneath it.
+    pub(crate) fn forget_history(&mut self, nb_id: Uuid) {
+        self.history_chains.retain(|(n, _), _| *n != nb_id);
+        self.history_structure.remove(&nb_id);
+    }
+
+    /// Records a page arriving from sync as a version of its own. A page new
+    /// to this device gets no chain until it is edited, so a first download
+    /// doesn't store everything twice.
+    fn history_install(&mut self, nb_id: Uuid, old: Option<&Page>, new: &Page) {
+        let Some(old) = old else { return };
+        let Some(mut txn) = history::install_txn(nb_id, old, new) else {
+            return;
+        };
+        // a delta follows the old revision, even if journal batches were folded in
+        if let TxnTarget::Page { revision, .. } = &mut txn.target {
+            *revision = old.revision + 1;
+        }
+        let path = history::chain_path(&self.nb_dir(nb_id), new.id);
+        let meta = self.history_meta(nb_id, new.id);
+        let res = if meta.last_revision == Some(old.revision) {
+            Ok(())
+        } else {
+            let bytes = penroam_core::binary::encode_page(old);
+            history::append_keyframe(&path, meta, old.revision, &bytes)
+        }
+        .and_then(|()| history::append_delta(&path, meta, &txn));
+        if let Err(e) = res {
+            self.history_failed(nb_id, e);
+        }
+    }
+
+    /// Reports a history failure once. History is a convenience: it never
+    /// fails an edit.
+    fn history_failed(&mut self, nb_id: Uuid, e: std::io::Error) {
+        let w = format!("version history of notebook {nb_id} is not being updated: {e}");
+        if !self.recovery.warnings.contains(&w) {
+            self.recovery.warnings.push(w);
+        }
+    }
+
+    /// Starts a new keyframe from the page as it stands if its chain doesn't
+    /// end at this revision. Must run before the edit is applied.
+    fn history_before_edit(&mut self, nb_id: Uuid, page_id: Uuid) {
+        let Some(c) = self.pages.get(&(nb_id, page_id)) else {
+            return;
+        };
+        let revision = c.page.revision;
+        if self.history_meta(nb_id, page_id).last_revision == Some(revision) {
+            return;
+        }
+        let c = &self.pages[&(nb_id, page_id)];
+        let bytes = penroam_core::binary::encode_page(&c.page);
+        let path = history::chain_path(&self.nb_dir(nb_id), page_id);
+        let meta = self.history_meta(nb_id, page_id);
+        if let Err(e) = history::append_keyframe(&path, meta, revision, &bytes) {
+            self.history_failed(nb_id, e);
+        }
+    }
+
+    fn history_after_edit(&mut self, nb_id: Uuid, page_id: Uuid, txn: &Txn) {
+        let path = history::chain_path(&self.nb_dir(nb_id), page_id);
+        let meta = self.history_meta(nb_id, page_id);
+        if let Err(e) = history::append_delta(&path, meta, txn) {
+            self.history_failed(nb_id, e);
+        }
+    }
+
+    /// Adds a keyframe to a chain whose deltas have grown enough, reusing
+    /// the bytes of a snapshot that was just written.
+    fn history_maybe_keyframe(&mut self, nb_id: Uuid, page_id: Uuid, revision: u64, bytes: &[u8]) {
+        let meta = *self.history_meta(nb_id, page_id);
+        if meta.last_revision != Some(revision)
+            || meta.delta_bytes < history::keyframe_threshold(meta.keyframe_bytes)
+        {
+            return;
+        }
+        let path = history::chain_path(&self.nb_dir(nb_id), page_id);
+        let meta = self.history_meta(nb_id, page_id);
+        if let Err(e) = history::append_keyframe(&path, meta, revision, bytes) {
+            self.history_failed(nb_id, e);
+        }
     }
 
     fn remember_batch(&mut self, batch: Uuid, nb: Uuid, page: Uuid, out: ApplyOutcome) {
@@ -1448,6 +1663,8 @@ impl Library {
         c.journal_bytes = 0;
         c.snapshot_bytes = bytes.len() as u64;
         c.first_dirty_seq = None;
+        let revision = c.page.revision;
+        self.history_maybe_keyframe(nb_id, page_id, revision, &bytes);
         Ok(())
     }
 
@@ -1697,14 +1914,18 @@ impl Library {
                     .max()
                     .unwrap_or(0)
             });
-            if let Some(c) = self.pages.get(&key) {
-                base = base.max(c.page.revision);
-            } else if let Ok((old, _)) =
+            let old: Option<Page> = if let Some(c) = self.pages.get(&key) {
+                Some(c.page.clone())
+            } else {
                 self.read_snapshot(nb_id, page.id, &self.page_path(nb_id, page.id))
-            {
+                    .ok()
+                    .map(|(p, _)| p)
+            };
+            if let Some(old) = &old {
                 base = base.max(old.revision);
             }
             page.revision = base + 1;
+            self.history_install(nb_id, old.as_ref(), &page);
             self.pending.remove(&key);
             if !self.pages.contains_key(&key) {
                 self.evict_if_needed()?;

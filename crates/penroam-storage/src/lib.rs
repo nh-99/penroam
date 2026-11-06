@@ -7,10 +7,14 @@
 //!   snapshots are checkpoints written later. Start-up recovery repairs torn
 //!   writes, quarantines damage without deleting anything, and migrates the
 //!   legacy layout.
+//! * [`history`]: restorable page versions, kept as operations with sparse
+//!   keyframes.
 //! * [`journal`]: the append-only binary operation journal.
 //! * [`state`]: small JSON state files (format marker, device id,
 //!   checkpoint manifest, sync outbox counters).
 //! * [`archive`]: `.penroam` export and defensive import.
+//! * [`backup`]: full-library `.penroam-backup` files, restore preview and
+//!   no-overwrite restore.
 //! * [`fsutil`]: atomic/durable file primitives with crash-injection points
 //!   for tests (feature `fault-injection`).
 //! * [`error`]: errors and the stable codes the UI receives.
@@ -22,15 +26,23 @@
 #![warn(missing_docs)]
 
 pub mod archive;
+pub mod backup;
 pub mod error;
 pub mod fsutil;
+pub mod history;
 pub mod journal;
 mod legacy;
 pub mod library;
 pub mod state;
 
-pub use archive::{ImportReport, Manifest};
+pub use archive::{ArchiveSummary, ExportOptions, ImportOptions, ImportReport, Manifest};
+pub use backup::{
+    BackupManifest, BackupPreview, BackupProblem, BackupReader, BackupWriter, ConflictPolicy,
+    RestoreOptions, RestoreReport,
+};
 pub use error::{ErrorCode, Result, StorageError};
+pub use history::{HistoryPoint, HistoryRetention, HistoryStats, NotebookRestore};
 pub use library::{
-    sha256_hex, ApplyOutcome, Library, NotebookSummary, OutboxStatus, RecoveryReport,
+    sha256_hex, ApplyOutcome, Library, NewAsset, NewPage, NotebookSummary, OutboxStatus,
+    RecoveryReport,
 };

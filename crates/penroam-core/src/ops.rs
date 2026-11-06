@@ -13,7 +13,7 @@
 use crate::model::{Element, Page, Template, Timestamp};
 use crate::validate::{validate_element, ValidationError};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -223,6 +223,44 @@ pub(crate) fn apply_op_unchecked(
         }
         OpKind::SetTemplate { template: t } => *template = t.clone(),
     }
+}
+
+/// The operations that turn `from` into `to`: removals, then additions, then
+/// replacements, then the template. Empty when the pages have the same content.
+/// Used to restore an old version as an ordinary forward edit.
+pub fn page_diff(from: &Page, to: &Page) -> Vec<OpKind> {
+    let old: HashMap<Uuid, &Element> = from.elements.iter().map(|e| (e.id(), e)).collect();
+    let new: HashSet<Uuid> = to.elements.iter().map(Element::id).collect();
+    let ids: Vec<Uuid> = from
+        .elements
+        .iter()
+        .map(Element::id)
+        .filter(|id| !new.contains(id))
+        .collect();
+    let (mut added, mut replaced) = (Vec::new(), Vec::new());
+    for e in &to.elements {
+        match old.get(&e.id()) {
+            None => added.push(e.clone()),
+            Some(o) if *o != e => replaced.push(e.clone()),
+            Some(_) => {}
+        }
+    }
+    let mut ops = Vec::new();
+    if !ids.is_empty() {
+        ops.push(OpKind::RemoveElements { ids });
+    }
+    if !added.is_empty() {
+        ops.push(OpKind::AddElements { elements: added });
+    }
+    if !replaced.is_empty() {
+        ops.push(OpKind::ReplaceElements { elements: replaced });
+    }
+    if from.template != to.template {
+        ops.push(OpKind::SetTemplate {
+            template: to.template.clone(),
+        });
+    }
+    ops
 }
 
 /// Stable sort: equal z keeps insertion order.

@@ -14,6 +14,14 @@
 //! enforced while decompressing (not trusted from headers), compression ratios
 //! are bounded, every checksum and cross-reference is verified, and the result
 //! is staged and moved into the library atomically.
+//!
+//! [`ExportOptions`] select a subset of pages, include the trash (full
+//! backups, see [`crate::backup`]) or make the output reproducible. Trashed
+//! pages use the same `pages/<uuid>.prp` entries and a separate
+//! `trashedPages` manifest list, which older builds ignore, so these archives
+//! stay format 2. [`Library::verify_archive`] runs the import checks without
+//! changing the library. What an archive is for, compared with PDF export,
+//! backups and sync, is set out in `docs/formats/portability.md`.
 
 use crate::error::{Result, StorageError};
 use crate::library::{sha256_hex, Library};
@@ -76,6 +84,63 @@ pub struct Manifest {
     pub pages: Vec<ManifestPage>,
     /// Every asset entry with its checksum.
     pub assets: Vec<ManifestAsset>,
+    /// Trashed pages, when the archive was written with
+    /// [`ExportOptions::include_trash`]. Same shape as `pages`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trashed_pages: Vec<ManifestPage>,
+}
+
+/// What [`Library::export_archive_with`] writes.
+#[derive(Debug, Clone, Default)]
+pub struct ExportOptions {
+    /// Export only these live pages, in notebook order. `None` means all.
+    pub pages: Option<Vec<Uuid>>,
+    /// Also write trashed pages and keep the notebook's trash marker, so a
+    /// restore gives back exactly what the library held.
+    pub include_trash: bool,
+    /// Use the notebook's `updatedAt` as the export time. The same notebook
+    /// content then always produces the same bytes.
+    pub deterministic: bool,
+}
+
+/// How [`Library::import_archive_with`] treats an archive.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ImportOptions {
+    /// Keep trashed pages and the notebook's trash marker (restoring a
+    /// backup). Otherwise they are dropped with a warning.
+    pub keep_trash: bool,
+}
+
+/// What an archive holds, from [`Library::verify_archive`], which has
+/// already checked everything an import would.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ArchiveSummary {
+    /// Notebook id stored in the archive.
+    pub notebook_id: Uuid,
+    /// Notebook title.
+    pub title: String,
+    /// Live pages.
+    pub pages: u32,
+    /// Trashed pages.
+    pub trashed_pages: u32,
+    /// Attachments.
+    pub assets: u32,
+    /// Whether the notebook was in the trash when it was exported.
+    pub in_trash: bool,
+    /// Archive layout version.
+    pub format_version: u32,
+    /// Application that wrote the archive.
+    pub generator: String,
+    /// Export time (ms since the epoch; informational).
+    #[ts(type = "number")]
+    pub exported_at: Timestamp,
+    /// True when this library already has a notebook with this id; importing
+    /// then makes a copy.
+    pub already_in_library: bool,
+    /// Non-fatal findings.
+    pub warnings: Vec<String>,
 }
 
 /// One page entry of the archive.
@@ -127,6 +192,15 @@ fn zerr(e: impl std::fmt::Display) -> StorageError {
     StorageError::Archive(e.to_string())
 }
 
+/// A verified archive, written out in the staging area.
+struct Staged {
+    nb: Notebook,
+    stage: std::path::PathBuf,
+    renamed_copy: bool,
+    warnings: Vec<String>,
+    summary: ArchiveSummary,
+}
+
 impl Library {
     /// Writes a snapshot of a notebook (live pages only) as a `.penroam` archive.
     pub fn export_archive<W: Write + Seek>(
@@ -135,7 +209,39 @@ impl Library {
         out: W,
         generator: &str,
     ) -> Result<Manifest> {
+        self.export_archive_with(nb_id, out, generator, &ExportOptions::default())
+    }
+
+    /// [`Library::export_archive`] with a choice of pages, trash and
+    /// reproducible output. Errors with `NotFound` when `options.pages` names
+    /// something that is not a live page of the notebook.
+    pub fn export_archive_with<W: Write + Seek>(
+        &mut self,
+        nb_id: Uuid,
+        out: W,
+        generator: &str,
+        options: &ExportOptions,
+    ) -> Result<Manifest> {
         let nb = self.notebook(nb_id)?.clone();
+        let order: Vec<Uuid> = match &options.pages {
+            None => nb.page_order.clone(),
+            Some(wanted) => {
+                if let Some(p) = wanted.iter().find(|p| !nb.page_order.contains(p)) {
+                    return Err(StorageError::NotFound(format!("page {p}")));
+                }
+                let keep: HashSet<&Uuid> = wanted.iter().collect();
+                nb.page_order
+                    .iter()
+                    .copied()
+                    .filter(|p| keep.contains(p))
+                    .collect()
+            }
+        };
+        let trashed: Vec<Uuid> = if options.include_trash {
+            nb.trashed_pages.iter().map(|t| t.id).collect()
+        } else {
+            Vec::new()
+        };
         let mut zip = zip::ZipWriter::new(out);
         let stored = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored);
@@ -146,8 +252,13 @@ impl Library {
         zip.write_all(MIMETYPE.as_bytes())?;
 
         let mut pages = Vec::new();
+        let mut trashed_pages = Vec::new();
         let mut used_assets: Vec<String> = Vec::new();
-        for pid in nb.page_order.clone() {
+        for (pid, is_trashed) in order
+            .iter()
+            .map(|p| (*p, false))
+            .chain(trashed.iter().map(|p| (*p, true)))
+        {
             let bytes = self.with_page(nb_id, pid, |p| {
                 for a in p.asset_refs() {
                     if !used_assets.iter().any(|u| u == a) {
@@ -159,12 +270,17 @@ impl Library {
             let path = format!("pages/{pid}.prp");
             zip.start_file(&path, deflated).map_err(zerr)?;
             zip.write_all(&bytes)?;
-            pages.push(ManifestPage {
+            let entry = ManifestPage {
                 id: pid,
                 path,
                 sha256: sha256_hex(&bytes),
                 bytes: bytes.len() as u64,
-            });
+            };
+            if is_trashed {
+                trashed_pages.push(entry);
+            } else {
+                pages.push(entry);
+            }
         }
         let mut assets = Vec::new();
         for hash in &used_assets {
@@ -187,21 +303,29 @@ impl Library {
             });
         }
         let mut snapshot = nb.clone();
-        snapshot.trashed_pages.clear();
-        let live: HashSet<Uuid> = snapshot.page_order.iter().copied().collect();
-        snapshot.order_keys.retain(|p, _| live.contains(p));
-        snapshot.deleted_at = None;
+        snapshot.page_order = order;
+        if !options.include_trash {
+            snapshot.trashed_pages.clear();
+            snapshot.deleted_at = None;
+        }
+        let exported: HashSet<Uuid> = snapshot.all_page_ids().collect();
+        snapshot.order_keys.retain(|p, _| exported.contains(p));
         snapshot.assets.retain(|a| used_assets.contains(&a.sha256));
         let manifest = Manifest {
             format: FORMAT.into(),
             format_version: FORMAT_VERSION,
             schema_version: NOTEBOOK_SCHEMA_VERSION,
             generator: generator.into(),
-            exported_at: now_ms(),
+            exported_at: if options.deterministic {
+                nb.updated_at
+            } else {
+                now_ms()
+            },
             notebook: serde_json::to_value(&snapshot)
                 .map_err(|e| StorageError::Io(e.to_string()))?,
             pages,
             assets,
+            trashed_pages,
         };
         zip.start_file("manifest.json", deflated).map_err(zerr)?;
         zip.write_all(
@@ -220,6 +344,44 @@ impl Library {
     /// failed or interrupted import leaves nothing behind. If the notebook id
     /// already exists, the import becomes a copy with a new id.
     pub fn import_archive<R: Read + Seek>(&mut self, input: R) -> Result<ImportReport> {
+        self.import_archive_with(input, ImportOptions::default())
+    }
+
+    /// [`Library::import_archive`] with explicit options.
+    pub fn import_archive_with<R: Read + Seek>(
+        &mut self,
+        input: R,
+        options: ImportOptions,
+    ) -> Result<ImportReport> {
+        let Staged {
+            nb,
+            stage,
+            renamed_copy,
+            warnings,
+            ..
+        } = self.stage_archive(input, options)?;
+        let nb = self.insert_imported(nb, &stage).inspect_err(|_| {
+            let _ = fs::remove_dir_all(&stage);
+        })?;
+        Ok(ImportReport {
+            notebook: nb,
+            renamed_copy,
+            warnings,
+        })
+    }
+
+    /// Runs every import check on an archive and describes it. The library
+    /// is not changed. Use it for a restore preview or to confirm that a
+    /// finished export can be read back.
+    pub fn verify_archive<R: Read + Seek>(&self, input: R) -> Result<ArchiveSummary> {
+        let staged = self.stage_archive(input, ImportOptions { keep_trash: true })?;
+        let _ = fs::remove_dir_all(&staged.stage);
+        Ok(staged.summary)
+    }
+
+    /// Verifies an archive and writes it to a new staging folder, without
+    /// touching the library. The caller moves or deletes that folder.
+    fn stage_archive<R: Read + Seek>(&self, input: R, options: ImportOptions) -> Result<Staged> {
         let mut zip = zip::ZipArchive::new(input).map_err(zerr)?;
         if zip.len() > limits::MAX_ENTRIES {
             return Err(StorageError::TooLarge(format!(
@@ -290,11 +452,25 @@ impl Library {
         let mut nb = notebook_from_value(manifest.notebook.clone())
             .map_err(|e| StorageError::Archive(format!("notebook: {e}")))?;
         validate_notebook(&nb).map_err(|e| StorageError::Archive(format!("notebook: {}", e.0)))?;
-        if !nb.trashed_pages.is_empty() {
-            warnings.push("archive listed trashed pages; they were not imported".into());
-            nb.trashed_pages.clear();
+        let summary_pages = (
+            nb.page_order.len() as u32,
+            nb.trashed_pages.len() as u32,
+            nb.deleted_at.is_some(),
+        );
+        let carried: Vec<Uuid> = manifest.trashed_pages.iter().map(|p| p.id).collect();
+        let trash_listed: Vec<Uuid> = nb.trashed_pages.iter().map(|t| t.id).collect();
+        if options.keep_trash && carried == trash_listed {
+            // restored as it was
+        } else {
+            if !nb.trashed_pages.is_empty() {
+                warnings.push("archive listed trashed pages; they were not imported".into());
+                nb.trashed_pages.clear();
+            }
+            nb.deleted_at = None;
         }
-        nb.deleted_at = None;
+        let trash_kept: HashSet<Uuid> = nb.trashed_pages.iter().map(|t| t.id).collect();
+        let exported: HashSet<Uuid> = nb.all_page_ids().collect();
+        nb.order_keys.retain(|p, _| exported.contains(p));
         let listed: Vec<Uuid> = manifest.pages.iter().map(|p| p.id).collect();
         if listed != nb.page_order {
             return Err(StorageError::Archive(
@@ -305,6 +481,8 @@ impl Library {
         // ids of purged notebooks still in the journal count as taken
         let renamed_copy = self.contains_notebook(nb.id);
         let old_id = nb.id;
+        // a preview describes the file, not the copy this import would make
+        let original_title = nb.title.clone();
         if renamed_copy {
             nb.id = Uuid::new_v4();
             nb.title = format!("{} (imported)", nb.title)
@@ -356,7 +534,12 @@ impl Library {
                 }
             }
             // pages
-            for mp in &manifest.pages {
+            for mp in manifest.pages.iter().chain(
+                manifest
+                    .trashed_pages
+                    .iter()
+                    .filter(|p| trash_kept.contains(&p.id)),
+            ) {
                 let ext = if manifest.format_version >= 2 {
                     "prp"
                 } else {
@@ -412,13 +595,25 @@ impl Library {
                 "a notebook with id {old_id} already exists; imported as a copy"
             ));
         }
-        let nb = self.insert_imported(nb, &stage).inspect_err(|_| {
-            let _ = fs::remove_dir_all(&stage);
-        })?;
-        Ok(ImportReport {
-            notebook: nb,
+        let summary = ArchiveSummary {
+            notebook_id: old_id,
+            title: original_title,
+            pages: summary_pages.0,
+            trashed_pages: summary_pages.1,
+            assets: manifest.assets.len() as u32,
+            in_trash: summary_pages.2,
+            format_version: manifest.format_version,
+            generator: manifest.generator.clone(),
+            exported_at: manifest.exported_at,
+            already_in_library: renamed_copy,
+            warnings: warnings.clone(),
+        };
+        Ok(Staged {
+            nb,
+            stage,
             renamed_copy,
             warnings,
+            summary,
         })
     }
 }
