@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, type Ref } from "vue";
 import { InkEditor, type EditorState } from "../editor/engine";
 import { PALM_CONTACT_PX } from "../editor/input";
@@ -5,7 +6,7 @@ import { PdfCache, PdfPageRenderer } from "../editor/pdf";
 import { PageRenderer } from "../editor/renderer";
 import type { Page } from "../generated/Page";
 import { PageSession, errorMessage } from "../editor/session";
-import { api } from "../platform/ipc";
+import { api, hasHost } from "../platform/ipc";
 import { isIOS } from "../platform/device";
 import { detectNativeInk, type NativeInkSurface } from "../platform/nativeInk";
 import { registerFlusher } from "../platform/lifecycle";
@@ -14,6 +15,13 @@ import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
 import { useSync } from "../stores/sync";
 import { benchHooks } from "../bench/hooks";
+
+interface PinchEvent {
+  phase: "begin" | "update" | "end";
+  scale: number;
+  x: number;
+  y: number;
+}
 
 export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: Ref<boolean>) {
   const lib = useLibrary();
@@ -26,7 +34,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     canUndo: false,
     canRedo: false,
     selectionCount: 0,
-    selectionHasText: false,
+    selectionHasText: false, selectionTextFree: true, pageHasRows: false,
     editingText: false,
     saveState: "saved",
     saveError: null,
@@ -60,6 +68,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       highlighterColor: s.highlighterColor,
       highlighterWidth: s.highlighterWidth,
       textColor: s.textColor,
+      textFreePlacement: s.textFreePlacement,
       textSize: s.textSize,
       pressure: s.pressure,
     });
@@ -199,6 +208,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   }
 
   let offChanged: (() => void) | null = null;
+  let offPinch: (() => void) | null = null;
   let unregister: (() => void) | null = null;
   const onVisibility = () => {
     if (document.visibilityState === "hidden") void flush().catch(() => {});
@@ -223,6 +233,13 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       });
     }
     document.addEventListener("visibilitychange", onVisibility);
+    // Linux hands touchpad pinches over from GTK; see src-tauri/src/pinch.rs
+    if (hasHost()) {
+      void listen<PinchEvent>("penroam://pinch", ({ payload: p }) => editor.value?.platformPinch(p.phase, p.scale, p.x, p.y)).then((off) => {
+        if (editor.value === e) offPinch = off;
+        else off();
+      });
+    }
     await openPage(lib.currentPageId);
     if (lib.current) void fillMissingThumbs(lib.current.id);
     const n = await detectNativeInk();
@@ -235,6 +252,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   onBeforeUnmount(() => {
     unregister?.();
     offChanged?.();
+    offPinch?.();
     if (remoteTimer) clearTimeout(remoteTimer);
     document.removeEventListener("visibilitychange", onVisibility);
     const e = editor.value;

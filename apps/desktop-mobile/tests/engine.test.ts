@@ -14,7 +14,7 @@ let session: PageSession;
 const persisted: any[] = [];
 
 function ptr(type: string, x: number, y: number, o: Partial<PointerEventInit> & { pointerType?: string } = {}) {
-  const e = new PointerEvent(type, { clientX: x, clientY: y, pointerId: o.pointerId ?? 1, pointerType: o.pointerType ?? "pen", pressure: o.pressure ?? 0.6, button: 0, buttons: type === "pointerup" ? 0 : 1, width: o.width ?? 1, height: o.height ?? 1, bubbles: true, cancelable: true });
+  const e = new PointerEvent(type, { altKey: o.altKey ?? false, clientX: x, clientY: y, pointerId: o.pointerId ?? 1, pointerType: o.pointerType ?? "pen", pressure: o.pressure ?? 0.6, button: 0, buttons: type === "pointerup" ? 0 : 1, width: o.width ?? 1, height: o.height ?? 1, bubbles: true, cancelable: true });
   vp.dispatchEvent(e);
   return e;
 }
@@ -57,6 +57,7 @@ describe("native pen surface and fingers", () => {
   const touch = { pointerType: "touch", pointerId: 11, pressure: 0.5 };
   const touch2 = { pointerType: "touch", pointerId: 12, pressure: 0.5 };
   const inkCount = () => session.page.elements.filter((el) => el.type === "ink").length;
+  const afterPenGrace = () => ((ed as any).penLiftedAt -= 1000);
 
   async function mountPreview() {
     let handlers: NativeHandlers | null = null;
@@ -87,6 +88,7 @@ describe("native pen surface and fingers", () => {
     native.penState(true);
     native.penState(false);
     expect(ed.penSeen).toBe(true);
+    afterPenGrace();
 
     ptr("pointerdown", 100, 100, touch);
     ptr("pointermove", 130, 150, touch);
@@ -106,6 +108,7 @@ describe("native pen surface and fingers", () => {
     const native = await mountPreview();
     native.penState(true);
     native.penState(false);
+    afterPenGrace();
     ptr("pointerdown", 100, 100, touch); // the palm lands first
     native.penState(true);
     ptr("pointermove", 180, 180, touch);
@@ -115,6 +118,7 @@ describe("native pen surface and fingers", () => {
     native.penState(false);
     ptr("pointerup", 180, 180, touch);
     ptr("pointerup", 340, 340, touch2);
+    afterPenGrace();
     ptr("pointerdown", 100, 100, touch);
     ptr("pointermove", 110, 100, touch);
     expect(ed.transform.ox).toBe(10);
@@ -131,6 +135,71 @@ describe("native pen surface and fingers", () => {
     expect(ed.transform.ox).toBe(10);
   });
 
+  it("turns a one-finger stroke into a pinch when a second finger lands", () => {
+    ed.setSettings({ penOnly: "off" });
+    ptr("pointerdown", 100, 100, touch);
+    move(102, 100, touch);
+    ptr("pointerdown", 200, 100, touch2);
+    ptr("pointermove", 300, 100, touch2);
+    expect(ed.transform.scale).toBeCloseTo(198 / 98); // fingers 98 px apart, now 198
+    ptr("pointerup", 102, 100, touch);
+    ptr("pointerup", 300, 100, touch2);
+    vi.advanceTimersByTime(1000);
+    expect(inkCount()).toBe(0);
+  });
+
+  it("keeps a finished-looking finger stroke when a second finger lands late", () => {
+    ed.setSettings({ penOnly: "off" });
+    ptr("pointerdown", 100, 100, touch);
+    for (let x = 110; x <= 170; x += 10) move(x, 100, touch);
+    (ed as any).active.t0 -= 1000;
+    ptr("pointerdown", 300, 100, touch2);
+    expect(inkCount()).toBe(1);
+    expect((ed as any).active).toBeNull();
+  });
+
+  it("drops a finger stroke when the Pencil touches down", async () => {
+    ed.setSettings({ penOnly: "off" });
+    const native = await mountPreview();
+    ptr("pointerdown", 100, 100, touch); // the palm lands first
+    for (let x = 110; x <= 170; x += 10) move(x, 100, touch);
+    native.penState(true);
+    move(180, 100, touch);
+    native.penState(false);
+    ptr("pointerup", 180, 100, touch);
+    expect(inkCount()).toBe(0);
+  });
+
+  it("ignores a contact that lands right after the Pencil lifts", async () => {
+    const native = await mountPreview();
+    native.penState(true);
+    native.penState(false);
+    ptr("pointerdown", 100, 100, touch);
+    ptr("pointermove", 130, 100, touch);
+    ptr("pointerup", 130, 100, touch);
+    expect(ed.transform.ox).toBe(0);
+    afterPenGrace();
+    ptr("pointerdown", 100, 100, touch);
+    ptr("pointermove", 130, 100, touch);
+    expect(ed.transform.ox).toBe(30);
+  });
+
+  it("commits a Pencil stroke once when the web view also receives it", async () => {
+    const native = await mountPreview();
+    await vi.waitFor(() => expect(ed.nativeIsVisible).toBe(true));
+    drawLine(100, 100, 200, 100, { pointerType: "pen" });
+    native.strokeFinalized({ id: "s1", z: 1, tool: "pen", color: "#111111", opacity: 1, width: 2, pressure: true, source: "stylus", input: {}, points: [{ x: 100, y: 100, pressure: 0.5, tiltX: 0, tiltY: 0, timeUs: 0 }] } as any);
+    expect(inkCount()).toBe(1);
+  });
+
+  it("still draws from pen pointer events while the native surface is hidden", async () => {
+    await mountPreview();
+    await vi.waitFor(() => expect(ed.nativeIsVisible).toBe(true));
+    ed.setOverlayBlocked(true);
+    drawLine(100, 100, 200, 100, { pointerType: "pen" });
+    expect(inkCount()).toBe(1);
+  });
+
   it("counts a finished native stroke as pen use", async () => {
     const native = await mountPreview();
     native.strokeFinalized({ id: "s1", z: 1, tool: "pen", color: "#111111", opacity: 1, width: 2, pressure: true, source: "stylus", input: {}, points: [{ x: 1, y: 1, pressure: 0.5, tiltX: 0, tiltY: 0, timeUs: 0 }] } as any);
@@ -139,6 +208,28 @@ describe("native pen surface and fingers", () => {
 });
 
 describe("editor engine", () => {
+  it("a platform pinch zooms about the fingers, relative to where it began", () => {
+    ed.setTransform({ scale: 1, ox: 0, oy: 0 });
+    ed.platformPinch("begin", 1, 100, 100);
+    ed.platformPinch("update", 1.5, 100, 100);
+    ed.platformPinch("update", 2, 100, 100);
+    expect(ed.transform.scale).toBe(2);
+    expect(ed.transform.ox).toBe(-100);
+    expect(ed.transform.oy).toBe(-100);
+    ed.platformPinch("end", 2, 100, 100);
+    ed.platformPinch("update", 3, 100, 100); // a stray update after the end
+    expect(ed.transform.scale).toBe(2);
+  });
+
+  it("a platform pinch doesn't disturb a stroke in progress", () => {
+    ptr("pointerdown", 100, 100);
+    const before = ed.transform.scale;
+    ed.platformPinch("begin", 1, 100, 100);
+    ed.platformPinch("update", 2, 100, 100);
+    expect(ed.transform.scale).toBe(before);
+    ptr("pointerup", 100, 100);
+  });
+
   it("outlines search matches without touching the page, pans to them and clears on pen down", () => {
     ed.showMatches([{ x: 100, y: 700, w: 50, h: 20 }]);
     const boxes = vp.querySelectorAll<HTMLElement>(".penroam-match");
@@ -257,6 +348,245 @@ describe("editor engine", () => {
     ptr("pointerup", 300, 300);
     ed.endTextEdit();
     expect(session.page.elements).toHaveLength(0);
+  });
+
+  describe("text on paper with rows", () => {
+    const type = (x: number, y: number, text: string) => {
+      ed.setTool("text");
+      ptr("pointerdown", x, y);
+      ptr("pointerup", x, y);
+      const ta = vp.querySelector("textarea")!;
+      ta.value = text;
+      ta.dispatchEvent(new Event("input"));
+      ed.endTextEdit();
+      return session.page.elements[session.page.elements.length - 1] as any;
+    };
+    const ruled = () => ed.setTemplate({ kind: "ruled", spacing: 24 });
+
+    it("locks new text to the rule below the tap", () => {
+      ruled();
+      const t = type(100, 200, "hello\nworld");
+      expect(t.rowPitch).toBe(24);
+      expect(t.y).toBe(192); // baselines on the rules at 216 and 240
+      expect(t.height).toBe(48);
+    });
+
+    it("locks to dotted paper's rows, and not to grid or blank paper", () => {
+      ed.setTemplate({ kind: "dotted", spacing: 20 });
+      const dotted = type(100, 205, "dots");
+      expect(dotted).toMatchObject({ rowPitch: 20, y: 200, height: 20 });
+      ed.setTemplate({ kind: "grid", spacing: 18 });
+      expect(type(100, 300, "grid").rowPitch).toBeUndefined();
+      ed.setTemplate({ kind: "blank", spacing: 24 });
+      expect(type(100, 400, "blank").rowPitch).toBeUndefined();
+    });
+
+    it("keeps text below the header of ruled paper", () => {
+      ruled();
+      expect(type(100, 5, "top").y).toBe(48); // the first rule is at 72
+    });
+
+    it("places text anywhere with free placement on", () => {
+      ruled();
+      ed.setToolSettings({ textFreePlacement: true });
+      const t = type(100, 203, "free");
+      expect(t.rowPitch).toBeUndefined();
+      expect(t.y).toBe(193);
+      expect(t.height).toBe(20);
+    });
+
+    it("moves locked text by whole rows and keeps free text free", () => {
+      ruled();
+      const t = type(100, 200, "locked");
+      ed.setTool("select");
+      ptr("pointerdown", t.x + 5, t.y + 5, { pointerType: "mouse" });
+      move(t.x + 45, t.y + 35, { pointerType: "mouse" });
+      ptr("pointerup", t.x + 45, t.y + 35, { pointerType: "mouse" });
+      const moved = session.page.elements[0] as any;
+      expect(moved.x).toBeCloseTo(t.x + 40, 6);
+      expect(moved.y).toBe(t.y + 24);
+    });
+
+    it("a selection's toggle frees and relocks a block, and undo restores it", () => {
+      ruled();
+      const t = type(100, 200, "hello");
+      ed.setTool("select");
+      ptr("pointerdown", t.x + 5, t.y + 5, { pointerType: "mouse" });
+      ptr("pointerup", t.x + 5, t.y + 5, { pointerType: "mouse" });
+      ed.setSelectionFreePlacement(true);
+      expect(session.page.elements[0]).toMatchObject({ y: t.y, height: 20 });
+      expect((session.page.elements[0] as any).rowPitch).toBeUndefined();
+      ed.setSelectionFreePlacement(false);
+      expect(session.page.elements[0]).toMatchObject({ y: t.y, height: 24, rowPitch: 24 });
+      ed.undo();
+      expect((session.page.elements[0] as any).rowPitch).toBeUndefined();
+    });
+
+    it("an unrelated settings change leaves the block being edited alone", () => {
+      ruled();
+      ed.setToolSettings({ textFreePlacement: true });
+      const t = type(100, 203, "free");
+      ptr("pointerdown", t.x + 5, t.y + 5);
+      ptr("pointerup", t.x + 5, t.y + 5);
+      ed.setToolSettings({ textFreePlacement: true, textColor: "#1d4ed8" });
+      ed.endTextEdit();
+      const after = session.page.elements[0] as any;
+      expect(after.rowPitch).toBeUndefined();
+      expect(after.y).toBe(193);
+    });
+
+    it("flipping the setting while typing moves the block being edited", () => {
+      ruled();
+      ed.setToolSettings({ textFreePlacement: true });
+      const t = type(100, 203, "free");
+      ptr("pointerdown", t.x + 5, t.y + 5);
+      ptr("pointerup", t.x + 5, t.y + 5);
+      ed.setToolSettings({ textFreePlacement: false });
+      ed.endTextEdit();
+      expect(session.page.elements[0]).toMatchObject({ rowPitch: 24, y: 192, height: 24 });
+    });
+
+    it("locked text follows a change of paper, in one undoable step", () => {
+      ruled();
+      const t = type(100, 200, "hello");
+      ed.setTemplate({ kind: "dotted", spacing: 20 });
+      expect(session.page.elements[0]).toMatchObject({ rowPitch: 20, y: 200, height: 20 });
+      ed.undo();
+      expect(session.page.template.kind).toBe("ruled");
+      expect(session.page.elements[0]).toMatchObject({ rowPitch: 24, y: t.y, height: 24 });
+    });
+
+    const drag = (x0: number, y0: number, x1: number, y1: number, opts: any = {}) => {
+      ed.setTool("select");
+      ptr("pointerdown", x0, y0, { pointerType: "mouse", ...opts });
+      move((x0 + x1) / 2, (y0 + y1) / 2, { pointerType: "mouse", ...opts });
+      move(x1, y1, { pointerType: "mouse", ...opts });
+      ptr("pointerup", x1, y1, { pointerType: "mouse", ...opts });
+    };
+    const last = () => session.page.elements[session.page.elements.length - 1] as any;
+
+    it("a dragged block snaps to another block's left edge", () => {
+      ruled();
+      type(100, 200, "above");
+      const t = type(300, 300, "below");
+      drag(t.x + 5, t.y + 5, t.x + 5 - 195, t.y + 5);
+      expect(last().x).toBe(100);
+      expect(last().y).toBe(t.y);
+    });
+
+    it("free text also snaps to tops, and Alt turns snapping off", () => {
+      ed.setToolSettings({ textFreePlacement: true });
+      type(100, 200, "left");
+      const t = type(400, 260, "right");
+      drag(t.x + 5, t.y + 5, t.x + 5, t.y + 5 - 57);
+      expect(last().y).toBe(190);
+      const u = last();
+      drag(u.x + 5, u.y + 5, u.x + 5 - 297, u.y + 5, { altKey: true });
+      expect(last().x).toBe(u.x - 297);
+    });
+
+    it("a new block lands under the left edge of the text beside it", () => {
+      ruled();
+      type(100, 200, "first");
+      expect(type(104, 300, "second").x).toBe(100);
+      expect(type(140, 400, "third").x).toBe(140);
+    });
+
+    it("row-locked text stays on its row while it aligns", () => {
+      ruled();
+      type(100, 200, "above");
+      const t = type(300, 300, "below");
+      drag(t.x + 5, t.y + 5, t.x + 5 - 198, t.y + 5 + 3);
+      expect(last().x).toBe(100);
+      expect(last().y % 24).toBe(0);
+    });
+
+    const press = (target: Element, x: number, y: number) =>
+      target.dispatchEvent(new PointerEvent("pointerdown", { clientX: x, clientY: y, pointerId: 1, pointerType: "mouse", button: 0, buttons: 1, bubbles: true, cancelable: true }));
+
+    it("the Text tool edits a block on a tap and moves it on a drag", () => {
+      ruled();
+      const t = type(300, 300, "hello");
+      ptr("pointerdown", t.x + 5, t.y + 5, { pointerType: "mouse" });
+      ptr("pointerup", t.x + 5, t.y + 5, { pointerType: "mouse" });
+      const ta = vp.querySelector("textarea")!;
+      expect(ta.classList.contains("hidden")).toBe(false);
+      ed.endTextEdit();
+      ptr("pointerdown", t.x + 5, t.y + 5, { pointerType: "mouse" });
+      move(t.x + 45, t.y + 5, { pointerType: "mouse" });
+      move(t.x + 85, t.y + 5, { pointerType: "mouse" });
+      ptr("pointerup", t.x + 85, t.y + 5, { pointerType: "mouse" });
+      expect(ta.classList.contains("hidden")).toBe(true);
+      expect(last().x).toBe(t.x + 80);
+    });
+
+    it("a box being edited moves when its frame is dragged", () => {
+      for (const tool of ["select", "text"] as const) {
+        ed.setTool(tool);
+        ruled();
+        const t = type(300, 300, `hello ${tool}`);
+        ed.setTool(tool);
+        ptr("pointerdown", t.x + 5, t.y + 5, { pointerType: "mouse" });
+        ptr("pointerup", t.x + 5, t.y + 5, { pointerType: "mouse" });
+        if (tool === "select") ed.editSelectedText();
+        const frame = vp.querySelector(".penroam-editframe")!;
+        expect(frame.classList.contains("hidden")).toBe(false);
+        press(frame, t.x - 4, t.y + 5);
+        move(t.x + 36, t.y + 5, { pointerType: "mouse" });
+        move(t.x + 76, t.y + 5, { pointerType: "mouse" });
+        ptr("pointerup", t.x + 76, t.y + 5, { pointerType: "mouse" });
+        expect(frame.classList.contains("hidden")).toBe(true);
+        expect(last().x).toBe(t.x + 80);
+        session.page.elements.length = 0;
+      }
+    });
+
+    it("dragging inside a box being edited leaves it for selecting text", () => {
+      ruled();
+      const t = type(300, 300, "hello");
+      ptr("pointerdown", t.x + 5, t.y + 5, { pointerType: "mouse" });
+      ptr("pointerup", t.x + 5, t.y + 5, { pointerType: "mouse" });
+      press(vp.querySelector("textarea")!, t.x + 5, t.y + 5);
+      expect(vp.querySelector("textarea")!.classList.contains("hidden")).toBe(false);
+      expect(last().x).toBe(t.x);
+    });
+
+    it("text running off the page keeps a resize handle on the page", () => {
+      ruled();
+      const t = type(100, 200, Array.from({ length: 120 }, (_, i) => `line ${i}`).join("\n"));
+      expect(t.y + t.height).toBeGreaterThan(792);
+      drag(t.x + 5, t.y + 5, t.x + 5, t.y + 5); // select
+      ed.zoomBy(0.5); // the page bottom in view
+      const s = ed.transform.scale;
+      const screen = (x: number, y: number): [number, number] => [x * s + ed.transform.ox, y * s + ed.transform.oy];
+      const handle = vp.querySelector<HTMLElement>(".penroam-handle")!;
+      expect(handle.style.top).toBe("792px");
+      const [hx, hy] = screen(t.x + t.width, 792);
+      ptr("pointerdown", hx, hy, { pointerType: "mouse" });
+      move(hx + 100, hy, { pointerType: "mouse" });
+      ptr("pointerup", hx + 100, hy, { pointerType: "mouse" });
+      expect(last().width).toBeCloseTo(t.width + 100 / s, 6);
+    });
+
+    it("a box can't be dragged wider than the page", () => {
+      ruled();
+      const t = type(100, 200, "short");
+      drag(t.x + 5, t.y + 5, t.x + 5, t.y + 5);
+      ed.zoomBy(0.5);
+      const s = ed.transform.scale;
+      const hx = (t.x + t.width) * s + ed.transform.ox;
+      const hy = (t.y + t.height) * s + ed.transform.oy;
+      ptr("pointerdown", hx, hy, { pointerType: "mouse" });
+      move(hx + 2000, hy, { pointerType: "mouse" });
+      ptr("pointerup", hx + 2000, hy, { pointerType: "mouse" });
+      expect(last().width).toBe(612 - t.x);
+    });
+
+    it("sizes a block from its rendered Markdown, not its source", () => {
+      ruled();
+      expect(type(100, 200, "# Title").height).toBe(48); // 28 pt takes two rows
+      expect(type(100, 400, "| a |\n|---|\n| b |").height).toBe(48); // the delimiter row is not a line
+    });
   });
 
   it("select tool moves a text block and keeps it fixed relative to ink across zoom", () => {

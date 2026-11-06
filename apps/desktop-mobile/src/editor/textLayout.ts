@@ -1,6 +1,8 @@
-// TypeScript port of crates/penroam-core/src/text.rs. Both read the same
-// metrics file, so on-screen wrapping equals PDF export wrapping on every OS.
-// Verified against tests/fixtures/text-layout-golden.json.
+// TypeScript port of crates/penroam-core/src/text.rs: font metrics and plain
+// wrapping. Both read the same metrics file, so on-screen wrapping equals PDF
+// export wrapping on every OS. Rendered text goes through ./markdown.ts; plain
+// wrapping sizes the source view while a block is edited. Verified against
+// tests/fixtures/text-layout-golden.json.
 import metricsJson from "../../../../crates/penroam-core/data/text-metrics.json";
 
 interface Metrics {
@@ -11,16 +13,45 @@ interface Metrics {
   firstBaseline: number;
   fallbackWidth: number;
   widths: Record<string, number>;
+  faces: Record<Exclude<Face, "regular">, Record<string, number>>;
 }
 
-const M = metricsJson as Metrics;
-const byCode = new Map<number, number>(Object.entries(M.widths).map(([k, v]) => [Number(k), v]));
+/** A bundled typeface; each has a PDF standard font with the same widths. */
+export type Face = "regular" | "bold" | "italic" | "boldItalic" | "mono";
 
+const M = metricsJson as Metrics;
+const codes = (widths: Record<string, number>) => new Map<number, number>(Object.entries(widths).map(([k, v]) => [Number(k), v]));
+const byCode = codes(M.widths);
+const byFace: Record<Face, Map<number, number>> = {
+  regular: byCode,
+  bold: codes(M.faces.bold),
+  italic: codes(M.faces.italic),
+  boldItalic: codes(M.faces.boldItalic),
+  mono: codes(M.faces.mono),
+};
+
+export const metrics = { unitsPerEm: M.unitsPerEm, ascent: M.ascent, descent: M.descent };
 export const TEXT_FONT_FAMILY = "PenroamSans";
+export const MONO_FONT_FAMILY = "PenroamMono";
+/** Size of code relative to the text around it. */
+export const MONO_SCALE = 0.9;
+
+/** Canvas font string for a face. */
+export function canvasFont(face: Face, size: number): string {
+  if (face === "mono") return `${size}px ${MONO_FONT_FAMILY}`;
+  const style = face === "italic" || face === "boldItalic" ? "italic " : "";
+  const weight = face === "bold" || face === "boldItalic" ? "bold " : "";
+  return `${style}${weight}${size}px ${TEXT_FONT_FAMILY}`;
+}
 
 export function advance(ch: string): number {
   if (ch === "\t") return advance(" ") * 4;
   return byCode.get(ch.codePointAt(0)!) ?? M.fallbackWidth;
+}
+
+export function advanceIn(face: Face, ch: string): number {
+  if (ch === "\t") return advanceIn(face, " ") * 4;
+  return byFace[face].get(ch.codePointAt(0)!) ?? M.fallbackWidth;
 }
 
 export const lineHeight = (fontSize: number) => (fontSize * M.lineHeight) / M.unitsPerEm;
@@ -98,6 +129,7 @@ function wrap(chars: string[], start: number, end: number, boxW: number, scale: 
   push(lineStart, end);
 }
 
-export function contentHeight(text: string, fontSize: number, boxWidth: number): number {
-  return Math.max(1, layout(text, fontSize, boxWidth).length) * lineHeight(fontSize);
+/** Height of `text` as plain source, one line per wrapped line of `lineH` points. */
+export function contentHeight(text: string, fontSize: number, boxWidth: number, lineH = lineHeight(fontSize)): number {
+  return Math.max(1, layout(text, fontSize, boxWidth).length) * lineH;
 }

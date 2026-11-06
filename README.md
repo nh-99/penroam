@@ -14,8 +14,11 @@ account, a server or a subscription.
 - **Write naturally.** A pressure-sensitive pen, a highlighter and a stroke eraser (including
   your stylus's eraser button). On BOOX e-ink tablets, ink is drawn by the device's own
   low-latency pen layer.
-- **Ink and typing together.** Drop a text box anywhere on the page, then move it, resize it,
-  recolour it or change its size alongside your handwriting.
+- **Ink and typing together.** Type on the rows of ruled or dotted paper, or place text
+  anywhere on the page, then move it, resize it, recolour it or change its size alongside your
+  handwriting.
+- **Markdown and LaTeX.** Text boxes understand Markdown, including tables and task lists, and
+  LaTeX formulas. They look the same on screen, in exported PDFs and on paper.
 - **Annotate PDFs.** Import a PDF as pages, then write and type on it. Export an annotated PDF
   in which your ink stays sharp vector lines. The original PDF is kept unchanged.
 - **Paper that suits the note.** Letter or A4 pages, blank, ruled, grid or dotted.
@@ -82,11 +85,45 @@ to download the notebook.
 | Highlighter | `M` | Translucent marker |
 | Eraser | `E` | Removes whole strokes |
 | Select | `V` | Drag a box around ink or text to move or delete it |
-| Text | `T` | Click anywhere to type. `Esc` finishes the text box |
+| Text | `T` | Click where you want to type, click a text box to edit it, or drag one to move it. `Esc` finishes the text box |
 | Pan | `H` | Move around the page |
 
-Undo and redo with `Ctrl+Z` / `Ctrl+Shift+Z`. Zoom with `Ctrl` and the mouse wheel, a pinch,
-or `Ctrl+=` / `Ctrl+-`. `Ctrl+0` fits the page to the window width.
+**Typing on rows.** On ruled and dotted paper, text sits on the paper's rows: each line lands
+on a row, large text takes more than one row, and dragging a text box moves it a row at a time.
+The rows button in the toolbar turns this off, so new text can go anywhere on the page. With a
+text box selected, the same button frees that box or puts it on the rows. Text boxes written
+freely, including those from earlier versions of Penroam, stay where they are until you do.
+Blank paper, grid paper and PDF pages have no rows, so text goes anywhere on them.
+
+**Lining up text.** When you drag a text box or click to start a new one close to another text
+box, it snaps into line with it and a pink guide shows what it lined up with. Dragged boxes
+match left edges, centres and right edges, and free text also matches tops and baselines. Hold
+`Alt` to place text without snapping.
+
+**Formatting text.** Write Markdown in a text box. You see the source while you type and the
+formatted result when you finish the box. Press `Enter` for a new line and leave a blank line
+for a gap. While you edit, dragging inside the box selects text; drag the area just around it
+to move the box instead.
+
+| Write | To get |
+|---|---|
+| `# Title` to `###### Title` | Headings |
+| `**bold**`, `*italic*`, `~~struck~~`, `` `code` `` | Inline styles |
+| `- item`, `1. item`, `- [ ] task`, `- [x] done` | Lists and task lists |
+| `> quote` | A quotation |
+| ` ``` ` on the lines above and below | A block of code |
+| `\| a \| b \|`, then `\|---\|---\|`, then rows | A table |
+| `---` | A horizontal line |
+| `$E = mc^2$` | An inline formula |
+| `$$\sum_i x_i$$` | A formula on its own line |
+
+Formulas use LaTeX with the AMS math environments. One Penroam can't draw, such as a typo in a
+command, is shown as you wrote it. A dollar sign followed by a digit or a space stays a dollar
+sign, and `\$` always does. Links are underlined but don't open, and images show their
+description, because Penroam doesn't fetch anything from the web for a note.
+
+Undo and redo with `Ctrl+Z` / `Ctrl+Shift+Z`. Zoom with `Ctrl` and the mouse wheel, a pinch on a
+touchpad or touchscreen, or `Ctrl+=` / `Ctrl+-`. `Ctrl+0` fits the page to the window width.
 
 On a touchscreen, **Settings** decides what your fingers do:
 

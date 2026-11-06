@@ -6,11 +6,12 @@
 // strokes are therefore drawn natively; Vue/Rust keep document semantics.
 //
 //  * A UIGestureRecognizer on the web view with allowedTouchTypes = [.pencil]
-//    claims Pencil touches inside the editor rect (cancelsTouchesInView), so
-//    the web canvas never sees them twice; fingers still reach the web view
-//    (pan/zoom/UI). Palm contacts are fingers, so they never draw. Since the
-//    web view never sees the Pencil, pen-down/up are sent as "pen" events: the
-//    editor needs them to give fingers to pan/zoom and to ignore palms.
+//    captures Pencil touches inside the editor rect; fingers reach the web view
+//    (pan/zoom/UI). cancelsTouchesInView does not stop WKWebView's own touch
+//    handling, so the Pencil also arrives there as pen pointer events, and the
+//    editor ignores those while this surface is visible. Pen-down/up are sent
+//    as "pen" events: the editor needs them to give fingers to pan/zoom and to
+//    ignore palms.
 //  * Coalesced touches are recorded; predicted touches are drawn only on the
 //    preview; estimated force updates patch recorded points.
 //  * On pen-up the stroke is sent to the web editor ("stroke" event); it stays

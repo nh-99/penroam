@@ -485,8 +485,8 @@ pub enum TextAlign {
     Right,
 }
 
-/// Plain multiline text placed on the page. Layout is deterministic: see
-/// [`crate::text`]. `height` is kept in sync with the laid-out content by the
+/// Multiline Markdown text placed on the page. Layout is deterministic: see
+/// [`crate::markdown`]. `height` is kept in sync with the laid-out content by the
 /// editor; renderers grow it if needed and never clip text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -505,7 +505,7 @@ pub struct TextBlock {
     pub width: f64,
     /// Box height in points (see the type docs).
     pub height: f64,
-    /// Plain text; `\n` starts a new line.
+    /// Markdown source (see [`crate::markdown`]); `\n` starts a new line.
     pub text: String,
     /// Font size in points.
     pub font_size: f64,
@@ -514,6 +514,12 @@ pub struct TextBlock {
     /// Line alignment.
     #[serde(default = "default_align")]
     pub align: TextAlign,
+    /// Row pitch in points when the block is locked to the paper's rows: every
+    /// line then takes a whole number of rows and its baseline sits on a row.
+    /// Absent for freely placed text, which uses the natural line height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub row_pitch: Option<f64>,
     /// Unknown fields, preserved verbatim.
     #[serde(flatten)]
     #[ts(skip)]

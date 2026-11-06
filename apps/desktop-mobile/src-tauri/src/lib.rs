@@ -24,6 +24,8 @@ const _: () = assert!(
 mod bench;
 mod commands;
 mod models;
+#[cfg(target_os = "linux")]
+mod pinch;
 mod search;
 mod sync;
 
@@ -86,6 +88,10 @@ pub fn run() {
                 search: search::SearchSlot::default(),
                 models: models::ModelsSlot::default(),
             });
+            #[cfg(target_os = "linux")]
+            if let Some(window) = app.get_webview_window("main") {
+                pinch::install(&window)?;
+            }
             search::start(app.handle());
             models::start(app.handle());
             sync::resume_on_launch(app.handle());
@@ -130,6 +136,7 @@ pub fn run() {
             commands::export_notebook,
             commands::import_notebook,
             commands::export_annotated_pdf,
+            commands::notebook_math,
             commands::print_notebook,
             commands::import_stroke_document,
             commands::exit_app,

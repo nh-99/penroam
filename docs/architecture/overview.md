@@ -9,7 +9,7 @@ Tauri was chosen over Flutter after an evaluation of both on the target devices.
 ```text
 apps/desktop-mobile/            Tauri 2 app
   src/                          Vue 3 + TS + Vite + Tailwind 4 + @lucide/vue
-    editor/                     framework-free editor: engine, renderer, session, geometry, text layout, PDF.js
+    editor/                     framework-free editor: engine, renderer, session, geometry, text and Markdown layout, math, PDF.js
     components/ views/          UI (library, editor, toolbar, sidebar, dialogs)
     composables/                editor host (page loading, flushing, native surface wiring)
     stores/                     Pinia: library + UI state + device preferences (UI state only)
@@ -18,7 +18,7 @@ apps/desktop-mobile/            Tauri 2 app
     bench/                      Workload D benchmark harness (docs/benchmarks/protocol.md)
   src-tauri/                    Rust shell: typed commands, structured errors, flush-on-close
     gen/android/                generated Android project (+ scripts/patch-android.py)
-crates/penroam-core             schema, validation, page ops, operation schema + merge model (replica), binary page codec, geometry, text layout, migrations
+crates/penroam-core             schema, validation, page ops, operation schema + merge model (replica), binary page codec, geometry, text and Markdown layout, migrations
 crates/penroam-storage          live library: device-wide operation journal, checkpoints, trash, recovery, outbox counters, .penroam archive
 crates/penroam-pdf              PDF inspection (import) and annotated vector export (lopdf)
 crates/penroam-sync-protocol    public sync wire contract: versions, ids, limits, envelope header, canonical bytes, framing, DTOs, errors
@@ -28,7 +28,7 @@ crates/penroam-search           local search: handwriting regions, recognizers (
 plugins/tauri-plugin-native-ink NativeInkSurface: Rust bridge, android/ (Kotlin), ios/ (Swift/UIKit)
 plugins/tauri-plugin-native-print system print dialogs: GTK (Rust), android/ (Kotlin), ios/ (Swift/UIKit)
 android/  ios/                  native ink modules used by the plugin: BooxInkView (Kotlin, Gradle root for its tests), InkKit (Swift)
-tests/fixtures/                 shared fixtures (strokes, geometry and text-layout goldens, scenes, PDF, .prp golden, legacy libraries)
+tests/fixtures/                 shared fixtures (strokes, geometry, text and Markdown layout goldens, scenes, PDF, .prp golden, legacy libraries)
 fuzz/                           cargo-fuzz targets (page decoder, journal open, sync batch frame)
 tools/linux-e2e/                XTest input driver + session runner for real-app E2E on Linux
 tools/  docs/                   dev tools, documentation (benchmarks/ = local, git-ignored benchmark output)
@@ -156,10 +156,25 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
 * **Hand-off**: on pen-up the stroke is committed to the session, which paints it into the
   page cache synchronously; the preview is cleared in the same task, so both changes reach the
   same frame (no flash, no double). Native surfaces use an explicit acknowledgement (§6).
-* Text blocks are rendered from a deterministic layout (`textLayout.ts` = `penroam-core::text`,
-  same metrics file, golden-tested) with the bundled Liberation Sans (metric-compatible with
-  Helvetica, which the PDF export uses). Editing uses a textarea overlay positioned in the same
-  page coordinate system; the canvas copy is hidden while editing.
+* The page itself must never zoom. WebView2's pinch zoom is off and WKWebView doesn't magnify
+  unless asked to, but WebKitGTK zooms the page natively on a touchpad pinch and tells nobody. On
+  Linux `src-tauri/src/pinch.rs` takes pinches from GDK before GTK dispatches them and forwards
+  them to `InkEditor.platformPinch`, which zooms the canvas.
+* Text blocks are Markdown, rendered from a deterministic layout (`markdown.ts` =
+  `penroam-core::markdown`, built on the metrics in `textLayout.ts` = `penroam-core::text`), so
+  wrapping is identical on every OS and in the PDF. The two ports use different parsers
+  (markdown-it and pulldown-cmark) and are held together by a shared golden file; formulas are
+  scanned out before either parser runs, so they can't disagree about TeX. Rendering uses bundled
+  Liberation fonts, metric-compatible with the Helvetica and Courier that the PDF export uses. A
+  layout is cached by its inputs, because hit tests and dirty-rect redraws need a block's bounds.
+  Editing uses a textarea overlay in the same coordinates, showing the Markdown source; text
+  locked to the paper's rows uses the row pitch as its line height there too.
+* Formulas come from MathJax, loaded on first use because it is the largest dependency. It runs
+  only in the webview, so PDF export and printing first ask Rust which formulas a notebook has,
+  render them, and pass the outlines back. Until MathJax is ready a formula shows its source.
+* Text blocks align with each other as they are dragged or placed (`snap.ts`). This only moves
+  them: it adds nothing to the page model. Row-locked text snaps across only, since its rows
+  are already aligned.
 * Paint order is ink → images → text (same in the PDF exporter).
 * Input rules: pen eraser button erases; palm-sized touches are ignored (not on iOS, where
   fingertips report palm-like sizes); touches are ignored

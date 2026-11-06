@@ -509,6 +509,7 @@ pub fn import_notebook(
 fn render_pdf(
     state: &State<'_, AppState>,
     notebook_id: Uuid,
+    math: &[penroam_pdf::RenderedMath],
 ) -> R<(Vec<u8>, penroam_pdf::ExportReport, Vec<Uuid>)> {
     let mut lib = lib!(state);
     let order = lib.notebook(notebook_id)?.page_order.clone();
@@ -518,8 +519,28 @@ fn render_pdf(
     }
     let lib = &*lib;
     let (bytes, report) =
-        penroam_pdf::export_annotated(&pages, |h| lib.read_asset(notebook_id, h).ok())?;
+        penroam_pdf::export_annotated(&pages, math, |h| lib.read_asset(notebook_id, h).ok())?;
     Ok((bytes, report, order))
+}
+
+/// The distinct formulas on a notebook's live pages. The webview draws these
+/// and passes them to [`export_annotated_pdf`] and [`print_notebook`].
+#[tauri::command(async)]
+pub fn notebook_math(
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+) -> R<Vec<penroam_core::markdown::MathSpan>> {
+    let mut lib = lib!(state);
+    let order = lib.notebook(notebook_id)?.page_order.clone();
+    let mut seen = std::collections::HashSet::new();
+    for p in order {
+        for e in lib.load_page(notebook_id, p)?.elements {
+            if let penroam_core::Element::Text(t) = e {
+                seen.extend(penroam_core::markdown::math_in(&t.text));
+            }
+        }
+    }
+    Ok(seen.into_iter().collect())
 }
 
 /// Exports the live pages as a PDF with vector ink and text over the original
@@ -530,8 +551,9 @@ pub fn export_annotated_pdf(
     state: State<'_, AppState>,
     notebook_id: Uuid,
     path: String,
+    math: Vec<penroam_pdf::RenderedMath>,
 ) -> R<penroam_pdf::ExportReport> {
-    let (bytes, report, _) = render_pdf(&state, notebook_id)?;
+    let (bytes, report, _) = render_pdf(&state, notebook_id, &math)?;
     write_user_file(&app, &path, &bytes)?;
     Ok(report)
 }
@@ -569,8 +591,9 @@ pub fn print_notebook(
     state: State<'_, AppState>,
     notebook_id: Uuid,
     current_page: Option<Uuid>,
+    math: Vec<penroam_pdf::RenderedMath>,
 ) -> R<PrintResult> {
-    let (bytes, report, order) = render_pdf(&state, notebook_id)?;
+    let (bytes, report, order) = render_pdf(&state, notebook_id, &math)?;
     let (file, title) = {
         let lib = lib!(state);
         // The staging folder sits with the notes themselves and is emptied on every launch, which

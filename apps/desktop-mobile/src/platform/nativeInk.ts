@@ -13,7 +13,8 @@
 //    drop its preview, so the stroke never flashes or doubles.
 //
 // Pen samples never cross IPC while a stroke is live: only finalised strokes,
-// plus pen-down/up from iOS so fingers can be arbitrated (the web view never sees the pen).
+// plus pen-down/up from iOS so fingers can be arbitrated. WKWebView also delivers the Pencil as
+// pen pointer events; the editor must not draw from them while this surface is visible.
 import { addPluginListener, invoke, type PluginListener } from "@tauri-apps/api/core";
 import type { InkStroke } from "../generated/InkStroke";
 import type { InkPoint } from "../generated/InkPoint";

@@ -1,8 +1,8 @@
 # Development
 
 Stack: Tauri 2 · Vue 3 (Composition API) + TypeScript · Vite · Tailwind CSS 4 · `@lucide/vue` ·
-Pinia · PDF.js · Rust (`penroam-core`, `penroam-storage`, `penroam-pdf`, `penroam-search`, `lopdf`, `zip`,
-SQLite via `rusqlite`) ·
+Pinia · PDF.js · markdown-it · MathJax · Rust (`penroam-core`, `penroam-storage`, `penroam-pdf`,
+`penroam-search`, `lopdf`, `pulldown-cmark`, `zip`, SQLite via `rusqlite`) ·
 native ink adapters (BOOX Onyx SDK on Android, UIKit Pencil layer on iPadOS).
 Design: [`architecture/overview.md`](architecture/overview.md).
 
@@ -67,6 +67,21 @@ cd ios/InkKit && swift test        # Linux or macOS: InkCore + PencilSurface tes
 ```
 
 Details and the device checklist: [`platforms/ipad.md`](platforms/ipad.md).
+
+## Text layout
+
+Text block layout exists twice, in `crates/penroam-core/src/markdown.rs` and
+`apps/desktop-mobile/src/editor/markdown.ts`. Change them together, then regenerate the golden
+file both are checked against:
+
+```sh
+UPDATE_GOLDEN=1 cargo test -p penroam-core --test markdown
+pnpm --filter penroam test
+```
+
+Add a line to `CORPUS` in `crates/penroam-core/tests/markdown.rs` when the two parsers turn out to
+disagree on something. After changing a bundled font, regenerate the widths with
+`node tools/gen-font-metrics.mjs apps/desktop-mobile/src/assets/fonts crates/penroam-core/data/text-metrics.json`.
 
 ## Benchmarks
 

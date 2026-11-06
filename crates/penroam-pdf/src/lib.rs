@@ -28,9 +28,10 @@
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use penroam_core::geometry::{stroke_pieces, Piece};
-use penroam_core::text::{layout, metrics};
+use penroam_core::markdown::{self, MathBox, Paint};
+use penroam_core::text::{metrics, Face};
 use penroam_core::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use ts_rs::TS;
@@ -259,24 +260,34 @@ fn name(s: &str) -> Object {
 /// Builds the annotated PDF for `pages`, in the given order. `asset`
 /// returns the bytes of a stored asset by SHA-256 (the PDF backgrounds).
 ///
+/// Formulas are drawn from `math` (see [`RenderedMath`]); one that isn't listed
+/// is written as its TeX source.
+///
 /// Each source PDF is merged into the output once (its objects renumbered,
 /// inherited page attributes resolved first) and its pages are reused with
 /// their original content wrapped in `q … Q`, followed by one Penroam content
 /// stream. Opacity (highlighter) uses `ExtGState` entries; text uses the
-/// standard Helvetica font with WinAnsi encoding.
+/// standard Helvetica and Courier fonts with WinAnsi encoding.
 pub fn export_annotated(
     pages: &[Page],
+    math: &[RenderedMath],
     mut asset: impl FnMut(&str) -> Option<Vec<u8>>,
 ) -> Result<(Vec<u8>, ExportReport), PdfError> {
     let mut out = Document::with_version("1.7");
     let mut report = ExportReport::default();
     let pages_root = out.new_object_id();
-    let font = out.add_object(Dictionary::from_iter(vec![
-        ("Type", name("Font")),
-        ("Subtype", name("Type1")),
-        ("BaseFont", name("Helvetica")),
-        ("Encoding", name("WinAnsiEncoding")),
-    ]));
+    let formulas: MathTable<'_> = math
+        .iter()
+        .map(|m| ((m.tex.as_str(), m.display), m))
+        .collect();
+    let fonts = FONTS.map(|(_, _, base)| {
+        out.add_object(Dictionary::from_iter(vec![
+            ("Type", name("Font")),
+            ("Subtype", name("Type1")),
+            ("BaseFont", name(base)),
+            ("Encoding", name("WinAnsiEncoding")),
+        ]))
+    });
     // source documents merged into `out`, keyed by asset hash -> page object ids
     let mut sources: HashMap<String, Vec<ObjectId>> = HashMap::new();
     let mut kids = Vec::new();
@@ -284,7 +295,7 @@ pub fn export_annotated(
     for page in pages {
         // ExtGState names (one per distinct opacity) used by this page's annotations
         let mut gs: BTreeMap<String, f64> = BTreeMap::new();
-        let annot = annotation_content(page, &mut gs, &mut report);
+        let annot = annotation_content(page, &formulas, &mut gs, &mut report);
         let annot_id = out
             .add_object(Stream::new(Dictionary::new(), annot.into_bytes()).with_compression(true));
         let mut ext = Dictionary::new();
@@ -366,13 +377,13 @@ pub fn export_annotated(
                     .unwrap_or_default(),
                 Err(_) => Dictionary::new(),
             };
-            merge_resources(&out, &mut res, font, ext);
+            merge_resources(&out, &mut res, &fonts, ext);
             d.set("Resources", Object::Dictionary(res));
             d.set("Parent", Object::Reference(pages_root));
             d
         } else {
             let mut res = Dictionary::new();
-            merge_resources(&out, &mut res, font, ext);
+            merge_resources(&out, &mut res, &fonts, ext);
             Dictionary::from_iter(vec![
                 ("Type", name("Page")),
                 ("Parent", Object::Reference(pages_root)),
@@ -417,9 +428,9 @@ pub fn export_annotated(
     Ok((buf, report))
 }
 
-/// Adds the Penroam font (`/PRHelv`) and opacity states to a page's
-/// resources without disturbing the source page's own entries.
-fn merge_resources(out: &Document, res: &mut Dictionary, font: ObjectId, ext: Dictionary) {
+/// Adds the Penroam fonts and opacity states to a page's resources without
+/// disturbing the source page's own entries.
+fn merge_resources(out: &Document, res: &mut Dictionary, fonts: &[ObjectId], ext: Dictionary) {
     let sub = |key: &[u8], res: &Dictionary| -> Dictionary {
         res.get(key)
             .ok()
@@ -427,9 +438,11 @@ fn merge_resources(out: &Document, res: &mut Dictionary, font: ObjectId, ext: Di
             .and_then(|(_, o)| o.as_dict().ok().cloned())
             .unwrap_or_default()
     };
-    let mut fonts = sub(b"Font", res);
-    fonts.set("PRHelv", Object::Reference(font));
-    res.set("Font", Object::Dictionary(fonts));
+    let mut dict = sub(b"Font", res);
+    for ((_, resource, _), id) in FONTS.iter().zip(fonts) {
+        dict.set(*resource, Object::Reference(*id));
+    }
+    res.set("Font", Object::Dictionary(dict));
     if !ext.is_empty() {
         let mut gs = sub(b"ExtGState", res);
         for (k, v) in ext.iter() {
@@ -511,6 +524,7 @@ pub fn keep_pages(pdf: &[u8], keep: &[u32]) -> Result<Vec<u8>, PdfError> {
 /// coordinates (y down), mapped to PDF user space by one `cm`.
 fn annotation_content(
     page: &Page,
+    math: &MathTable<'_>,
     gs: &mut BTreeMap<String, f64>,
     report: &mut ExportReport,
 ) -> String {
@@ -550,7 +564,7 @@ fn annotation_content(
             }
             Element::Text(t) => {
                 report.text_blocks += 1;
-                text_content(&mut s, t, report);
+                text_content(&mut s, t, math, report);
             }
             Element::Image(_) => report
                 .warnings
@@ -746,60 +760,150 @@ fn winansi(c: char) -> Option<u8> {
     }
 }
 
-/// Appends a text block laid out with the same metrics and line breaking as
-/// the editor (`penroam_core::text`). Characters Helvetica/WinAnsi cannot
-/// show are written as `?` and counted in the report.
-fn text_content(s: &mut String, t: &TextBlock, report: &mut ExportReport) {
+/// A formula drawn ahead of export by the app's math renderer, which runs in
+/// the webview. Formulas aren't stored in notebooks, so the app asks for this
+/// table with every export and PDFs always match the current renderer.
+#[derive(Debug, Clone, PartialEq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RenderedMath {
+    /// TeX, as [`markdown::MathSpan::tex`].
+    pub tex: String,
+    /// Display style.
+    pub display: bool,
+    /// Advance width in em.
+    pub width: f64,
+    /// Extent above the baseline in em.
+    pub height: f64,
+    /// Extent below the baseline in em.
+    pub depth: f64,
+    /// Filled outline in em from the baseline origin, y down: `M x y`, `L x y`,
+    /// `C x1 y1 x2 y2 x y` and `Z`, separated by spaces.
+    pub path: String,
+}
+
+type MathTable<'a> = HashMap<(&'a str, bool), &'a RenderedMath>;
+
+/// The standard fonts: (face, resource name, PDF base font).
+const FONTS: [(Face, &str, &str); 5] = [
+    (Face::Regular, "PRHelv", "Helvetica"),
+    (Face::Bold, "PRHelvB", "Helvetica-Bold"),
+    (Face::Italic, "PRHelvI", "Helvetica-Oblique"),
+    (Face::BoldItalic, "PRHelvBI", "Helvetica-BoldOblique"),
+    (Face::Mono, "PRCour", "Courier"),
+];
+
+fn font_resource(face: Face) -> &'static str {
+    FONTS
+        .iter()
+        .find(|(f, _, _)| *f == face)
+        .map_or("PRHelv", |(_, r, _)| r)
+}
+
+/// The same layout the editor draws for `t` (see `penroam_core::markdown`).
+fn paint_of(t: &TextBlock, math: &MathTable<'_>) -> Paint {
+    let size = |tex: &str, display: bool| {
+        math.get(&(tex, display)).map(|m| MathBox {
+            width: m.width,
+            height: m.height,
+            depth: m.depth,
+        })
+    };
+    markdown::layout(&t.text, t.font_size, t.width, t.row_pitch, t.align, &size)
+}
+
+/// Writes a string as a PDF literal, in WinAnsi. Characters the standard fonts
+/// cannot show become `?` and are counted in the report.
+fn pdf_literal(text: &str, report: &mut ExportReport) -> String {
     let m = metrics();
+    let mut lit = String::new();
+    for c in text.chars() {
+        let byte = match winansi(c) {
+            Some(b) if m.known(c) || c == ' ' => b,
+            _ => {
+                report.replaced_characters += 1;
+                b'?'
+            }
+        };
+        match byte {
+            b'(' | b')' | b'\\' => {
+                lit.push('\\');
+                lit.push(byte as char);
+            }
+            0x20..=0x7e => lit.push(byte as char),
+            _ => {
+                let _ = write!(lit, "\\{byte:03o}");
+            }
+        }
+    }
+    lit
+}
+
+/// Appends a formula's outline, scaled from em to points at (`x`, `y`).
+fn math_content(s: &mut String, m: &RenderedMath, x: f64, y: f64, size: f64) {
+    let mut tokens = m.path.split_ascii_whitespace();
+    while let Some(command) = tokens.next() {
+        let (args, op) = match command {
+            "M" => (2, "m"),
+            "L" => (2, "l"),
+            "C" => (6, "c"),
+            "Z" => (0, "h"),
+            _ => continue,
+        };
+        for i in 0..args {
+            let v: f64 = tokens.next().and_then(|t| t.parse().ok()).unwrap_or(0.0);
+            let origin = if i % 2 == 0 { x } else { y };
+            let _ = write!(s, "{} ", f(origin + v * size));
+        }
+        s.push_str(op);
+        s.push('\n');
+    }
+    s.push_str("f\n");
+}
+
+/// Appends a text block from the same layout the editor draws.
+fn text_content(s: &mut String, t: &TextBlock, math: &MathTable<'_>, report: &mut ExportReport) {
+    let paint = paint_of(t, math);
     let (r, g, b) = rgb(&t.color);
-    let lh = m.line_height(t.font_size);
-    let base = m.first_baseline(t.font_size);
     let _ = writeln!(
         s,
-        "BT /PRHelv {} Tf {} {} {} rg",
-        f(t.font_size),
-        f(r),
-        f(g),
-        f(b)
+        "q {r} {g} {b} rg {r} {g} {b} RG",
+        r = f(r),
+        g = f(g),
+        b = f(b)
     );
-    for (i, line) in layout(&t.text, t.font_size, t.width).iter().enumerate() {
-        let dx = match t.align {
-            TextAlign::Left => 0.0,
-            TextAlign::Center => (t.width - line.width) / 2.0,
-            TextAlign::Right => t.width - line.width,
-        };
-        let mut bytes = Vec::new();
-        for c in line.text.chars() {
-            let c = if c == '\t' { ' ' } else { c };
-            match winansi(c) {
-                Some(b) if m.known(c) || c == ' ' => bytes.push(b),
-                _ => {
-                    report.replaced_characters += 1;
-                    bytes.push(b'?');
-                }
-            }
+    if !paint.runs.is_empty() {
+        s.push_str("BT\n");
+        for run in &paint.runs {
+            let lit = pdf_literal(&run.text, report);
+            let _ = writeln!(
+                s,
+                "/{} {} Tf 1 0 0 -1 {} {} Tm ({lit}) Tj",
+                font_resource(run.face),
+                f(run.size),
+                f(t.x + run.x),
+                f(t.y + run.y)
+            );
         }
-        let mut lit = String::new();
-        for b in bytes {
-            match b {
-                b'(' | b')' | b'\\' => {
-                    lit.push('\\');
-                    lit.push(b as char);
-                }
-                0x20..=0x7e => lit.push(b as char),
-                _ => {
-                    let _ = write!(lit, "\\{b:03o}");
-                }
-            }
-        }
+        s.push_str("ET\n");
+    }
+    for l in &paint.segments {
         let _ = writeln!(
             s,
-            "1 0 0 -1 {} {} Tm ({lit}) Tj",
-            f(t.x + dx),
-            f(t.y + base + i as f64 * lh)
+            "{} w {} {} m {} {} l S",
+            f(l.width),
+            f(t.x + l.x0),
+            f(t.y + l.y0),
+            f(t.x + l.x1),
+            f(t.y + l.y1)
         );
     }
-    s.push_str("ET\n");
+    for mark in &paint.math {
+        if let Some(m) = math.get(&(mark.tex.as_str(), mark.display)) {
+            math_content(s, m, t.x + mark.x, t.y + mark.y, mark.size);
+        }
+    }
+    s.push_str("Q\n");
     if report.replaced_characters > 0
         && !report
             .warnings

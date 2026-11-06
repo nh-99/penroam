@@ -235,7 +235,7 @@ watch(narrow, (n) => {
       </div>
       <Toolbar v-if="!narrow" class="border-t border-line" :state="st" @tool="setTool" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
-        @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" />
+        @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" @free-placement="(f) => host.editor.value?.setSelectionFreePlacement(f)" />
       <CloudBanner compact class="border-t border-b-0" />
     </header>
 
@@ -276,7 +276,7 @@ watch(narrow, (n) => {
     <footer v-if="narrow" class="safe-bottom relative z-30 border-t border-line bg-surface">
       <Toolbar compact :state="st" @tool="setTool" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
-        @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" />
+        @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" @free-placement="(f) => host.editor.value?.setSelectionFreePlacement(f)" />
     </footer>
 
     <ConflictsDialog v-if="showConflicts" :notebook-id="nb.id" :current-title="nb.title" @close="showConflicts = false" @resolved="lib.reloadCurrent(); lib.currentPageId && host.markChanged([lib.currentPageId])" />

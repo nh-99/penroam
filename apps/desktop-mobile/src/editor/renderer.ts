@@ -13,14 +13,34 @@ import type { TextBlock } from "../generated/TextBlock";
 import type { Template } from "../generated/Template";
 import { drawStroke, rectsIntersect, strokeBounds, type Rect } from "./geometry";
 import { drawTemplate } from "./templates";
-import { firstBaseline, layout, lineHeight, TEXT_FONT_FAMILY, contentHeight } from "./textLayout";
+import { layoutMarkdown, type Paint } from "./markdown";
+import { drawMath, ensureMath, mathBox, mathEpoch, renderedMath } from "./math";
+import { canvasFont } from "./textLayout";
 
 export type Ink = { type: "ink" } & InkStroke;
 export type Text = { type: "text" } & TextBlock;
 
+// Bounds are read on every hit test and dirty-rect redraw, so layouts are kept.
+const PAINT_CACHE_ENTRIES = 2048;
+const paints = new Map<string, Paint>();
+
+/** The cached Markdown layout of a block. */
+export function paintOf(t: Pick<TextBlock, "text" | "fontSize" | "width" | "align" | "rowPitch">): Paint {
+  const key = `${mathEpoch()}|${t.fontSize}|${t.width}|${t.rowPitch ?? ""}|${t.align}|${t.text}`;
+  let p = paints.get(key);
+  if (!p) {
+    p = layoutMarkdown(t.text, t.fontSize, t.width, t.rowPitch ?? null, t.align, mathBox);
+    if (paints.size >= PAINT_CACHE_ENTRIES) paints.clear();
+    paints.set(key, p);
+    // Until MathJax has loaded formulas show their source.
+    if (p.runs.some((r) => r.face === "mono" && r.text.includes("$"))) void ensureMath();
+  }
+  return p;
+}
+
 export function textBounds(t: TextBlock): Rect {
-  const h = Math.max(t.height, contentHeight(t.text, t.fontSize, t.width));
-  return [t.x, t.y, t.x + t.width, t.y + h];
+  const p = paintOf(t);
+  return [t.x, t.y, t.x + t.width, t.y + Math.max(t.height, p.bottom)];
 }
 
 export function elementBounds(e: Element): Rect {
@@ -30,16 +50,28 @@ export function elementBounds(e: Element): Rect {
 }
 
 export function drawText(ctx: CanvasRenderingContext2D, t: TextBlock, colorOverride?: string): void {
+  const p = paintOf(t);
+  const color = colorOverride ?? t.color;
   ctx.save();
-  ctx.font = `${t.fontSize}px ${TEXT_FONT_FAMILY}`;
   ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = colorOverride ?? t.color;
-  const lh = lineHeight(t.fontSize);
-  const base = firstBaseline(t.fontSize);
-  layout(t.text, t.fontSize, t.width).forEach((line, i) => {
-    const dx = t.align === "center" ? (t.width - line.width) / 2 : t.align === "right" ? t.width - line.width : 0;
-    ctx.fillText(line.text.replace(/\t/g, "    "), t.x + dx, t.y + base + i * lh);
-  });
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineCap = "butt";
+  for (const r of p.runs) {
+    ctx.font = canvasFont(r.face, r.size);
+    ctx.fillText(r.text, t.x + r.x, t.y + r.y);
+  }
+  for (const s of p.segments) {
+    ctx.lineWidth = s.width;
+    ctx.beginPath();
+    ctx.moveTo(t.x + s.x0, t.y + s.y0);
+    ctx.lineTo(t.x + s.x1, t.y + s.y1);
+    ctx.stroke();
+  }
+  for (const m of p.math) {
+    const r = renderedMath(m.tex, m.display);
+    if (r) drawMath(ctx, r, t.x + m.x, t.y + m.y, m.size);
+  }
   ctx.restore();
 }
 

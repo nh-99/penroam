@@ -241,6 +241,7 @@ pub fn text(id: u128, s: &str) -> Element {
         font_size: 16.0,
         color: "#111111".into(),
         align: TextAlign::Left,
+        row_pitch: None,
         extra: Extra::new(),
     })
 }
