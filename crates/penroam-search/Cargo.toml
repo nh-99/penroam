@@ -48,6 +48,8 @@ onnx-model = ["dep:ort"]
 
 [dev-dependencies]
 tempfile.workspace = true
+# examples/make_eval_corpus.rs: reading exported notebooks
+penroam-storage = { path = "../penroam-storage" }
 # examples/model_catalog.rs: signing the model catalog
 penroam-sync = { path = "../penroam-sync", default-features = false }
 penroam-sync-protocol = { path = "../penroam-sync-protocol" }

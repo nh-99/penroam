@@ -267,6 +267,18 @@ handwriting, and numbers from them are not accuracy claims. Real measurements ne
 written by people who agreed to it, kept outside the repository. Reports and corpora stay
 local (`benchmarks/` is git-ignored).
 
+`examples/make_eval_corpus.rs` builds such a corpus from exported notebooks in which each writer
+copied a fixed set of prompts, one prompt line per written line:
+
+```bash
+cargo run -p penroam-search --example make_eval_corpus -- --prompts prompts.txt --out corpus.json writer-a=a.penroam writer-b=b.penroam
+```
+
+It matches each page's regions to its prompt from the top down and leaves out, with a message,
+any page where the counts differ. The writer becomes the page's `style`, so reports come out per
+writer. Handwriting models are compared with the benchmark that sits beside the trainers in the
+private models repository; on the same corpus and bundle its numbers agree with this tool's.
+
 ## README screenshots
 
 `tools/screenshots/capture.sh` regenerates the README images in `docs/images/`. Run it
