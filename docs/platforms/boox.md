@@ -32,8 +32,14 @@ devicePixelRatio 1.875), on adb as `c5927068`.
 
 The pen and ePaper code depends on the Onyx SDK (`onyxsdk-pen`, `-device`, `-base`), which is closed
 source and is linked into the APK, including native libraries. The source in this repository doesn't
-contain it, but an APK does. The SDK's AARs and POMs state no licence. Onyx's sample project,
-`onyx-intl/OnyxAndroidDemo`, is under Apache-2.0, which covers that sample and not the SDK.
+contain it, but an APK does. From pen 1.5.9, device 1.3.7 and base 1.8.10, the SDK's POMs on
+`repo.boox.com` declare BSD-3-Clause, as do the Onyx libraries they pull in (`onyxsdk-geometry`,
+`-penbrush`, `-baselite`). Versions before pen 1.5.4.4, device 1.3.5.3 and base 1.8.5.5 state no
+licence, so don't pin one older than those.
+Two declare none. `onyxsdk-commons-io` 2.5's classes appear to be Apache Commons IO (Apache-2.0)
+renamed into `com.onyx.android.sdk.commons.io`. `onyxsdk-pennative` 1.0.5, a native pen library
+(`libneopen_jni.so`) that `onyxsdk-penbrush` pulls in, states no licence in any published version. Onyx's
+sample project, `onyx-intl/OnyxAndroidDemo`, is under Apache-2.0.
 
 Precautions in the build:
 

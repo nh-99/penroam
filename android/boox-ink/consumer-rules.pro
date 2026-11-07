@@ -17,3 +17,10 @@
 -dontwarn javax.lang.model.**
 -dontwarn java.beans.**
 -dontwarn com.google.errorprone.annotations.**
+# Referenced only from SDK code nothing here calls: its fingerprint check (FingerprintManager is
+# gone from the Android 37 SDK), its Wi-Fi settings screen (a data-binding class the AAR doesn't
+# ship), and fastjson2's bridge to the old fastjson 1 API.
+-dontwarn android.hardware.fingerprint.FingerprintManager
+-dontwarn com.onyx.android.sdk.BR
+-dontwarn com.alibaba.fastjson.JSONArray
+-dontwarn com.alibaba.fastjson.JSONObject

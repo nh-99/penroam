@@ -304,7 +304,7 @@ the answer to `power_report` (`src-tauri/src/power.rs`) for the search and sync 
 
 * **Linux/Windows/macOS desktop**: WebKitGTK / WebView2 / WKWebView. Web canvas only.
 * **Android**: system WebView (Chromium). The app opts out of Android Auto Backup, because the library is not encrypted on disk.
-  BOOX Onyx SDK pinned (pen 1.5.2 / device 1.3.3 / base 1.8.4) from the official Onyx Maven repo.
+  BOOX Onyx SDK pinned (pen 1.5.9 / device 1.3.7 / base 1.8.10, BSD-3-Clause per their POMs) from the official Onyx Maven repo.
 * **iOS/iPadOS**: Tauri iOS builds require macOS + Xcode (not available in this environment).
   WKWebView renders rAF at 60 Hz unless the private `PreferPageRenderingUpdatesNear60FPSEnabled`
   flag is lifted (`WebTuning` hook in `ios/InkKit`; App Store risk) — hence the native preview layer.
