@@ -27,12 +27,12 @@ FEED_PLATFORMS = [
 
 def repo_versions(root=ROOT):
     """Every place that states the app version."""
-    cargo = (root / "Cargo.toml").read_text()
+    cargo = (root / "Cargo.toml").read_text(encoding="utf-8")
     section = cargo[cargo.index("[workspace.package]"):]
     return {
         "Cargo.toml": re.search(r'^version = "([^"]+)"', section, re.M).group(1),
-        "tauri.conf.json": json.loads((root / "apps/desktop-mobile/src-tauri/tauri.conf.json").read_text())["version"],
-        "package.json": json.loads((root / "apps/desktop-mobile/package.json").read_text())["version"],
+        "tauri.conf.json": json.loads((root / "apps/desktop-mobile/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"],
+        "package.json": json.loads((root / "apps/desktop-mobile/package.json").read_text(encoding="utf-8"))["version"],
     }
 
 
@@ -106,7 +106,7 @@ def update_feed(version, assets, notes, pub_date):
         if not (sig.parent / artifact).exists():
             raise ValueError(f"{sig.name} has no artifact")
         platforms[platform] = {
-            "signature": sig.read_text().strip(),
+            "signature": sig.read_text(encoding="utf-8").strip(),
             "url": f"{REPO_URL}/releases/download/v{version}/{artifact}",
         }
     return {"version": version, "notes": notes, "pub_date": pub_date, "platforms": platforms}
@@ -123,19 +123,19 @@ def sha256(path):
 def assemble(version, sha, directory, root=ROOT, pub_date=None):
     """Writes the metadata beside the artifacts in `directory`, which holds them flat."""
     directory = pathlib.Path(directory)
-    contract = json.loads((root / "crates/penroam-sync-protocol/fixtures/v1/contract-manifest.json").read_text())
+    contract = json.loads((root / "crates/penroam-sync-protocol/fixtures/v1/contract-manifest.json").read_text(encoding="utf-8"))
     contract["git_sha"] = sha
-    (directory / "contract-manifest.json").write_text(json.dumps(contract, indent=2) + "\n")
-    changelog = (root / "CHANGELOG.md").read_text()
+    (directory / "contract-manifest.json").write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     assets = sorted(p for p in directory.iterdir() if p.is_file())
     has_windows = any(p.name.endswith(".exe") for p in assets)
     notes = release_notes(version, contract, changelog, has_windows)
-    (directory / "release-notes.md").write_text(notes)
+    (directory / "release-notes.md").write_text(notes, encoding="utf-8")
     feed = update_feed(version, assets, changelog_section(version, changelog), pub_date)
     if feed["platforms"]:
-        (directory / "latest.json").write_text(json.dumps(feed, indent=2) + "\n")
+        (directory / "latest.json").write_text(json.dumps(feed, indent=2) + "\n", encoding="utf-8")
     assets = sorted(p for p in directory.iterdir() if p.is_file() and p.name != "SHA256SUMS")
-    (directory / "SHA256SUMS").write_text("".join(f"{sha256(p)}  {p.name}\n" for p in assets))
+    (directory / "SHA256SUMS").write_text("".join(f"{sha256(p)}  {p.name}\n" for p in assets), encoding="utf-8")
     return feed
 
 
@@ -154,7 +154,7 @@ def notices(out):
     texts = {}
 
     def add(name, version, licence, directory):
-        found = [t.read_text(errors="replace").strip() for t in licence_texts(directory)]
+        found = [t.read_text(encoding="utf-8", errors="replace").strip() for t in licence_texts(directory)]
         for text in found or [f"Licensed under {licence}."]:
             texts.setdefault(text, []).append(f"{name} {version}")
 
@@ -178,16 +178,18 @@ def notices(out):
 
     walk(tree[0].get("dependencies"))
     for (name, version), path in sorted(seen.items()):
-        pkg = json.loads((pathlib.Path(path) / "package.json").read_text())
+        pkg = json.loads((pathlib.Path(path) / "package.json").read_text(encoding="utf-8"))
         add(name, version, pkg.get("license") or "see below", path)
     lines = ["Penroam is free software under the Mozilla Public License 2.0.",
              "It includes the following third-party software.\n"]
     for text, packages in sorted(texts.items(), key=lambda item: item[1]):
         lines += [f"\n{'=' * 72}", ", ".join(packages), "=" * 72, text]
     # A fresh checkout has no `public/` folder: nothing else in it is checked in.
+    # Always UTF-8: Windows would otherwise use its locale code page, which can't hold every
+    # character in the licence texts.
     out = pathlib.Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(lines) + "\n")
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 SIGNING = {
