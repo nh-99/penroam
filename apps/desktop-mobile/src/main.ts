@@ -5,6 +5,7 @@ import "./styles/main.css";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { isMobile } from "./platform/device";
 import { startPowerReports } from "./platform/power";
+import { recordUiError } from "./platform/diagnostics";
 
 // Release WebViews on Android/iOS have no visible console: forward warnings,
 // errors and unhandled rejections to the Rust log (logcat / device console).
@@ -27,6 +28,9 @@ if (isMobile()) {
   }
 }
 
+window.addEventListener("error", (e) => recordUiError("window", e.error ?? e.message));
+window.addEventListener("unhandledrejection", (e) => recordUiError("promise", e.reason));
+
 // Text blocks are measured with bundled metrics and drawn with the bundled
 // fonts; wait for them so the first canvas paint uses the right glyphs.
 const fontReady = document.fonts
@@ -34,6 +38,12 @@ const fontReady = document.fonts
   : undefined;
 
 void Promise.resolve(fontReady).finally(() => {
-  createApp(App).use(createPinia()).mount("#app");
+  const app = createApp(App);
+  // Keep Vue's normal console output as well: this only adds a local, redacted report.
+  app.config.errorHandler = (error, _instance, info) => {
+    console.error(error);
+    recordUiError(`vue: ${info}`, error);
+  };
+  app.use(createPinia()).mount("#app");
   startPowerReports();
 });

@@ -410,7 +410,7 @@ fn exported() -> (Vec<(String, Vec<u8>)>, Uuid) {
         let mut f = z.by_index(i).unwrap();
         let mut b = Vec::new();
         std::io::Read::read_to_end(&mut f, &mut b).unwrap();
-        out.push((f.name().to_string(), b));
+        out.push((f.name().unwrap().to_string(), b));
     }
     (out, page.id)
 }
@@ -580,7 +580,7 @@ fn legacy_json_archives_and_snapshots_still_load() {
         let mut f = z.by_index(i).unwrap();
         let mut b = Vec::new();
         std::io::Read::read_to_end(&mut f, &mut b).unwrap();
-        entries.push((f.name().to_string(), b));
+        entries.push((f.name().unwrap().to_string(), b));
     }
     let mut manifest: serde_json::Value = serde_json::from_slice(
         &entries

@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "penroam-pdf"
 description = "PDF inspection for import and annotated-PDF export for Penroam"
 version.workspace = true

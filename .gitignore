@@ -35,4 +35,10 @@ plugins/*/.tauri/
 /fuzz/artifacts
 /target/agent-sync
 # Raw benchmark output is machine-specific and stays local; summaries go in docs/benchmarks/
+# Generated for each release build by tools/release/release.py notices
+apps/desktop-mobile/public/third-party-notices.txt
+__pycache__/
 /benchmarks/
+# Generated for each release build by tools/release/release.py notices
+apps/desktop-mobile/public/third-party-notices.txt
+__pycache__/

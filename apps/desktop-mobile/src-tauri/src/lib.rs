@@ -24,12 +24,14 @@ const _: () = assert!(
 mod backup;
 mod bench;
 mod commands;
+mod diagnostics;
 mod models;
 #[cfg(target_os = "linux")]
 mod pinch;
 mod power;
 mod search;
 mod sync;
+mod updates;
 
 use penroam_storage::Library;
 use std::sync::Mutex;
@@ -40,7 +42,7 @@ pub struct AppState {
     /// The open library. One lock serialises all storage access; the sync
     /// worker takes it only for its local phases.
     pub lib: Mutex<Library>,
-    /// Background sync worker (developer preview), if set up.
+    /// Background sync worker, if set up.
     pub sync: sync::SyncSlot,
     /// Background search indexing worker.
     pub search: search::SearchSlot,
@@ -66,6 +68,9 @@ pub fn run() {
     // the operating system hands to this app (RFC 8252 §7.1). Desktop uses a loopback listener.
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_deep_link::init());
+    // Desktop only: stores and sideloaded APKs update mobile builds (see updates.rs).
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
         .setup(|app| {
             #[cfg(mobile)]
@@ -80,6 +85,8 @@ pub fn run() {
             let root = std::env::var("PENROAM_LIBRARY_DIR")
                 .map(std::path::PathBuf::from)
                 .or_else(|_| app.path().app_data_dir().map(|d| d.join("library")))?;
+            // Beside the library rather than in it: a report is not notebook data.
+            diagnostics::install(root.with_file_name("crash-reports"));
             let lib = Library::open(&root)?;
             if !lib.recovery.warnings.is_empty() {
                 eprintln!("penroam: recovery: {:?}", lib.recovery);
@@ -189,6 +196,14 @@ pub fn run() {
             sync::sync_open_billing,
             sync::sync_request_account_deletion,
             sync::sync_cancel_account_deletion,
+            diagnostics::diagnostics_report,
+            diagnostics::diagnostics_ui_error,
+            diagnostics::diagnostics_clear,
+            diagnostics::third_party_notices,
+            diagnostics::open_help,
+            updates::update_support,
+            updates::update_check,
+            updates::update_install,
             power::power_report,
             search::search_query,
             search::search_status,

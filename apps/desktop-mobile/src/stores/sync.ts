@@ -1,4 +1,4 @@
-// Sync (developer preview) UI state. Nothing here runs unless the backend
+// Sync UI state. Nothing here runs unless the backend
 // reports sync as available; nothing polls unless a device is waiting for
 // pairing approval.
 import { defineStore } from "pinia";

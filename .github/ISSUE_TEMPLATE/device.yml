@@ -1,0 +1,23 @@
+name: Device test result
+description: You ran Penroam on real hardware and want to share how it went
+labels: ["device-report"]
+body:
+  - type: input
+    id: device
+    attributes:
+      label: Device, OS version and pen
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Penroam version
+    validations:
+      required: true
+  - type: textarea
+    id: scorecard
+    attributes:
+      label: Results
+      description: The device scorecard in docs/benchmarks/protocol.md, as far as you got.
+    validations:
+      required: true

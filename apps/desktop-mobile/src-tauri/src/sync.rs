@@ -1,4 +1,4 @@
-//! Sync integration (developer preview): a worker thread owns the sync
+//! Sync integration: a worker thread owns the sync
 //! engine and reconciles in the background. The library lock is taken only
 //! for the local phases, so saving and pen input never wait for the network.
 //!
@@ -298,11 +298,6 @@ fn unreachable_message(detail: &str) -> String {
     } else {
         "Could not reach Penroam Cloud. Check your internet connection and try again.".into()
     }
-}
-
-/// Developer preview gate: debug builds, or `PENROAM_DEV_SYNC=1`.
-pub fn available() -> bool {
-    cfg!(debug_assertions) || std::env::var("PENROAM_DEV_SYNC").is_ok_and(|v| v == "1")
 }
 
 /// Release builds: only [`DEFAULT_SERVER_URL`]. Debug builds: `https://`
@@ -909,9 +904,6 @@ fn start(app: &AppHandle, engine: Engine) {
 
 /// Starts the worker at launch when this library is already set up.
 pub fn resume_on_launch(app: &AppHandle) {
-    if !available() {
-        return;
-    }
     let root = library_root(app);
     if !SyncStore::exists(&root) {
         return;
@@ -938,6 +930,8 @@ pub fn resume_on_launch(app: &AppHandle) {
 #[serde(rename_all = "camelCase")]
 /// What the settings screen needs to decide what to show.
 pub struct SyncInfo {
+    /// Always true from this backend. The frontend also runs with no backend (tests, a plain
+    /// browser), where it treats sync as unavailable.
     available: bool,
     configured: bool,
     status: Option<SyncStatus>,
@@ -947,7 +941,7 @@ pub struct SyncInfo {
     dev_build: bool,
 }
 
-/// Whether sync is available in this build, configured, and its status.
+/// Whether sync is configured, and its status.
 #[tauri::command]
 pub fn sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<SyncInfo, CmdError> {
     let configured = state.sync.tx.lock().map(|g| g.is_some()).unwrap_or(false);
@@ -958,7 +952,7 @@ pub fn sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<SyncInfo,
     };
     let _ = app;
     Ok(SyncInfo {
-        available: available(),
+        available: true,
         configured,
         status,
         default_server_url: DEFAULT_SERVER_URL,
@@ -966,11 +960,8 @@ pub fn sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<SyncInfo,
     })
 }
 
-/// Setup preconditions: available in this build and not already set up.
+/// Setup precondition: not already set up.
 fn guard(state: &State<'_, AppState>) -> Result<(), CmdError> {
-    if !available() {
-        return Err(err("sync is not available in this build"));
-    }
     if state.sync.tx.lock().map(|g| g.is_some()).unwrap_or(false) {
         return Err(err("sync is already set up; disconnect first"));
     }
@@ -1124,9 +1115,6 @@ pub fn sync_sign_in(
     state: State<'_, AppState>,
     server_url: String,
 ) -> Result<String, CmdError> {
-    if !available() {
-        return Err(err("sync is not available in this build"));
-    }
     let url = check_url(&server_url)?;
     if !uses_sign_in(&url).map_err(err)? {
         return Err(err(

@@ -166,7 +166,31 @@ pub fn discover(issuer: &str) -> AuthResult<Discovery> {
             "discovery document names another issuer".into(),
         ));
     }
+    // A server names its own identity provider, and the sign-in address goes to the operating
+    // system, which opens whatever the scheme says (`file:`, `smb:`, ...).
+    for endpoint in [&d.authorization_endpoint, &d.token_endpoint] {
+        if !is_web_endpoint(endpoint) {
+            return Err(AuthError::Provider(
+                "the provider's sign-in address is not https".into(),
+            ));
+        }
+    }
     Ok(d)
+}
+
+/// `https`, or `http` to this machine for local development providers.
+fn is_web_endpoint(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = lower.strip_prefix("http://") else {
+        return false;
+    };
+    // Compare the whole host: `127.0.0.1.example.com` and `localhost@example.com` are remote.
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let name = host.rsplit_once(':').map_or(host, |(name, _)| name);
+    matches!(name, "127.0.0.1" | "localhost" | "[::1]")
 }
 
 fn random_token() -> AuthResult<String> {
@@ -639,6 +663,35 @@ pub fn device_session(
             signature: base64url::encode(&sig),
         },
     )?)
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::is_web_endpoint;
+
+    #[test]
+    fn only_web_addresses_reach_the_operating_system() {
+        for good in [
+            "https://id.example.com/authorize",
+            "http://127.0.0.1:5556/dex/auth",
+            "http://localhost:5556/auth",
+            "http://[::1]:5556/auth",
+        ] {
+            assert!(is_web_endpoint(good), "{good}");
+        }
+        for bad in [
+            "file:///etc/passwd#",
+            "smb://attacker/share",
+            "javascript:alert(1)",
+            "http://id.example.com/authorize",
+            "http://127.0.0.1.example.com/auth",
+            "http://localhost@example.com/auth",
+            "ms-msdt:/id",
+            "",
+        ] {
+            assert!(!is_web_endpoint(bad), "{bad}");
+        }
+    }
 }
 
 #[cfg(test)]

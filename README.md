@@ -50,7 +50,8 @@ account, a server or a subscription.
 
 Penroam hasn't published ready-made installers yet, so for now you build it from source.
 It has been tested on **Linux** and on **Android BOOX** e-ink tablets. Windows, macOS and
-iPad versions build from the same code but haven't been tested on those systems yet.
+iPad versions build from the same code but haven't been tested on those systems yet. The
+[release matrix](docs/platforms/release-matrix.md) has the status of each platform.
 
 ### Linux
 
@@ -59,7 +60,7 @@ You need [Rust](https://rustup.rs), [Node.js](https://nodejs.org) 24 with
 `sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev librsvg2-dev`).
 
 ```bash
-git clone https://github.com/penroam/penroam.git
+git clone https://github.com/nh-99/penroam.git
 cd penroam
 pnpm install
 pnpm tauri build --no-bundle
@@ -82,6 +83,13 @@ With sync on, deleting a notebook for good removes it from all your devices, but
 your account: the Trash keeps it, and **Restore** brings it back everywhere. A notebook that's
 in your account but not on this device shows on the shelf as a card with a cloud icon. Click it
 to download the notebook.
+
+**Sync.** Sync is optional and works through Penroam Cloud. Open **Settings → Sync** and sign in
+with your web browser. On your first device, save the recovery code somewhere safe: it's shown once,
+and without it or another signed-in device your synced notes can't be decrypted. On each new device,
+sign in and either approve it from a device you already have, or enter the recovery code. Notes are
+encrypted on your device before they're uploaded. That encryption hasn't been independently reviewed
+yet. Sync can be paused or disconnected at any time, and your notes stay on the device either way.
 
 **Writing.** Choose a tool from the toolbar, then a colour and thickness:
 
@@ -253,3 +261,21 @@ Penroam is licensed under the [MPL-2.0](https://www.mozilla.org/MPL/2.0/).
 The bundled Liberation Sans font is under the SIL Open Font License 1.1, and PDF.js is under
 Apache-2.0. The Android build fetches the proprietary BOOX Onyx SDK from Onyx's official
 repository to support BOOX pens.
+
+## Help and privacy
+
+**Problems.** See [getting help](docs/support.md) and [known issues](docs/known-issues.md). If
+Penroam crashes it keeps a short report on your device. Nothing is sent anywhere. To share one, open
+**Settings → About → Show diagnostic report**, read it, and copy it into your bug report. Reports hold
+no notes, file names or account details.
+
+**Updates.** Builds that can update themselves have an **Updates** section under
+**Settings → About**, where you can check for a new version, choose the stable or beta channel, and
+turn on a check at start-up. It's off unless you turn it on. Your notes are saved before an update
+installs, and they're stored apart from the app.
+
+**Privacy.** Penroam has no analytics or telemetry. [Privacy](docs/policies/privacy.md) lists every
+case in which the app uses the network. See also [accessibility](docs/policies/accessibility.md).
+
+**Contributing and security.** See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+Penroam is free software under the Mozilla Public License 2.0.

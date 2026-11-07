@@ -43,9 +43,19 @@ configurations.all {
 dependencies {
     // Official Onyx Pen SDK (pinned; see README.md). `api` so hosts can see
     // the classes for diagnostics, but hosts should only use BooxInkView.
-    api("com.onyx.android.sdk:onyxsdk-pen:$onyxPenVersion")
-    api("com.onyx.android.sdk:onyxsdk-device:$onyxDeviceVersion")
-    api("com.onyx.android.sdk:onyxsdk-base:$onyxBaseVersion")
+    // OkHttp and Retrofit are left out: the SDK's only use of them is its firmware updater
+    // (com.onyx.android.sdk.firmware), which nothing calls. Without them, closed-source code in
+    // this app has no HTTP client. Penroam's own network code is in Rust and doesn't use them.
+    listOf(
+        "onyxsdk-pen:$onyxPenVersion",
+        "onyxsdk-device:$onyxDeviceVersion",
+        "onyxsdk-base:$onyxBaseVersion",
+    ).forEach { sdk ->
+        api("com.onyx.android.sdk:$sdk") {
+            exclude(group = "com.squareup.okhttp3")
+            exclude(group = "com.squareup.retrofit2")
+        }
+    }
     // Android 9+ hidden-API restrictions block reflective calls the Onyx SDK
     // makes into the firmware framework. Apache-2.0.
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")

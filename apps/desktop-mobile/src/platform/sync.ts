@@ -1,5 +1,5 @@
 // Typed facade over the sync commands (apps/desktop-mobile/src-tauri/src/sync.rs).
-// Sync is a developer preview. Servers either sign users in through the system
+// Servers either sign users in through the system
 // browser (auth.v1) or are the local development test server (typed account name).
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";

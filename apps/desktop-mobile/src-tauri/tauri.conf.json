@@ -27,12 +27,20 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage"],
+    "targets": ["deb", "appimage", "nsis", "dmg", "app"],
+    "publisher": "Penroam contributors",
+    "license": "MPL-2.0",
+    "homepage": "https://penroam.ink",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "android": { "minSdkVersion": 26 },
     "iOS": { "minimumSystemVersion": "16.0" }
   },
   "plugins": {
+    "updater": {
+      "pubkey": "",
+      "requireSignedVersion": true,
+      "endpoints": ["https://github.com/nh-99/penroam/releases/download/updates-stable/latest.json"]
+    },
     "deep-link": {
       "mobile": [{ "scheme": ["ink.penroam.app"], "appLink": false }]
     }

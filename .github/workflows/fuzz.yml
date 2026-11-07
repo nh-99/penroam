@@ -15,12 +15,12 @@ jobs:
       matrix:
         target: [decode_page, journal_open, sync_batch_frame, import_xournal, import_jex, import_text, import_backup, import_enex]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz --locked
       - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=1200 -rss_limit_mb=2048
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fuzz-${{ matrix.target }}
           path: fuzz/artifacts

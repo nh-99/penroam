@@ -121,7 +121,7 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   picker or the billing portal. When the account accepts uploads again (focus after checkout),
   the app syncs at once instead of waiting for the next attempt. Account deletion needs a fresh
   browser sign-in and only ever erases the cloud copy.
-* **Sync engine (developer preview).** `penroam-sync` keeps its own state under
+* **Sync engine.** `penroam-sync` keeps its own state under
   `<library>/sync/`: an append-only operation log of every synced operation (local and remote),
   parked and quarantined envelopes, and the verified key log pin. One reconcile has three phases
   so the library lock is never held during network I/O:
@@ -279,7 +279,7 @@ the answer to `power_report` (`src-tauri/src/power.rs`) for the search and sync 
 ## 7. Platform constraints
 
 * **Linux/Windows/macOS desktop**: WebKitGTK / WebView2 / WKWebView. Web canvas only.
-* **Android**: system WebView (Chromium). Release builds drop the `INTERNET` permission.
+* **Android**: system WebView (Chromium). The app opts out of Android Auto Backup, because the library is not encrypted on disk.
   BOOX Onyx SDK pinned (pen 1.5.2 / device 1.3.3 / base 1.8.4) from the official Onyx Maven repo.
 * **iOS/iPadOS**: Tauri iOS builds require macOS + Xcode (not available in this environment).
   WKWebView renders rAF at 60 Hz unless the private `PreferPageRenderingUpdatesNear60FPSEnabled`

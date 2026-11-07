@@ -23,7 +23,7 @@ docs/                  architecture, formats, protocol, platforms, development, 
 
 ## Build and run
 
-Prerequisites: Rust stable, Node 24 + pnpm 10, Tauri 2 Linux deps (`libwebkit2gtk-4.1-dev`).
+Prerequisites: Rust (rustup installs the version in `rust-toolchain.toml`), Node 24 + pnpm 10, Tauri 2 Linux deps (`libwebkit2gtk-4.1-dev`).
 
 ```bash
 pnpm install
@@ -137,7 +137,7 @@ Xephyr :7 -screen 1300x940 -ac & DISPLAY=:7 python3 tools/linux-e2e/e2e.py scrip
 
 Sessions used so far are in `tools/linux-e2e/sessions/`; see [`platforms/linux.md`](platforms/linux.md).
 
-## Sync (developer preview)
+## Sync
 
 Sync goes to Penroam Cloud (`https://sync.penroam.ink`). Release builds accept no other
 server; the backend refuses any other address whatever the settings send. In **debug builds**,
@@ -166,10 +166,10 @@ In developer mode, server addresses must be `https://`, or `http://` on this com
 
 ```bash
 cargo run -p penroam-sync-testkit --bin penroam-sync-testserver -- --listen 127.0.0.1:8787 --data /tmp/penroam-sync-server
-PENROAM_DEV_SYNC=1 pnpm tauri dev      # sync settings appear in debug builds or with PENROAM_DEV_SYNC=1
+pnpm tauri dev
 ```
 
-In the app: **Settings → Sync (developer preview)**. Set up the first device (save the recovery
+In the app: **Settings → Sync**. Set up the first device (save the recovery
 code), then on a second profile (another `PENROAM_LIBRARY_DIR`) choose pairing and approve its
 code from the first device, or use the recovery code.
 
@@ -331,9 +331,58 @@ it avoids compiling:
   macOS in debug. Some compile-time checks exist only in release builds, such as the `log` level
   cap in `apps/desktop-mobile/src-tauri/src/lib.rs`, so a branch can pass and still fail on `main`.
 * `.github/workflows/release-check.yml` builds the release profile on Windows and macOS nightly.
+* `.github/workflows/security.yml` runs on every push and daily, because advisories appear without
+  any change here. It runs `cargo deny` (`deny.toml`: advisories, licences, sources), `pnpm audit`
+  and gitleaks (`.gitleaks.toml`). A new advisory fails it. Upgrade if you can; otherwise add the
+  id to `deny.toml` with a reason. Allowing a new licence is a licence decision, not a dependency
+  update.
+* Actions are pinned to full commit SHAs, with the tag in a comment, and the Rust version is pinned
+  in `rust-toolchain.toml`. Update either on purpose, in its own change.
+* On `main`, `tools/perf-warn.py` compares the Linux smoke benchmark with the previous run and
+  leaves a warning on a large regression. It never fails a build: shared runners are too noisy.
 
 Pushes of `sync-protocol-v*` tags run only the sync contract job. Pull requests from this
 repository are skipped because the branch push already ran; pull requests from forks run in full.
+
+## Releases
+
+Everything below runs from a tag, and nothing reaches users without a person publishing it.
+
+1. Set the version in `Cargo.toml` (workspace), `apps/desktop-mobile/package.json` and
+   `tauri.conf.json`, and add a `## X.Y.Z` section to `CHANGELOG.md`. Update
+   [`platforms/release-matrix.md`](platforms/release-matrix.md) and
+   [`known-issues.md`](known-issues.md).
+2. Push the tag `vX.Y.Z`, or `vX.Y.Z-beta.N` (also `alpha`, `rc`). `release.yml` checks that the tag
+   matches all three versions, runs the tests, builds Linux, Windows, macOS and Android, and
+   makes a **draft** release with `SHA256SUMS`, `contract-manifest.json`, a CycloneDX SBOM, build
+   provenance attestations and `latest.json`.
+3. Read the draft, try the packages, and publish it.
+4. Run `promote.yml` with the tag and `beta`, and later `stable`. That copies `latest.json` to the
+   `updates-beta` or `updates-stable` release, which is what the app reads
+   (`apps/desktop-mobile/src-tauri/src/updates.rs`).
+
+The updater never downgrades, so a bad release is fixed by promoting a newer one. Notes are stored
+apart from the app, so installing an older build by hand is safe: it refuses formats it doesn't know.
+
+A stable tag fails unless every signing secret is present. A pre-release may be unsigned, and only
+`tools/release/release.py` decides this. `python3 -m unittest discover -s tools/release` tests it.
+
+| Name (GitHub) | Kind | Used for |
+|---|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret | Signing updates. The public key goes in `plugins.updater.pubkey` in `tauri.conf.json`; while that is empty, the app has no update feature |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`; variable `APPLE_SIGNING_IDENTITY` | Secret, variable | macOS signing and notarization, read by the Tauri CLI |
+| `WINDOWS_SIGN_COMMAND` | Variable | Passed to `bundle.windows.signCommand`, with `%1` for the file |
+| `PENROAM_ANDROID_KEYSTORE_BASE64`, `PENROAM_ANDROID_KEYSTORE_PASSWORD`, `PENROAM_ANDROID_KEY_ALIAS`, `PENROAM_ANDROID_KEY_PASSWORD` | Secret | The Android release key. Without it, builds use the debug key, which is for test devices only |
+
+Generate the update key once with `pnpm tauri signer generate` and keep the private half offline as
+well: losing it means existing installs can't update. `promote.yml` uses the `release` GitHub
+environment, so required reviewers can be added there.
+
+iOS isn't in `release.yml`: it needs an Apple team and a checked-in `gen/apple` project. See
+[`platforms/ipad.md`](platforms/ipad.md). Store builds never contain purchase links or prices.
+
+Keep `release.py notices` output out of the repository: it is generated for each build into
+`apps/desktop-mobile/public/` and shown under **Settings → About**.
 
 ## Fuzzing
 

@@ -1,0 +1,46 @@
+name: promote
+
+# Offers a published release to the app's in-app updater, one channel at a time: beta first, then
+# stable once it has held up. The updater never goes backwards, so a bad rollout is fixed by
+# promoting a new, higher version. docs/development.md#releases has the steps.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release, e.g. v1.2.0
+        required: true
+      channel:
+        description: Update channel
+        type: choice
+        options: [beta, stable]
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    environment: release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+      CHANNEL: ${{ inputs.channel }}
+    steps:
+      - name: Stable takes finished versions only
+        run: |
+          if [ "$CHANNEL" = stable ] && [[ "$TAG" == *-* ]]; then
+            echo "$TAG is a pre-release and can't go to the stable channel" >&2
+            exit 1
+          fi
+      - name: The release is public and its feed verifies against SHA256SUMS
+        run: |
+          [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = false ]
+          gh release download "$TAG" --pattern latest.json --pattern SHA256SUMS
+          grep ' latest.json$' SHA256SUMS | sha256sum -c -
+      - name: Publish the feed
+        run: |
+          gh release view "updates-$CHANNEL" >/dev/null 2>&1 || gh release create "updates-$CHANNEL" \
+            --title "Update feed: $CHANNEL" --notes "Used by the in-app updater." --latest=false
+          gh release upload "updates-$CHANNEL" latest.json --clobber

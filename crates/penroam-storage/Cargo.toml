@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "penroam-storage"
 description = "Durable local Penroam library (atomic files + operation journal) and the portable .penroam archive"
 version.workspace = true

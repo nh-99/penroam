@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "penroam-sync-testkit"
 description = "Public in-memory fake Penroam sync server and deterministic protocol fixture generator (test scaffolding, not production)"
 version.workspace = true

@@ -6,6 +6,7 @@ import type { Tool } from "../editor/engine";
 import type { PenOnlyMode } from "../editor/input";
 import type { Paper } from "../generated/Paper";
 import type { TemplateKind } from "../generated/TemplateKind";
+import type { UpdateChannel } from "../platform/updates";
 
 export interface AutoBackup {
   target: "off" | "folder" | "webdav";
@@ -45,6 +46,9 @@ interface Persisted {
   template: TemplateKind;
   sidebarOpen: boolean;
   epaperChosenAutomatically: boolean;
+  /** Check for an update at start-up. Off until the user turns it on: a check is a network request. */
+  updateCheck: boolean;
+  updateChannel: UpdateChannel;
   /** Developer mode (debug builds only): choose another sync server. */
   developerMode: boolean;
 }
@@ -69,6 +73,8 @@ const defaults: Persisted = {
   template: "ruled",
   sidebarOpen: true,
   epaperChosenAutomatically: false,
+  updateCheck: false,
+  updateChannel: "stable",
   developerMode: false,
 };
 

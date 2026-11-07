@@ -20,7 +20,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.90"
 license = "MPL-2.0"
-repository = "https://github.com/penroam/penroam"
+repository = "https://github.com/nh-99/penroam"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -30,7 +30,9 @@ thiserror = "2"
 sha2 = "0.10"
 ts-rs = { version = "12", features = ["uuid-impl", "serde-json-impl", "no-serde-warnings"] }
 lopdf = { version = "0.46", default-features = false }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# `deflate-flate2`, not `deflate`: that one switches flate2 to zlib-rs for the whole build, which
+# changes the bytes of every compressed page (tests/golden). Decoding would still work.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 tempfile = "3"
 penroam-core = { path = "crates/penroam-core" }
 penroam-storage = { path = "crates/penroam-storage" }

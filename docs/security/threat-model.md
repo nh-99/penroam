@@ -3,8 +3,8 @@
 **Status: `security_review_pending`.** This design and its implementation
 (`crates/penroam-sync`) have **not** been reviewed by an independent security reviewer. Do not
 describe Penroam sync as audited end-to-end encryption until that review is done and its
-findings are resolved. Sync is a developer preview. It works against the local development
-test server and against servers that implement the public sign-in (`auth.v1`).
+findings are resolved. Release builds sync only with Penroam Cloud; debug builds also work
+against the local development test server and other servers with the public sign-in (`auth.v1`).
 
 ## What we protect
 
@@ -174,6 +174,14 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
   insert forged operations into a checkpoint; member devices are trusted not to. Without any
   usable checkpoint, a device whose cursor expired stops pulling (`rebaseRequired`) but keeps
   its data and keeps uploading.
+
+## The WebView
+
+Note content never runs as script: nothing in the app inserts it as HTML, and the content security
+policy refuses inline and remote scripts. This matters, because many commands take a file path that
+came from a system dialog, and the backend doesn't check a path against that dialog. Script running
+in the WebView could therefore read and write files as the app. Treat any way of running script
+from note content as critical.
 
 ## Before calling it end-to-end encrypted
 

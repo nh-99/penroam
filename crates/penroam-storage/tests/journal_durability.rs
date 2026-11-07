@@ -773,7 +773,7 @@ fn zip_entries(path: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
             let mut f = z.by_index(i).unwrap();
             let mut b = Vec::new();
             f.read_to_end(&mut b).unwrap();
-            (f.name().to_string(), b)
+            (f.name().unwrap().to_string(), b)
         })
         .collect()
 }

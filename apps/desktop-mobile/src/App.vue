@@ -17,6 +17,7 @@ import { api, hasHost } from "./platform/ipc";
 import { flushEverything } from "./platform/lifecycle";
 import { startAutoBackup, watchProgress } from "./platform/backup";
 import { detectNativeInk } from "./platform/nativeInk";
+import { checkAtStartup } from "./platform/updates";
 
 const lib = useLibrary();
 watchProgress(lib);
@@ -46,7 +47,7 @@ onMounted(async () => {
   if (!hasHost()) return;
   console.info("startup: library loaded");
   void search.init();
-  // sync (developer preview): one query at start-up; nothing more unless it is available
+  // sync: one query at start-up; nothing more unless a backend reports it available
   void sync.init().then(() => {
     if (!sync.available) return;
     watch(() => lib.notebooks, (ns) => sync.arrived(ns.map((n) => n.id)));
@@ -59,6 +60,9 @@ onMounted(async () => {
       if (!lib.current) void lib.refresh();
       else if (c.notebookIds.includes(lib.current.id)) void lib.reloadCurrent();
     });
+  });
+  void checkAtStartup(settings.s.updateCheck, settings.s.updateChannel).then((offer) => {
+    if (offer) ui.success(`Penroam ${offer.version} is available. Install it from Settings → About.`);
   });
   const bench = await withTimeout(api.autobenchRequested(), 5000, "autobench query").catch((e) => {
     console.error("autobench query failed", e);

@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "penroam-search"
 description = "Penroam local search: handwriting regions, recognition providers and the derived SQLite full-text index"
 version.workspace = true

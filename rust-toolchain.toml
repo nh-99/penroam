@@ -1,0 +1,6 @@
+# The toolchain every build and release uses, so that a release can be rebuilt from its tag.
+# Raise it on purpose in its own change; `rust-version` in Cargo.toml stays the minimum supported.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

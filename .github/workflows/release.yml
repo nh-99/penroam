@@ -1,0 +1,201 @@
+name: release
+
+# A version tag builds every desktop package and the Android APK, and leaves them on a DRAFT
+# GitHub release. Nothing reaches users until a person publishes the draft and runs promote.yml.
+# docs/development.md#releases describes the process and the secrets.
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: The tag matches the repository
+        id: version
+        run: echo "version=$(python3 tools/release/release.py check-version "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+      - name: Signing is complete, or this is a pre-release
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
+          PENROAM_ANDROID_KEYSTORE_BASE64: ${{ secrets.PENROAM_ANDROID_KEYSTORE_BASE64 }}
+        run: python3 tools/release/release.py sign-status "$GITHUB_REF_NAME"
+      - name: The version has a changelog entry
+        run: grep -q "^## ${GITHUB_REF_NAME#v}" CHANGELOG.md
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - uses: ./.github/actions/setup-rust
+        with:
+          shared-key: linux-dev
+      - uses: ./.github/actions/linux-deps
+        with:
+          packages: poppler-utils
+      - run: mkdir -p apps/desktop-mobile/dist && touch apps/desktop-mobile/dist/index.html
+      - name: Tests, including the golden format and protocol fixtures
+        run: cargo test --workspace --locked
+
+  desktop:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, name: linux-x86_64, args: "--bundles deb,appimage" }
+          - { os: windows-latest, name: windows-x86_64, args: "--bundles nsis" }
+          - { os: macos-latest, name: macos-aarch64, args: "--bundles dmg,app --target aarch64-apple-darwin", target: aarch64-apple-darwin }
+          - { os: macos-latest, name: macos-x86_64, args: "--bundles dmg,app --target x86_64-apple-darwin", target: x86_64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 24, cache: pnpm }
+      - run: rustup toolchain install --no-self-update
+        shell: bash
+      - if: matrix.target
+        run: rustup target add ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-deps
+      - run: pnpm install --frozen-lockfile
+      - name: Licence notices for the About page
+        shell: bash
+        run: python3 tools/release/release.py notices apps/desktop-mobile/public/third-party-notices.txt
+      - name: Build
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
+          BUILD_ARGS: ${{ matrix.args }}
+        run: |
+          config='{}'
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            config=$(jq -c '.bundle.createUpdaterArtifacts = true' <<< "$config")
+          fi
+          if [ -n "$WINDOWS_SIGN_COMMAND" ]; then
+            config=$(jq -c --arg c "$WINDOWS_SIGN_COMMAND" '.bundle.windows.signCommand = $c' <<< "$config")
+          fi
+          pnpm tauri build $BUILD_ARGS --config "$config"
+      - name: Collect the packages
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          BUILD_NAME: ${{ matrix.name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir out
+          find target -path '*/release/bundle/*' -type f \
+            \( -name '*.deb' -o -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*-setup.exe' \
+               -o -name '*-setup.exe.sig' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) \
+            -exec cp {} out/ \;
+          # Both Mac builds produce Penroam.app.tar.gz; the feed tells them apart by name.
+          if [ -n "$TARGET" ]; then
+            for f in out/Penroam.app.tar.gz*; do
+              [ -e "$f" ] && mv "$f" "out/Penroam_${VERSION}_${BUILD_NAME}.${f#out/Penroam.}"
+            done
+          fi
+          ls -la out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.name }}
+          path: out/*
+          if-no-files-found: error
+
+  android:
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with: { distribution: temurin, java-version: 21, cache: gradle }
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with: { packages: "platform-tools ndk;29.0.14206865" }
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 24, cache: pnpm }
+      - run: rustup toolchain install --no-self-update && rustup target add aarch64-linux-android
+      - run: pnpm install --frozen-lockfile
+      - run: python3 tools/release/release.py notices apps/desktop-mobile/public/third-party-notices.txt
+      - name: Build
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+          VERSION: ${{ needs.verify.outputs.version }}
+          PENROAM_ANDROID_KEYSTORE_BASE64: ${{ secrets.PENROAM_ANDROID_KEYSTORE_BASE64 }}
+          PENROAM_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.PENROAM_ANDROID_KEYSTORE_PASSWORD }}
+          PENROAM_ANDROID_KEY_ALIAS: ${{ secrets.PENROAM_ANDROID_KEY_ALIAS }}
+          PENROAM_ANDROID_KEY_PASSWORD: ${{ secrets.PENROAM_ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$PENROAM_ANDROID_KEYSTORE_BASE64" ]; then
+            export PENROAM_ANDROID_KEYSTORE="$RUNNER_TEMP/release.keystore"
+            base64 -d <<< "$PENROAM_ANDROID_KEYSTORE_BASE64" > "$PENROAM_ANDROID_KEYSTORE"
+          fi
+          pnpm tauri android build --apk --target aarch64
+          mkdir out
+          cp apps/desktop-mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk \
+            "out/Penroam_${VERSION}_android-arm64.apk"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android
+          path: out/*
+          if-no-files-found: error
+
+  draft:
+    needs: [verify, desktop, android]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # the draft release
+      id-token: write # keyless provenance signature
+      attestations: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Software bill of materials
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: release/penroam-${{ needs.verify.outputs.version }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Checksums, manifests, notes and update feed
+        env:
+          RELEASE_DATE: ${{ github.event.head_commit.timestamp }}
+        run: python3 tools/release/release.py assemble "$VERSION" "$GITHUB_SHA" release
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: release/*
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=$([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease || true)
+          mv release/release-notes.md notes.md
+          gh release create "$GITHUB_REF_NAME" release/* --draft $prerelease --verify-tag \
+            --title "Penroam $VERSION" --notes-file notes.md

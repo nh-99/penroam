@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Sync (developer preview) settings. Shown only when the backend reports
-// sync as available. Notes never depend on sync: everything here can be
+// Sync settings. Shown only when the backend reports sync as available.
+// Notes never depend on sync: everything here can be
 // disconnected without touching local notebooks.
 import { computed, onMounted, ref } from "vue";
 import { Cloud, Copy, KeyRound, Link2, LogIn, Pause, Pencil, Play, RefreshCw, ShieldAlert, Smartphone, Trash2, Unplug } from "@lucide/vue";
@@ -101,7 +101,6 @@ async function confirmDisconnect() {
   <section class="space-y-3" aria-labelledby="sync-h">
     <h3 id="sync-h" class="flex items-center gap-2 text-sm font-medium">
       <Cloud :size="16" />Sync
-      <span class="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted epaper:border">developer preview</span>
     </h3>
     <p class="text-xs leading-relaxed text-muted">
       <template v-if="sync.customServers">Developer mode: works with any Penroam sync server (you sign in through your web browser) or a local development test server.</template>

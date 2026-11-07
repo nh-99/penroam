@@ -19,6 +19,9 @@ Describe what the code actually does instead. For example, write "the operation 
 * `docs/platforms/`: per-platform build notes and known risks
 * `docs/development.md`: building, testing and tooling
 * `docs/benchmarks/protocol.md`: benchmark method
+* `docs/policies/`: privacy and accessibility statements
+* `docs/support.md`: help for users
+* `docs/known-issues.md`: current known problems and workarounds
 
 Progress reports, plans, test-run evidence, benchmark results, device-run logs and historical
 research do not belong in the repository. The agent-docs playbook asks for

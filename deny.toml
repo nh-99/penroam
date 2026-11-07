@@ -1,0 +1,51 @@
+# Dependency policy, checked by .github/workflows/security.yml with cargo-deny.
+# The rules and how to handle a new advisory are in docs/development.md.
+[graph]
+# Every platform we ship, so that Windows-, Apple- and Android-only crates are checked too.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "aarch64-apple-ios",
+  "aarch64-linux-android",
+]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Unmaintained notices with no fixed release. Each entry says why it is accepted.
+ignore = [
+  # glib-macros 0.18 (gtk-rs, through Tauri and our touchpad pinch code). Build-time only, and it
+  # goes away when Tauri moves to a newer gtk-rs.
+  { id = "RUSTSEC-2024-0370", reason = "build-time macro helper pulled in by Tauri's gtk-rs" },
+  # zbus 5 (Linux keyring and the opener plugin). The crates were folded into zbus 6, so these
+  # are notices about packaging, not defects. Clears when the keyring and Tauri crates move on.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; waiting on keyring and tauri-plugin-opener" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; waiting on keyring and tauri-plugin-opener" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; waiting on keyring and tauri-plugin-opener" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licences and MPL-2.0 only. Adding a copyleft licence here is a licence decision, not
+# a dependency update: GPL-licensed code can't be combined with this repository as it stands.
+allow = [
+  "0BSD", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-3-Clause",
+  "CC0-1.0", "CDLA-Permissive-2.0", "ISC", "MIT", "MIT-0", "MPL-2.0",
+  "Unicode-3.0", "Unlicense", "Zlib",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

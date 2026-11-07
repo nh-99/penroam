@@ -276,7 +276,10 @@ pub fn install_archive_from<R: std::io::Read + std::io::Seek>(
             if f.is_dir() {
                 continue;
             }
-            let name = f.name().to_string();
+            let name = f
+                .name()
+                .map_err(|e| ModelError::Manifest(e.to_string()))?
+                .to_string();
             if name.is_empty() || name.contains(['/', '\\', ':']) || name.starts_with('.') {
                 return Err(ModelError::Manifest(format!(
                     "bad file name {name:?} in archive"

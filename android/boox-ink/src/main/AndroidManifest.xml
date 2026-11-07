@@ -25,5 +25,4 @@
     <!-- Hosts must still add tools:replace="android:label" to their own
          <application>: library-level tools:remove does not win against the
          app manifest vs. transitive-AAR conflict. -->
-    <application tools:remove="android:allowBackup" />
 </manifest>

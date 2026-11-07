@@ -1,10 +1,7 @@
 name: Set up Rust
-description: Stable toolchain and a build cache that only `main` writes to.
+description: The toolchain from rust-toolchain.toml and a build cache that only `main` writes to.
 
 inputs:
-  components:
-    description: Extra toolchain components, comma separated.
-    default: ""
   shared-key:
     description: Share a cache between jobs. Empty gives this job its own.
     default: ""
@@ -15,9 +12,9 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        components: ${{ inputs.components }}
+    - name: Install the pinned toolchain
+      shell: bash
+      run: rustup toolchain install --no-self-update
     # ort-sys records its download directory as a link path, and a cached target/ skips the build
     # script that would fetch it again. So the directory has to travel with the cache.
     - name: Keep ONNX Runtime in the cache
@@ -27,7 +24,7 @@ runs:
       run: echo "ORT_CACHE_DIR=$ORT_DIR" >> "$GITHUB_ENV"
     # Branches restore main's cache and never save: the repository's 10 GB allowance would
     # otherwise fill with near-identical copies and evict the one everything restores from.
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       with:
         shared-key: ${{ inputs.shared-key }}
         workspaces: ${{ inputs.workspaces }}

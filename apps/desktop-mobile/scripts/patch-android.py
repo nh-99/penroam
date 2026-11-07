@@ -7,10 +7,11 @@ Tauri's generated Android project. Run after `pnpm tauri android init`:
 1. include ':boox-ink' from <repo>/android/boox-ink
 2. official Onyx Maven repository (HTTP, group-restricted)
 3. pinned Onyx SDK versions in gradle.properties
-4. tools:replace="android:label" (the Onyx AARs declare an application label)
-5. pickFirst libc++_shared.so; debug-key signing for sideloaded release test APKs
-6. release builds drop the INTERNET permission: the app is offline by design
-7. Microsoft's ONNX Runtime for Android (MIT): libonnxruntime.so for the optional handwriting
+4. tools:replace for the application label (the Onyx AARs declare one) and allowBackup=false:
+   notes are not encrypted on disk and must not reach Android cloud backup
+5. pickFirst libc++_shared.so; the release keystore from CI, or the debug key for sideloaded
+   test APKs
+6. Microsoft's ONNX Runtime for Android (MIT): libonnxruntime.so for the optional handwriting
    model, which the Rust side (`ort` with `load-dynamic`) opens at run time
 """
 import pathlib, re
@@ -59,7 +60,7 @@ patch(gen / "gradle.properties", "onyxPenVersion",
 patch(gen / "app" / "src" / "main" / "AndroidManifest.xml", "tools:replace",
       lambda t: t.replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
                           '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n    xmlns:tools="http://schemas.android.com/tools">')
-                 .replace('android:label="@string/app_name"', 'android:label="@string/app_name"\n        tools:replace="android:label"', 1))
+                 .replace('android:label="@string/app_name"', 'android:allowBackup="false"\n        android:label="@string/app_name"\n        tools:replace="android:label,android:allowBackup"', 1))
 
 APP = gen / "app" / "build.gradle.kts"
 patch(APP, "libc++_shared", lambda t: t.replace("""    buildFeatures {
@@ -69,18 +70,23 @@ patch(APP, "libc++_shared", lambda t: t.replace("""    buildFeatures {
     }
     // Penroam: onyxsdk-pen and mmkv both ship libc++_shared.so.
     packaging { jniLibs { pickFirsts += "**/libc++_shared.so" } }""", 1))
-patch(APP, "Penroam: sign sideloaded release", lambda t: t.replace("""        getByName("release") {""", """        getByName("release") {
-            // Penroam: sign sideloaded release test builds with the debug key.
-            // Not for distribution (no app-store release yet).
-            signingConfig = signingConfigs.getByName("debug")""", 1))
+patch(APP, "Penroam: release CI sets", lambda t: t.replace("""        getByName("release") {""", """        getByName("release") {
+            // Penroam: release CI sets PENROAM_ANDROID_KEYSTORE. Local builds fall back to the
+            // debug key, which is for sideloaded test builds only.
+            signingConfig = if (System.getenv("PENROAM_ANDROID_KEYSTORE").isNullOrEmpty()) {
+                signingConfigs.getByName("debug")
+            } else {
+                signingConfigs.create("release") {
+                    storeFile = file(System.getenv("PENROAM_ANDROID_KEYSTORE"))
+                    storePassword = System.getenv("PENROAM_ANDROID_KEYSTORE_PASSWORD")
+                    keyAlias = System.getenv("PENROAM_ANDROID_KEY_ALIAS")
+                    keyPassword = System.getenv("PENROAM_ANDROID_KEY_PASSWORD")
+                }
+            }""", 1))
 
-patch(gen / "app" / "src" / "release" / "AndroidManifest.xml", "INTERNET", lambda _t: """<?xml version="1.0" encoding="utf-8"?>
-<!-- Penroam release builds are offline: no network permission at all. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
-</manifest>
-""")
+# The Onyx repository only works over plain HTTP, so its artifacts are pinned by SHA-256.
+(gen / "gradle" / "verification-metadata.xml").write_bytes(
+    (shared / "gradle" / "verification-metadata.xml").read_bytes())
 
 # ONNX Runtime ships as an AAR whose libonnxruntime.so Gradle packages into the APK; the Rust
 # search worker loads it only when a handwriting model is installed.

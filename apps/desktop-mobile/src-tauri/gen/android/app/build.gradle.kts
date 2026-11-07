@@ -39,9 +39,18 @@ android {
             }
         }
         getByName("release") {
-            // Penroam: sign sideloaded release test builds with the debug key.
-            // Not for distribution (no app-store release yet).
-            signingConfig = signingConfigs.getByName("debug")
+            // Penroam: release CI sets PENROAM_ANDROID_KEYSTORE. Local builds fall back to the
+            // debug key, which is for sideloaded test builds only.
+            signingConfig = if (System.getenv("PENROAM_ANDROID_KEYSTORE").isNullOrEmpty()) {
+                signingConfigs.getByName("debug")
+            } else {
+                signingConfigs.create("release") {
+                    storeFile = file(System.getenv("PENROAM_ANDROID_KEYSTORE"))
+                    storePassword = System.getenv("PENROAM_ANDROID_KEYSTORE_PASSWORD")
+                    keyAlias = System.getenv("PENROAM_ANDROID_KEY_ALIAS")
+                    keyPassword = System.getenv("PENROAM_ANDROID_KEY_PASSWORD")
+                }
+            }
             optimization {
                enable = true
             }

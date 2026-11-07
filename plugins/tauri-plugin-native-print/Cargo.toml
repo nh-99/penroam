@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "tauri-plugin-native-print"
 description = "Penroam printing: hands a finished PDF to the operating system's print dialog"
 version.workspace = true

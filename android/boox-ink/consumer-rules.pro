@@ -5,9 +5,11 @@
 -keep class com.nohowtech.booxink.** { *; }
 -keep class org.lsposed.hiddenapibypass.** { *; }
 
-# Optional classes referenced by Onyx transitive deps (okhttp TLS providers,
-# fst/jackson, joda, slf4j, errorprone annotations). Never loaded at runtime here.
+# Optional classes referenced by Onyx transitive deps (fst/jackson, joda, slf4j, errorprone annotations). Never loaded at runtime here.
 -dontwarn org.slf4j.**
+# Left out of the build on purpose, see build.gradle.kts. Only the SDK's firmware updater uses them.
+-dontwarn okhttp3.**
+-dontwarn retrofit2.**
 -dontwarn org.conscrypt.**
 -dontwarn org.openjsse.**
 -dontwarn org.bouncycastle.**

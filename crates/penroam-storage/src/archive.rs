@@ -395,7 +395,7 @@ impl Library {
         let mut declared_total: u64 = 0;
         for i in 0..zip.len() {
             let f = zip.by_index_raw(i).map_err(zerr)?;
-            let name = f.name().to_string();
+            let name = f.name().map_err(zerr)?.to_string();
             if !names.insert(name.clone()) {
                 return Err(StorageError::Archive(format!("duplicate entry {name}")));
             }

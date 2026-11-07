@@ -1,0 +1,12 @@
+# Default rules, minus test data that only looks like a credential. Keep these paths exact: a real
+# secret anywhere else must still fail the scan.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Published crypto test vectors and sync protocol fixtures"
+paths = [
+  '''^crates/penroam-sync/tests/vectors/crypto-vectors\.json$''',
+  '''^crates/penroam-sync-protocol/fixtures/v1/auth-session-request\.json$''',
+  '''^crates/penroam-sync-testkit/src/fixtures\.rs$''',
+]

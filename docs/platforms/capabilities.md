@@ -3,6 +3,8 @@
 What each device class does, and how much of it has been checked by hand. A device is listed as
 tested only with real pen hardware. Everything else is what the code is built to do.
 
+Release status and packages for each platform are in [`release-matrix.md`](release-matrix.md).
+
 ## Support levels
 
 | Level | Meaning |

@@ -17,7 +17,7 @@
     "@lucide/vue": "1.66.0",
     "@tauri-apps/api": "2.12.4",
     "@tauri-apps/plugin-dialog": "2.8.4",
-    "markdown-it": "14.1.0",
+    "markdown-it": "14.3.3",
     "mathjax-full": "3.2.2",
     "pdfjs-dist": "6.5.438",
     "pinia": "4.1.0",

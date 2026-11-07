@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Accessible tab bar: role=tablist with a roving tabindex, so Tab moves past the bar and the
 // arrow keys, Home and End move along it. The panel is the caller's, with id
-// `settings-panel-<tab id>`. It scrolls sideways rather than wrapping on narrow screens.
+// `settings-panel-<tab id>`. It scrolls sideways rather than wrapping on narrow screens, with no
+// visible scrollbar: GTK's overlay scrollbar sits on the labels and takes their clicks.
 import { nextTick, ref } from "vue";
 
 const props = defineProps<{ tabs: { id: string; label: string }[]; modelValue: string; label: string }>();
@@ -21,10 +22,10 @@ async function onKey(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div ref="bar" role="tablist" :aria-label="label" class="flex gap-1 overflow-x-auto border-b border-line" @keydown="onKey">
+  <div ref="bar" role="tablist" :aria-label="label" class="flex gap-0.5 overflow-x-auto border-b border-line [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" @keydown="onKey">
     <button v-for="t in tabs" :id="`settings-tab-${t.id}`" :key="t.id" type="button" role="tab"
       :aria-selected="t.id === modelValue" :aria-controls="`settings-panel-${t.id}`" :tabindex="t.id === modelValue ? 0 : -1"
-      class="-mb-px shrink-0 border-b-2 px-3 py-2 text-sm"
+      class="-mb-px shrink-0 border-b-2 px-2.5 py-2 text-sm"
       :class="t.id === modelValue ? 'border-brand font-medium text-brand epaper:border-black epaper:font-bold epaper:text-black' : 'border-transparent text-muted hover:text-ink'"
       @click="emit('update:modelValue', t.id)">
       {{ t.label }}

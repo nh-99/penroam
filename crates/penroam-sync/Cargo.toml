@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "penroam-sync"
 description = "Offline-first, end-to-end encrypted Penroam sync client (engine, crypto, key log, transports)"
 version.workspace = true

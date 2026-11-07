@@ -104,7 +104,7 @@ fn rewrite(bytes: &[u8], f: impl Fn(&str, Vec<u8>) -> Vec<u8>) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..zin.len() {
         let mut e = zin.by_index(i).unwrap();
-        let name = e.name().to_string();
+        let name = e.name().unwrap().to_string();
         let mut data = Vec::new();
         e.read_to_end(&mut data).unwrap();
         out.start_file(
@@ -566,7 +566,7 @@ fn unzip_all_nested(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     for i in 0..z.len() {
         let mut e = z.by_index(i).unwrap();
-        if e.name().ends_with(".penroam") {
+        if e.name().unwrap().ends_with(".penroam") {
             let mut inner = Vec::new();
             e.read_to_end(&mut inner).unwrap();
             out.extend(unzip_all(&inner));

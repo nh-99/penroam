@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "penroam-interchange"
 description = "Importers and lossy exporters between Penroam notebooks and other file formats"
 version.workspace = true

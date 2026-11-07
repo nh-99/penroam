@@ -27,7 +27,24 @@ devicePixelRatio 1.875), on adb as `c5927068`.
 * Search waits for charging by default, and the sync poll slows from 1 to 5 minutes in battery
   saver. Power state comes from the plugin's `getPower` (`src-tauri/src/power.rs`).
 * Hover rings and animation are off in the ePaper theme.
-* Release APKs have **no INTERNET permission** (`gen/android/app/src/release/AndroidManifest.xml`).
+
+## The Onyx SDK
+
+The pen and ePaper code depends on the Onyx SDK (`onyxsdk-pen`, `-device`, `-base`), which is closed
+source and is linked into the APK, including native libraries. The source in this repository doesn't
+contain it, but an APK does. The SDK's AARs and POMs state no licence. Onyx's sample project,
+`onyx-intl/OnyxAndroidDemo`, is under Apache-2.0, which covers that sample and not the SDK.
+
+Precautions in the build:
+
+* **Pinned files.** `repo.boox.com` only works over plain HTTP, because its HTTPS endpoint offers a
+  Diffie-Hellman key that TLS clients refuse. `android/gradle/verification-metadata.xml` pins each file
+  from that repository by SHA-256, and Gradle stops on any change. After an Onyx version bump, run
+  `apps/desktop-mobile/scripts/pin-onyx-sdk.py` and `patch-android.py`.
+* **No HTTP client for the SDK.** `boox-ink` leaves out OkHttp and Retrofit. The only SDK code that
+  uses them is its firmware updater, which nothing calls. It would throw if it ever were called.
+* **Permissions.** `boox-ink`'s manifest removes the Wi-Fi, Bluetooth, storage and other permissions the
+  SDK asks for. Release APKs ask only for `INTERNET`, which the app's own Rust code uses.
 
 ## Build / install
 

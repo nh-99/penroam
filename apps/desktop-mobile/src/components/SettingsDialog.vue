@@ -10,6 +10,7 @@ import BackupSection from "./BackupSection.vue";
 import SyncSection from "./SyncSection.vue";
 import SearchSection from "./SearchSection.vue";
 import AdvancedSection from "./AdvancedSection.vue";
+import AboutDetails from "./AboutDetails.vue";
 import { useSearch } from "../stores/search";
 import { useSync } from "../stores/sync";
 import { useSettings, type ThemePref } from "../stores/settings";
@@ -121,19 +122,19 @@ function versionTapped() {
           <ShieldCheck :size="18" class="shrink-0 text-ok" />
           <p>
             <template v-if="sync.configured">
-              Penroam works fully offline. Notebooks are stored on this device in an open format and, with the sync preview,
-              uploaded end-to-end encrypted. There are no analytics. The search index and recognized handwriting stay on this device
+              Penroam works fully offline. Notebooks are stored on this device in an open format and, with sync,
+              uploaded end-to-end encrypted. There are no analytics or telemetry. The search index and recognized handwriting stay on this device
               and are never uploaded. Export still works without sync.
             </template>
             <template v-else-if="sync.available">
               Penroam works fully offline. Notebooks are stored only on this device, in an open format. Sync is optional and
-              off until you set it up; there are no analytics, and search, including handwriting recognition, runs on this device.
+              off until you set it up; there are no analytics or telemetry, and search, including handwriting recognition, runs on this device.
               Use Export to move a notebook to another device as a
               <code>.penroam</code> file.
             </template>
             <template v-else>
               Penroam works fully offline. Notebooks are stored only on this device, in an open format; there is no account, cloud,
-              sync or analytics, and search, including handwriting recognition, runs on this device. Use Export to move a notebook to
+              sync, analytics or telemetry, and search, including handwriting recognition, runs on this device. Use Export to move a notebook to
               another device as a <code>.penroam</code> file.
             </template>
             <template v-if="downloadsModel">
@@ -145,6 +146,7 @@ function versionTapped() {
             </template>
           </p>
         </section>
+        <AboutDetails v-if="hasHost()" :ink-path="inkPath?.label ?? null" />
         <p v-if="version" class="text-center text-xs text-muted">
           <button type="button" class="select-none px-2 py-1" @click="versionTapped">Penroam {{ version }}<template v-if="sync.devBuild && settings.s.developerMode"> · developer mode</template></button>
         </p>
