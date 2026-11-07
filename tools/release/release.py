@@ -184,7 +184,10 @@ def notices(out):
              "It includes the following third-party software.\n"]
     for text, packages in sorted(texts.items(), key=lambda item: item[1]):
         lines += [f"\n{'=' * 72}", ", ".join(packages), "=" * 72, text]
-    pathlib.Path(out).write_text("\n".join(lines) + "\n")
+    # A fresh checkout has no `public/` folder: nothing else in it is checked in.
+    out = pathlib.Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines) + "\n")
 
 
 SIGNING = {
