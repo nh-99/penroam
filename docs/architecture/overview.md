@@ -114,13 +114,17 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   in the system browser. No payment provider, price id or payment result passes through the
   app; the server derives the plan from its provider's verified records. A read-only account
   still downloads and exports, and nothing on the device is locked or deleted. Store-distributed
-  mobile builds show the plan and storage only: the backend drops offers and refuses billing
-  links there (`PURCHASES_ALLOWED` in `src-tauri/src/sync.rs`). A banner over the library and
+  mobile builds never open those pages: the backend drops Stripe offers and refuses billing links
+  there (`PURCHASES_ALLOWED` in `src-tauri/src/sync.rs`). A banner over the library and
   the editor (`CloudBanner.vue`, text from `cloudNotice` in `src/platform/sync.ts`) warns at
   90 % storage, when uploads pause, and after a failed payment; on desktop it opens the plan
   picker or the billing portal. When the account accepts uploads again (focus after checkout),
   the app syncs at once instead of waiting for the next attempt. Account deletion needs a fresh
   browser sign-in and only ever erases the cloud copy.
+* **Plans in the app store.** Store builds sell through `tauri-plugin-store-billing` instead of
+  the browser. The plugin only talks to the store. The server looks every purchase up with the store
+  itself, and the app finishes a store transaction only after the server has answered, so a crash
+  or an outage can't lose a purchase.
 * **Sync engine.** `penroam-sync` keeps its own state under
   `<library>/sync/`: an append-only operation log of every synced operation (local and remote),
   parked and quarantined envelopes, and the verified key log pin. One reconcile has three phases

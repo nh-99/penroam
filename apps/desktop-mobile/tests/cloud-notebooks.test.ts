@@ -6,6 +6,7 @@ import type { ErasedNotebook } from "../src/platform/sync";
 const api = vi.hoisted(() => ({
   erasedNotebooks: vi.fn(),
   restoreErased: vi.fn(),
+  storeReconcile: vi.fn(async () => ({ applied: 0, conflicts: 0, waiting: 0, message: null })),
   info: vi.fn(),
   account: vi.fn(async () => null),
 }));

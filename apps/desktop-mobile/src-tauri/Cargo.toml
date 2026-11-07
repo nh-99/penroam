@@ -38,6 +38,7 @@ penroam-sync-protocol = { path = "../../../crates/penroam-sync-protocol" }
 penroam-search = { path = "../../../crates/penroam-search", features = ["windows-ink", "onnx-model"] }
 tauri-plugin-native-ink = { path = "../../../plugins/tauri-plugin-native-ink" }
 tauri-plugin-native-print = { path = "../../../plugins/tauri-plugin-native-print" }
+tauri-plugin-store-billing = { path = "../../../plugins/tauri-plugin-store-billing" }
 
 # Touchpad pinch reaches the app through GTK (src/pinch.rs); the version is the one Tauri links.
 [target.'cfg(target_os = "linux")'.dependencies]

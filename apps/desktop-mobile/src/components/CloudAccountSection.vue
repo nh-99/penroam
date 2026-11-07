@@ -1,14 +1,16 @@
 <script setup lang="ts">
 // Plan and storage of the synced account (servers with account.v1, i.e. Penroam Cloud).
 // Nothing here gates a local feature: notes, editing and export work the same on every plan.
-// Mobile builds get no offers and no billing links from the backend, so they show the plan
-// and storage only.
+// Desktop builds sell through Stripe in the browser and store builds through the app store; the
+// backend sends each only what it may offer.
 import { computed, onMounted, ref } from "vue";
-import { CreditCard, HardDrive, RefreshCw, Trash2, Undo2 } from "@lucide/vue";
+import { CreditCard, ExternalLink, HardDrive, RefreshCw, Trash2, Undo2 } from "@lucide/vue";
 import Btn from "./ui/Btn.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import StorePlans from "./StorePlans.vue";
+import { diagnosticsApi } from "../platform/diagnostics";
 import { useSync } from "../stores/sync";
-import { describePlan, describeReadOnly, formatBytes, usageFraction } from "../platform/sync";
+import { describePlan, describeReadOnly, formatBytes, storeManaged, usageFraction } from "../platform/sync";
 
 const sync = useSync();
 const deleting = ref(false);
@@ -27,10 +29,15 @@ const eraseDay = computed(() =>
   a.value?.deletionEraseAfterMs ? new Date(a.value.deletionEraseAfterMs).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "",
 );
 const unsynced = computed(() => sync.status?.queued ?? 0);
+const inStore = computed(() => !!a.value && storeManaged(a.value));
+const storeName = computed(() => (a.value?.managedIn === "google_play" ? "Google Play" : "the App Store"));
 const deleteMessage = computed(
   () =>
     "Your account and its encrypted cloud copy are erased after a waiting period; until then you can change your mind here. " +
-    "Notes on this device and your other devices are not deleted, and sync stops. A paid plan stops renewing. " +
+    "Notes on this device and your other devices are not deleted, and sync stops. " +
+    (inStore.value
+      ? `Your subscription is billed by ${storeName.value}, and deleting your account doesn't cancel it. Cancel it there, or you'll keep being charged. `
+      : "A paid plan stops renewing. ") +
     "You will sign in again in your browser to confirm." +
     (unsynced.value > 0 ? ` ${unsynced.value} change(s) on this device were not uploaded yet; they stay on this device.` : ""),
 );
@@ -66,6 +73,13 @@ async function confirmDelete() {
     <p v-if="a.planStatus === 'canceling'" class="text-xs leading-relaxed text-muted">
       After that date your account has free storage again. Nothing is deleted; if you store more than that, uploads pause until you make room.
     </p>
+
+    <p v-if="inStore" class="text-xs leading-relaxed text-muted">Billed by {{ storeName }}. Change or cancel this plan there.</p>
+    <Btn v-if="inStore && a.storePurchases" variant="outline" @click="diagnosticsApi.openHelp('subscriptions')">
+      <ExternalLink :size="16" />Manage subscription
+    </Btn>
+
+    <StorePlans />
 
     <!-- desktop builds only: the backend sends no offers or billing links on mobile -->
     <div v-if="a.offers.length" class="space-y-1.5 pt-1">

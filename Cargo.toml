@@ -13,6 +13,7 @@ members = [
   "apps/desktop-mobile/src-tauri",
   "plugins/tauri-plugin-native-ink",
   "plugins/tauri-plugin-native-print",
+  "plugins/tauri-plugin-store-billing",
 ]
 
 [workspace.package]

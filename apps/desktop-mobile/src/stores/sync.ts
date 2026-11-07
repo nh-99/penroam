@@ -6,7 +6,7 @@ import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { hasHost } from "../platform/ipc";
 import { useSettings } from "./settings";
-import { cloudNotice, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ErasedNotebook, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
+import { canBuy, cloudNotice, describeRestore, describeStorePurchase, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ErasedNotebook, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
 
 export type SetupStep = "none" | "recovery" | "pairing" | "compare";
 
@@ -45,6 +45,8 @@ export const useSync = defineStore("sync", () => {
   const accountError = ref<string | null>(null);
   /** A browser step for the account is in progress (billing page, deletion sign-in). */
   const accountBusy = ref(false);
+  /** The outcome of the last store purchase or restore. */
+  const storeMessage = ref<string | null>(null);
   /** The plan picker ("More cloud storage") is open. */
   const upgradeOpen = ref(false);
   /** Banner kinds the user closed in this run; a new kind shows again. */
@@ -94,12 +96,21 @@ export const useSync = defineStore("sync", () => {
     window.addEventListener("focus", onFocus);
     updatePolling();
     // plan and storage for the banner (one request; servers without account.v1 answer null)
+    if (configured.value) void reconcileStore();
     if (configured.value) void refreshAccount();
     if (configured.value) void refreshCloudNotebooks();
   }
 
   function onFocus() {
-    if (configured.value) void refreshAccount();
+    if (!configured.value) return;
+    void reconcileStore();
+    void refreshAccount();
+  }
+
+  /** Delivers anything the app store is still holding, such as a purchase cut off by a crash. */
+  async function reconcileStore() {
+    const r = await syncApi.storeReconcile().catch(() => null);
+    if (r && r.applied > 0) await refreshAccount();
   }
 
   async function refreshCloudNotebooks() {
@@ -145,9 +156,28 @@ export const useSync = defineStore("sync", () => {
   /** Opens the checkout or the billing portal in the system browser (desktop builds). */
   const openBilling = (action: "subscribe" | "manage_billing", offerId?: string) => accountStep(() => syncApi.openBilling(action, offerId));
 
-  /** Opens the plan picker; only when this build may sell plans and the server offers some. */
+  /** Buys a plan through the app store. Only the server's answer changes the plan. */
+  async function buyInStore(offerId: string) {
+    storeMessage.value = null;
+    const r = await accountStep(() => syncApi.storePurchase(offerId));
+    if (!r) return;
+    storeMessage.value = describeStorePurchase(r);
+    if (r.status === "active") upgradeOpen.value = false;
+    await refreshAccount();
+  }
+
+  /** Brings back purchases made on this store account. */
+  async function restorePurchases() {
+    storeMessage.value = null;
+    const r = await accountStep(() => syncApi.storeRestore());
+    if (!r) return;
+    storeMessage.value = describeRestore(r);
+    await refreshAccount();
+  }
+
+  /** Opens the plan picker; only when this build can sell a plan. */
   function showUpgrade() {
-    if (account.value?.purchasesAllowed && account.value.offers.length > 0) upgradeOpen.value = true;
+    if (account.value && canBuy(account.value)) upgradeOpen.value = true;
   }
 
   function dismissNotice(kind: string) {
@@ -380,6 +410,9 @@ export const useSync = defineStore("sync", () => {
     account,
     accountError,
     accountBusy,
+    storeMessage,
+    buyInStore,
+    restorePurchases,
     upgradeOpen,
     notice,
     showUpgrade,

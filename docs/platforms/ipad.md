@@ -68,6 +68,18 @@ static library with the Swift plugin packages. xtool's team prefix ends up in th
 generated project needs added: the sign-in URL scheme and the photo and camera usage strings.
 Export compliance for the encryption is answered in App Store Connect, not set in the plist.
 
+## App Store plans
+
+`plugins/tauri-plugin-store-billing` wraps StoreKit 2 and is reachable only from Rust. The rule that
+matters is in `settle` in `src-tauri/src/sync.rs`: a transaction is finished only once the server
+has it, or says another account does. An unfinished one comes back through `Transaction.unfinished`,
+which the app checks at start-up and whenever it returns to the foreground. The protocol is in
+[`../protocol/sync-protocol-v1.md`](../protocol/sync-protocol-v1.md) §12d.
+
+Plans appear only if App Store Connect has the products named in the server's offers. Builds from
+`xtool` have a prefixed bundle ID, so the store knows no products there and they show no plans:
+purchases need a TestFlight build.
+
 ## On a Mac
 
 ```bash

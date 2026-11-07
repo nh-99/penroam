@@ -49,10 +49,10 @@ use penroam_sync::{
     DeviceView, ErasedNotebook, FileSecretStore, SecretStore, Setup, SyncEngine, SyncError,
     SyncStatus,
 };
-use penroam_sync_protocol::account::actions;
+use penroam_sync_protocol::account::{actions, plan_managers, stores};
 use penroam_sync_protocol::dto::capabilities;
 use penroam_sync_protocol::{
-    AccountState, BillingLinkRequest, ErrorCode as WireCode, SessionTokens,
+    AccountState, BillingLinkRequest, ErrorCode as WireCode, SessionTokens, StorePurchaseRequest,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -189,6 +189,8 @@ enum Cmd {
     Account(Reply<Option<AccountView>>),
     /// A billing page URL (`account.v1`): action and offer id.
     BillingLink(String, Option<String>, Reply<String>),
+    /// Reports a store transaction to the server (`store-purchases.v1`).
+    StorePurchase(String, Reply<StoreReply>),
     /// Withdraw a pending account deletion.
     CancelDeletion(Reply<()>),
     Disconnect(Reply<()>),
@@ -801,6 +803,22 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 let _ = r.send(res.map(|l| l.url).map_err(|e| account_error(&e)));
                 continue;
             }
+            Ok(Cmd::StorePurchase(transaction, r)) => {
+                let req = StorePurchaseRequest {
+                    store: stores::APP_STORE.into(),
+                    transaction,
+                };
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let mut res = engine.transport_mut().store_purchase(&req);
+                if res.as_ref().is_err_and(is_unauthenticated) {
+                    have_token = false;
+                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                        res = engine.transport_mut().store_purchase(&req);
+                    }
+                }
+                let _ = r.send(Ok(store_reply(res)));
+                continue;
+            }
             Ok(Cmd::CancelDeletion(r)) => {
                 ensure(&mut engine, &mut have_token, &mut signed_out);
                 let mut res = engine.transport_mut().cancel_deletion();
@@ -1283,6 +1301,129 @@ pub fn sync_disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(),
 }
 
 #[cfg(test)]
+mod store_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    fn txs(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Runs `settle` with one scripted server answer per transaction.
+    fn run(ids: &[&str], answers: Vec<Result<StoreReply, String>>) -> (StoreSettled, Vec<String>) {
+        let finished = RefCell::new(Vec::new());
+        let mut answers = answers.into_iter();
+        let out = settle(
+            &txs(ids),
+            |_| answers.next().unwrap(),
+            |t| finished.borrow_mut().push(t.to_string()),
+        );
+        (out, finished.into_inner())
+    }
+
+    #[test]
+    fn only_what_the_server_has_is_finished() {
+        let (out, finished) = run(&["1"], vec![Ok(StoreReply::Applied)]);
+        assert_eq!(finished, ["1"]);
+        assert_eq!(out.applied, 1);
+    }
+
+    #[test]
+    fn an_outage_keeps_the_transaction_for_later() {
+        let (out, finished) = run(&["1"], vec![Ok(StoreReply::Retry("try later".into()))]);
+        assert!(
+            finished.is_empty(),
+            "finishing here would lose the purchase"
+        );
+        assert_eq!(
+            (out.waiting, out.message.as_deref()),
+            (1, Some("try later"))
+        );
+    }
+
+    #[test]
+    fn a_stuck_sync_worker_keeps_the_transaction_too() {
+        let (out, finished) = run(&["1"], vec![Err("the sync worker did not answer".into())]);
+        assert!(finished.is_empty());
+        assert_eq!(out.waiting, 1);
+    }
+
+    #[test]
+    fn a_purchase_owned_elsewhere_is_finished_and_explained() {
+        let (out, finished) = run(
+            &["1"],
+            vec![Ok(StoreReply::Conflict("another account".into()))],
+        );
+        assert_eq!(finished, ["1"], "or it would come back forever");
+        assert_eq!(out.conflicts, 1);
+        assert_eq!(out.message.as_deref(), Some("another account"));
+    }
+
+    #[test]
+    fn a_batch_settles_each_transaction_on_its_own() {
+        let (out, finished) = run(
+            &["1", "2", "3"],
+            vec![
+                Ok(StoreReply::Applied),
+                Ok(StoreReply::Retry("later".into())),
+                Ok(StoreReply::Applied),
+            ],
+        );
+        assert_eq!(finished, ["1", "3"]);
+        assert_eq!((out.applied, out.waiting), (2, 1));
+    }
+
+    fn account() -> AccountState {
+        serde_json::from_value(serde_json::json!({
+            "account_id": "acct-1",
+            "plan": {"id": "free", "name": "Free", "status": "free"},
+            "storage": {"used_bytes": 0, "quota_bytes": 100},
+            "writable": true,
+            "offers": [
+                {"id": "stripe-only", "name": "A", "price_label": "$1", "quota_bytes": 5},
+                {"id": "both", "name": "B", "price_label": "$2", "quota_bytes": 5,
+                 "store_products": {"apple_product_id": "p.monthly"}},
+            ],
+            "actions": ["subscribe", "subscribe_in_store", "manage_billing"],
+            "store_account_token": "3f2c1b7e-8d4a-4f6e-9b21-0c7d5e1a2b3c", // gitleaks:allow (made-up test value)
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_store_build_never_sees_stripe_offers_or_billing_links() {
+        let v = to_view_for(account(), false, true);
+        assert!(v.offers.is_empty() && !v.can_manage_billing);
+        assert_eq!(v.store_offers.len(), 1, "only offers sold in the store");
+        assert_eq!(v.store_offers[0].product_id, "p.monthly");
+    }
+
+    #[test]
+    fn a_desktop_build_never_sees_store_offers() {
+        let v = to_view_for(account(), true, false);
+        assert_eq!(v.offers.len(), 2);
+        assert!(v.store_offers.is_empty());
+    }
+
+    #[test]
+    fn a_store_plan_isnt_managed_on_the_billing_pages() {
+        let mut a = account();
+        a.plan.managed_in = Some(plan_managers::APP_STORE.into());
+        let v = to_view_for(a, true, false);
+        assert!(!v.can_manage_billing);
+        assert_eq!(v.managed_in.as_deref(), Some("app_store"));
+    }
+
+    #[test]
+    fn the_account_token_stays_out_of_the_webview() {
+        let v = to_view_for(account(), false, true);
+        assert!(v.store_account_token.is_some());
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(!json.contains("3f2c1b7e") && !json.contains("p.monthly"));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1315,10 +1456,13 @@ mod tests {
 
 // ------------------------------------------------------- Penroam Cloud account --
 
-/// Whether this build may show prices, purchase buttons or open billing pages. Store-distributed
-/// mobile apps must not link to outside purchases, so the iOS and Android builds never do; the
-/// account's plan and storage are still shown there. Enforced here, not only in the UI.
+/// Whether this build may show Stripe prices or open billing pages. Store-distributed mobile apps
+/// must not link to outside purchases, so the iOS and Android builds never do. Enforced here, not
+/// only in the UI.
 const PURCHASES_ALLOWED: bool = cfg!(desktop);
+
+/// Whether this build sells plans through its app store instead.
+const STORE_PURCHASES: bool = tauri_plugin_store_billing::AVAILABLE;
 
 /// A paid plan, for the settings.
 #[derive(Serialize, Clone)]
@@ -1328,6 +1472,22 @@ pub struct OfferView {
     name: String,
     price_label: String,
     quota_bytes: u64,
+}
+
+/// A paid plan sold through the app store, for the settings. The store's price, never the
+/// server's label: it's what the user is charged.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreOfferView {
+    id: String,
+    name: String,
+    quota_bytes: u64,
+    /// Filled in from the store by [`fill_store_prices`].
+    price: String,
+    /// `month`, `year` or similar, from the store.
+    period: Option<String>,
+    #[serde(skip)]
+    product_id: String,
 }
 
 /// Plan and storage of the synced account (`account.v1`), for the settings.
@@ -1350,8 +1510,18 @@ pub struct AccountView {
     can_request_deletion: bool,
     can_cancel_deletion: bool,
     deletion_erase_after_ms: Option<u64>,
-    /// This build may show purchases and billing links.
+    /// This build may show Stripe purchases and billing links.
     purchases_allowed: bool,
+    /// This build sells through its app store. The Restore Purchases button depends on this and
+    /// not on [`Self::store_offers`], because it's needed most when there's nothing to sell.
+    store_purchases: bool,
+    /// Plans this account can buy in the app store. Empty if the store doesn't know them.
+    store_offers: Vec<StoreOfferView>,
+    /// Where the plan is managed: `web`, `app_store`, `google_play` or a newer value.
+    managed_in: Option<String>,
+    /// Attached to store purchases. Stays in the backend.
+    #[serde(skip)]
+    store_account_token: Option<String>,
 }
 
 fn ms(s: Option<u64>) -> Option<u64> {
@@ -1359,7 +1529,37 @@ fn ms(s: Option<u64>) -> Option<u64> {
 }
 
 fn to_view(a: AccountState) -> AccountView {
-    let sells = PURCHASES_ALLOWED && a.allows(actions::SUBSCRIBE);
+    to_view_for(a, PURCHASES_ALLOWED, STORE_PURCHASES)
+}
+
+/// Builds the view for a build with these abilities, so that both kinds can be tested.
+fn to_view_for(a: AccountState, purchases: bool, store: bool) -> AccountView {
+    let sells = purchases && a.allows(actions::SUBSCRIBE);
+    let sells_in_store = store && a.allows(actions::SUBSCRIBE_IN_STORE);
+    // A store plan can't be managed on the server's billing pages, whatever else exists.
+    let managed_on_web = a
+        .plan
+        .managed_in
+        .as_deref()
+        .is_none_or(|m| m == plan_managers::WEB);
+    let store_offers = if sells_in_store {
+        a.offers
+            .iter()
+            .filter_map(|o| {
+                let product_id = o.store_products.as_ref()?.apple_product_id.clone()?;
+                Some(StoreOfferView {
+                    id: o.id.clone(),
+                    name: o.name.clone(),
+                    quota_bytes: o.quota_bytes,
+                    price: String::new(),
+                    period: None,
+                    product_id,
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     AccountView {
         plan_name: a.plan.name.clone(),
         plan_status: a.plan.status.clone(),
@@ -1383,12 +1583,220 @@ fn to_view(a: AccountState) -> AccountView {
         } else {
             Vec::new()
         },
-        can_manage_billing: PURCHASES_ALLOWED && a.allows(actions::MANAGE_BILLING),
+        can_manage_billing: purchases && managed_on_web && a.allows(actions::MANAGE_BILLING),
         can_request_deletion: a.allows(actions::REQUEST_DELETION),
         can_cancel_deletion: a.allows(actions::CANCEL_DELETION),
         deletion_erase_after_ms: ms(a.deletion.as_ref().map(|d| d.erase_after_unix_s)),
-        purchases_allowed: PURCHASES_ALLOWED,
+        purchases_allowed: purchases,
+        store_purchases: store,
+        store_offers,
+        managed_in: a.plan.managed_in.clone(),
+        store_account_token: a.store_account_token.clone(),
     }
+}
+
+/// Replaces the offers with what the store can actually sell here, at its prices. An offer the
+/// store doesn't know disappears instead of showing with no price, and a store that can't be
+/// reached shows no plans at all, rather than a plan that can't be bought.
+fn fill_store_prices(app: &AppHandle, view: &mut AccountView) {
+    if view.store_offers.is_empty() {
+        return;
+    }
+    let ids: Vec<String> = view
+        .store_offers
+        .iter()
+        .map(|o| o.product_id.clone())
+        .collect();
+    let found = tauri_plugin_store_billing::products(app, &ids).unwrap_or_default();
+    view.store_offers.retain_mut(|o| {
+        let Some(p) = found.iter().find(|p| p.id == o.product_id) else {
+            return false;
+        };
+        o.price = p.display_price.clone();
+        o.period = p.period.clone();
+        true
+    });
+}
+
+/// What the server said about a store transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreReply {
+    /// The purchase is on this account.
+    Applied,
+    /// It belongs to another account. Holds the server's message.
+    Conflict(String),
+    /// The server doesn't have it yet, for any other reason. Holds a message.
+    Retry(String),
+}
+
+fn store_reply(res: Result<AccountState, penroam_sync::TransportError>) -> StoreReply {
+    match res {
+        Ok(_) => StoreReply::Applied,
+        Err(penroam_sync::TransportError::Api(b)) if b.code == WireCode::Conflict => {
+            StoreReply::Conflict(b.message)
+        }
+        Err(e) => StoreReply::Retry(account_error(&e)),
+    }
+}
+
+/// How a batch of store transactions ended.
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreSettled {
+    /// Now on this account.
+    applied: u32,
+    /// Owned by another account.
+    conflicts: u32,
+    /// Not delivered yet, and kept to try again.
+    waiting: u32,
+    /// The last thing worth telling the user.
+    message: Option<String>,
+}
+
+/// Reports `transactions` and finishes the ones that are dealt with. **This is the rule that keeps
+/// a purchase from being lost:** a transaction is finished only once the server has it, or has
+/// said another account does. On any other answer it stays unfinished, and the store delivers it
+/// again. Finishing a conflict is safe, because the plan stays with the account that owns it.
+fn settle(
+    transactions: &[String],
+    mut report: impl FnMut(&str) -> Result<StoreReply, String>,
+    mut finish: impl FnMut(&str),
+) -> StoreSettled {
+    let mut out = StoreSettled::default();
+    for t in transactions {
+        match report(t) {
+            Ok(StoreReply::Applied) => {
+                finish(t);
+                out.applied += 1;
+            }
+            Ok(StoreReply::Conflict(message)) => {
+                finish(t);
+                out.conflicts += 1;
+                out.message = Some(message);
+            }
+            Ok(StoreReply::Retry(message)) | Err(message) => {
+                out.waiting += 1;
+                out.message = Some(message);
+            }
+        }
+    }
+    out
+}
+
+fn settle_store(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    transactions: &[String],
+) -> StoreSettled {
+    settle(
+        transactions,
+        |t| {
+            let transaction = t.to_string();
+            ask_store(state, transaction)
+        },
+        |t| {
+            // Failing here is harmless: it's delivered again, and the server is idempotent.
+            if let Err(e) = tauri_plugin_store_billing::finish(app, t) {
+                eprintln!("penroam: store transaction not finished: {e}");
+            }
+        },
+    )
+}
+
+fn ask_store(state: &State<'_, AppState>, transaction: String) -> Result<StoreReply, String> {
+    ask(&state.sync, |r| Cmd::StorePurchase(transaction, r)).map_err(|e| e.message)
+}
+
+/// The end of a store purchase.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StorePurchaseResult {
+    /// `active`, `pending`, `cancelled`, `conflict`, or `waiting` when it's paid but not on the
+    /// account yet.
+    status: &'static str,
+    message: Option<String>,
+}
+
+/// Buys an offer through the app store. App Store builds only, and the server decides what it's
+/// worth. The offer id is looked up in the account's own offers, so the WebView can't name a
+/// product.
+#[tauri::command(async)]
+pub fn sync_store_purchase(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    offer_id: String,
+) -> Result<StorePurchaseResult, CmdError> {
+    if !STORE_PURCHASES {
+        return Err(err("this build doesn't sell through a store"));
+    }
+    let view = ask(&state.sync, Cmd::Account)?.ok_or_else(|| err("sync is not set up"))?;
+    let offer = view
+        .store_offers
+        .iter()
+        .find(|o| o.id == offer_id)
+        .ok_or_else(|| err("this plan isn't available right now"))?;
+    let token = view
+        .store_account_token
+        .as_deref()
+        .ok_or_else(|| err("this account can't buy a plan right now"))?;
+    let bought =
+        tauri_plugin_store_billing::purchase(&app, &offer.product_id, token).map_err(err)?;
+    let transaction = match bought {
+        tauri_plugin_store_billing::PurchaseOutcome::Cancelled => {
+            return Ok(StorePurchaseResult {
+                status: "cancelled",
+                message: None,
+            })
+        }
+        tauri_plugin_store_billing::PurchaseOutcome::Pending => {
+            return Ok(StorePurchaseResult {
+                status: "pending",
+                message: None,
+            })
+        }
+        tauri_plugin_store_billing::PurchaseOutcome::Purchased(t) => t,
+    };
+    let s = settle_store(&app, &state, &[transaction]);
+    Ok(StorePurchaseResult {
+        status: if s.applied > 0 {
+            "active"
+        } else if s.conflicts > 0 {
+            "conflict"
+        } else {
+            "waiting"
+        },
+        message: s.message,
+    })
+}
+
+/// Restores purchases: asks the store what this store account holds, and reports it all.
+/// Repeating a report is harmless on the server.
+#[tauri::command(async)]
+pub fn sync_store_restore(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<StoreSettled, CmdError> {
+    if !STORE_PURCHASES {
+        return Err(err("this build doesn't sell through a store"));
+    }
+    let transactions = tauri_plugin_store_billing::restore(&app).map_err(err)?;
+    Ok(settle_store(&app, &state, &transactions))
+}
+
+/// Reports whatever the store is still holding: a purchase interrupted by a crash or an outage, a
+/// renewal, or an approved Ask to Buy. Runs at start-up and on returning to the app, and does
+/// nothing without sync or on builds that don't sell through a store.
+#[tauri::command(async)]
+pub fn sync_store_reconcile(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<StoreSettled, CmdError> {
+    let configured = state.sync.tx.lock().map(|g| g.is_some()).unwrap_or(false);
+    if !STORE_PURCHASES || !configured {
+        return Ok(StoreSettled::default());
+    }
+    let transactions = tauri_plugin_store_billing::unfinished(&app).map_err(err)?;
+    Ok(settle_store(&app, &state, &transactions))
 }
 
 fn account_view(
@@ -1412,11 +1820,18 @@ fn account_error(e: &penroam_sync::TransportError) -> String {
 /// Plan and storage of the account this device syncs with; `None` when sync is not set up or
 /// the server has no plans.
 #[tauri::command(async)]
-pub fn sync_account(state: State<'_, AppState>) -> Result<Option<AccountView>, CmdError> {
+pub fn sync_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<AccountView>, CmdError> {
     if !state.sync.tx.lock().map(|g| g.is_some()).unwrap_or(false) {
         return Ok(None);
     }
-    ask(&state.sync, Cmd::Account)
+    let mut view = ask(&state.sync, Cmd::Account)?;
+    if let Some(v) = view.as_mut() {
+        fill_store_prices(&app, v);
+    }
+    Ok(view)
 }
 
 /// Opens the server's checkout (`subscribe` with an offer id) or billing portal

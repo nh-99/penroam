@@ -7,7 +7,7 @@ export const diagnosticsApi = {
   report: (inkPath: string | null) => invoke<string>("diagnostics_report", { inkPath }),
   clear: () => invoke<void>("diagnostics_clear"),
   thirdPartyNotices: () => invoke<string | null>("third_party_notices"),
-  openHelp: (page: "support" | "privacy") => invoke<void>("open_help", { page }),
+  openHelp: (page: "support" | "privacy" | "subscriptions" | "terms") => invoke<void>("open_help", { page }),
 };
 
 /** Stores a redacted report of an unhandled UI error. It must never raise an error of its own. */

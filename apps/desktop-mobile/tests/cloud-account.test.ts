@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloudNotice, describePlan, describeReadOnly, formatBytes, usageFraction, type AccountView } from "../src/platform/sync";
+import { canBuy, cloudNotice, describePlan, describeReadOnly, describeRestore, describeStorePurchase, formatBytes, storeManaged, usageFraction, type AccountView } from "../src/platform/sync";
 
 function view(p: Partial<AccountView> = {}): AccountView {
   return {
@@ -18,9 +18,52 @@ function view(p: Partial<AccountView> = {}): AccountView {
     canCancelDeletion: false,
     deletionEraseAfterMs: null,
     purchasesAllowed: true,
+    storePurchases: false,
+    storeOffers: [],
+    managedIn: null,
     ...p,
   };
 }
+
+const offer = { id: "m", name: "Penroam Cloud", quotaBytes: 5 * 1024 ** 3, price: "$3.99", period: "month" };
+
+describe("store purchases", () => {
+  const paused = { writable: false, readOnlyReason: "over_quota", usedBytes: 200 * 1024 * 1024, purchasesAllowed: false, storePurchases: true };
+
+  it("offers a plan when the store can sell one", () => {
+    expect(canBuy(view({ purchasesAllowed: false, storeOffers: [offer] }))).toBe(true);
+    expect(cloudNotice(view({ ...paused, storeOffers: [offer] }))?.canUpgrade).toBe(true);
+  });
+
+  it("offers nothing when the store can't sell here", () => {
+    expect(canBuy(view({ purchasesAllowed: false, storeOffers: [] }))).toBe(false);
+    expect(cloudNotice(view({ ...paused }))?.canUpgrade).toBe(false);
+    expect(cloudNotice(view({ ...paused }))?.text).toContain("Delete notebooks");
+  });
+
+  it("knows who manages a plan", () => {
+    expect(storeManaged(view({ managedIn: "app_store" }))).toBe(true);
+    expect(storeManaged(view({ managedIn: "google_play" }))).toBe(true);
+    expect(storeManaged(view({ managedIn: "web" }))).toBe(false);
+    expect(storeManaged(view())).toBe(false);
+  });
+
+  it("tells the user when a paid purchase hasn't arrived, without asking them to pay again", () => {
+    const text = describeStorePurchase({ status: "waiting", message: "try later" });
+    expect(text).toContain("won't be charged again");
+    expect(describeStorePurchase({ status: "conflict", message: "another account" })).toBe("another account");
+    expect(describeStorePurchase({ status: "active", message: null })).toBeNull();
+    expect(describeStorePurchase({ status: "cancelled", message: null })).toBeNull();
+  });
+
+  it("reports what a restore found", () => {
+    const r = { applied: 0, conflicts: 0, waiting: 0, message: null };
+    expect(describeRestore(r)).toBe("There are no purchases to restore.");
+    expect(describeRestore({ ...r, applied: 1 })).toBe("Your purchases are restored.");
+    expect(describeRestore({ ...r, waiting: 1 })).toContain("Try again");
+    expect(describeRestore({ ...r, conflicts: 1, message: "another account" })).toBe("another account");
+  });
+});
 
 describe("cloud account display", () => {
   it("formats bytes", () => {
@@ -114,6 +157,7 @@ const api = vi.hoisted(() => ({
   requestDeletion: vi.fn(async () => ({ eraseAfterMs: Date.UTC(2026, 11, 3) })),
   cancelDeletion: vi.fn(async () => {}),
   syncNow: vi.fn(async () => {}),
+  storeReconcile: vi.fn(async () => ({ applied: 0, conflicts: 0, waiting: 0, message: null })),
   info: vi.fn(async () => ({ available: true, configured: true, status: null, defaultServerUrl: "", devBuild: false })),
 }));
 vi.mock("../src/platform/sync", async (orig) => ({

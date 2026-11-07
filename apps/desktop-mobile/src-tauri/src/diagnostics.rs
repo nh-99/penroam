@@ -282,6 +282,10 @@ pub enum HelpPage {
     Support,
     /// The privacy statement.
     Privacy,
+    /// The App Store's subscription settings.
+    Subscriptions,
+    /// The terms of use for store purchases: Apple's standard licence agreement.
+    Terms,
 }
 
 /// Opens `page` in the system browser. Errors mean the browser could not be started.
@@ -291,6 +295,8 @@ pub fn open_help(app: AppHandle, page: HelpPage) -> Result<(), String> {
     let url = match page {
         HelpPage::Support => "https://github.com/nh-99/penroam/blob/main/docs/support.md",
         HelpPage::Privacy => "https://github.com/nh-99/penroam/blob/main/docs/policies/privacy.md",
+        HelpPage::Subscriptions => "https://apps.apple.com/account/subscriptions",
+        HelpPage::Terms => "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/",
     };
     app.opener()
         .open_url(url, None::<&str>)

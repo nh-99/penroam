@@ -129,6 +129,30 @@ export interface PlanOffer {
   quotaBytes: number;
 }
 
+/** A plan sold through the app store. The price is the store's own. */
+export interface StoreOffer {
+  id: string;
+  name: string;
+  quotaBytes: number;
+  price: string;
+  /** month, year or similar. */
+  period: string | null;
+}
+
+/** The end of a store purchase. */
+export interface StorePurchaseResult {
+  status: "active" | "pending" | "cancelled" | "conflict" | "waiting";
+  message: string | null;
+}
+
+/** How a batch of store transactions ended. */
+export interface StoreSettled {
+  applied: number;
+  conflicts: number;
+  waiting: number;
+  message: string | null;
+}
+
 /** Plan and storage of the synced account (`sync_account`, servers with `account.v1`). */
 export interface AccountView {
   planName: string;
@@ -147,8 +171,14 @@ export interface AccountView {
   canRequestDeletion: boolean;
   canCancelDeletion: boolean;
   deletionEraseAfterMs: number | null;
-  /** This build may show prices and open billing pages (desktop). */
+  /** This build may show Stripe prices and open billing pages (desktop). */
   purchasesAllowed: boolean;
+  /** This build sells through its app store. */
+  storePurchases: boolean;
+  /** Plans this account can buy in the app store. */
+  storeOffers: StoreOffer[];
+  /** Where a paid plan is managed: web, app_store, google_play or a newer value. */
+  managedIn: string | null;
 }
 
 export interface SyncChanged {
@@ -166,9 +196,38 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   }
 }
 
+/** The plan is one the app store bills, so only the store can change or cancel it. */
+export function storeManaged(a: AccountView): boolean {
+  return a.managedIn === "app_store" || a.managedIn === "google_play";
+}
+
+/** What to say after a store purchase, or null when the result speaks for itself. */
+export function describeStorePurchase(r: StorePurchaseResult): string | null {
+  switch (r.status) {
+    case "pending":
+      return "Waiting for approval. Your plan starts once the purchase is approved.";
+    case "waiting":
+      return "Your purchase went through. It will reach your account shortly, and you won't be charged again.";
+    case "conflict":
+      return r.message;
+    default:
+      return null;
+  }
+}
+
+/** What to say after restoring purchases. */
+export function describeRestore(r: StoreSettled): string {
+  if (r.conflicts > 0) return r.message ?? "This purchase belongs to another Penroam account.";
+  if (r.waiting > 0) return "Your purchases couldn't be checked just now. Try again in a moment.";
+  return r.applied > 0 ? "Your purchases are restored." : "There are no purchases to restore.";
+}
+
 export const syncApi = {
   info: () => call<SyncInfo>("sync_info"),
   serverInfo: (serverUrl: string) => call<ServerInfo>("sync_server_info", { serverUrl }),
+  storePurchase: (offerId: string) => call<StorePurchaseResult>("sync_store_purchase", { offerId }),
+  storeRestore: () => call<StoreSettled>("sync_store_restore"),
+  storeReconcile: () => call<StoreSettled>("sync_store_reconcile"),
   /** Opens the system browser; resolves with the account id after the user signed in. */
   signIn: (serverUrl: string) => call<string>("sync_sign_in", { serverUrl }),
   signOut: (serverUrl: string) => call<void>("sync_sign_out", { serverUrl }),
@@ -316,16 +375,21 @@ export function describePlan(a: AccountView): string {
   }
 }
 
+/** This build can sell this account a plan, one way or the other. */
+export function canBuy(a: AccountView): boolean {
+  return (a.purchasesAllowed && a.offers.length > 0) || a.storeOffers.length > 0;
+}
+
 /**
- * Why uploads are paused, and what still works. `purchasesAllowed` decides whether the text
- * may point at a plan (mobile builds never do).
+ * Why uploads are paused, and what still works. The text points at a plan only when
+ * this build can sell one.
  */
 export function describeReadOnly(a: AccountView): string | null {
   if (a.writable) return null;
   const keep = "Your notes stay on this device and you can still download and export them; new changes wait on this device.";
   switch (a.readOnlyReason) {
     case "over_quota":
-      return a.purchasesAllowed && (a.offers.length > 0 || a.canManageBilling)
+      return canBuy(a) || (a.purchasesAllowed && a.canManageBilling)
         ? `Cloud storage is full, so uploads are paused. ${keep} Delete notebooks you no longer need, or choose a plan with more storage.`
         : `Cloud storage is full, so uploads are paused. ${keep} Delete notebooks you no longer need to make room.`;
     case "deletion_pending":
@@ -352,12 +416,12 @@ export interface CloudNotice {
 }
 
 /**
- * What the banner says, or null for nothing. Mobile builds get the same facts without any
- * button that leads to a purchase. Deletion and suspension are explained in settings only.
+ * What the banner says, or null for nothing. Builds that can't sell get the same facts without
+ * any button that leads to a purchase. Deletion and suspension are explained in settings only.
  */
 export function cloudNotice(a: AccountView | null): CloudNotice | null {
   if (!a) return null;
-  const canUpgrade = a.purchasesAllowed && a.offers.length > 0;
+  const canUpgrade = canBuy(a);
   const canManage = a.purchasesAllowed && a.canManageBilling;
   if (!a.writable && a.readOnlyReason === "over_quota") {
     return {

@@ -11,7 +11,7 @@ Design: [`architecture/overview.md`](architecture/overview.md).
 ```text
 apps/desktop-mobile/   Tauri app (Vue frontend in src/, Rust shell in src-tauri/)
 crates/                penroam-core · penroam-storage · penroam-pdf · penroam-interchange · penroam-webdav · penroam-search · penroam-sync-protocol · penroam-sync-testkit · penroam-sync
-plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters) · tauri-plugin-native-print (system print dialogs)
+plugins/               tauri-plugin-native-ink (Android/BOOX + iOS adapters) · tauri-plugin-native-print (system print dialogs) · tauri-plugin-store-billing (StoreKit purchases)
 android/               BooxInkView (Onyx Pen SDK module used by the native ink plugin)
 ios/                   InkKit (Swift ink core and Pencil surface used by the native ink plugin)
 tests/fixtures/        geometry/text goldens, benchmark scenes, PDF fixture, .prp golden, legacy libraries
@@ -392,7 +392,7 @@ a beta and its final release share `X.Y.Z` and the stores refuse a repeated buil
 | `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` | Secret | App Store Connect API key: the key ID, the issuer ID and the contents of the `.p8` file. The key needs the Admin role for cloud signing. `APPLE_TEAM_ID` is shared with macOS signing |
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Secret | Service account allowed to release to the app. Upload the first `.aab` to the Play Console by hand: the API can't create a release for a new app |
 
-Store builds never contain purchase links or prices.
+Store builds never contain links to outside purchases: App Store builds sell only through StoreKit.
 
 Keep `release.py notices` output out of the repository: it is generated for each build into
 `apps/desktop-mobile/public/` and shown under **Settings → About**.

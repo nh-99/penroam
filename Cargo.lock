@@ -3499,6 +3499,7 @@ dependencies = [
  "tauri-plugin-native-ink",
  "tauri-plugin-native-print",
  "tauri-plugin-opener",
+ "tauri-plugin-store-billing",
  "tauri-plugin-updater",
  "tempfile",
  "url",
@@ -5212,6 +5213,16 @@ dependencies = [
  "url",
  "windows",
  "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-store-billing"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

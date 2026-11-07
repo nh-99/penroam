@@ -61,6 +61,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_native_ink::init())
         .plugin(tauri_plugin_native_print::init())
+        .plugin(tauri_plugin_store_billing::init())
         // used from Rust only (system-browser sign-in, PDFs for printing on Windows and macOS);
         // the WebView gets no opener permission
         .plugin(tauri_plugin_opener::init());
@@ -194,6 +195,9 @@ pub fn run() {
             sync::sync_disconnect,
             sync::sync_account,
             sync::sync_open_billing,
+            sync::sync_store_purchase,
+            sync::sync_store_restore,
+            sync::sync_store_reconcile,
             sync::sync_request_account_deletion,
             sync::sync_cancel_account_deletion,
             diagnostics::diagnostics_report,

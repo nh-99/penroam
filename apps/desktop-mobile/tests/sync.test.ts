@@ -4,6 +4,7 @@ import { codeGroups, describeStatus, formatAgo, statusIcon, tapCounter, type Syn
 import { conflictTitle, conflictValuePreview, resolvable } from "../src/platform/conflicts";
 
 const api = vi.hoisted(() => ({
+  storeReconcile: vi.fn(async () => ({ applied: 0, conflicts: 0, waiting: 0, message: null })),
   info: vi.fn(),
   setupPair: vi.fn(),
   setupFirst: vi.fn(),

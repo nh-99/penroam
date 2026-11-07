@@ -91,6 +91,13 @@ sign in and either approve it from a device you already have, or enter the recov
 encrypted on your device before they're uploaded. That encryption hasn't been independently reviewed
 yet. Sync can be paused or disconnected at any time, and your notes stay on the device either way.
 
+**Cloud storage.** Every account includes some free storage. For more, choose a plan in
+**Settings → Sync**. On a computer, plans open a payment page in your browser. On iPhone and iPad they're
+App Store subscriptions, billed by Apple: manage or cancel them with **Manage subscription**, and use
+**Restore purchases** if a plan doesn't appear. One account has one plan, whichever way you bought it.
+Deleting your account stops a plan bought on a computer, but only you can cancel an App Store
+subscription, so do that too or you'll keep being charged.
+
 **Writing.** Choose a tool from the toolbar, then a colour and thickness:
 
 | Tool | Key | What it does |
