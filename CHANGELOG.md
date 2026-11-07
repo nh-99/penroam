@@ -5,6 +5,8 @@ release notes and stops if the version has no entry.
 
 ## Unreleased
 
+* The Linux AppImage adds Penroam to your app menu. **Settings → Advanced** can remove it before you
+  delete the AppImage.
 ## 0.1.0-beta.4
 
 The first public test build. It's for testers: expect rough edges, and keep a backup of notebooks

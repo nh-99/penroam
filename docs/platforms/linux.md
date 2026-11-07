@@ -41,6 +41,25 @@ pnpm tauri build --no-bundle && target/release/penroam-app
 pnpm tauri build                     # .deb + AppImage
 ```
 
+## AppImage app-menu entry
+
+The `.deb` installs a desktop entry; an AppImage has nothing to do that, so the app writes its own
+(`src-tauri/src/desktop_entry.rs`). When `APPIMAGE` is set, every launch writes, if changed,
+`$XDG_DATA_HOME/applications/ink.penroam.app.desktop` (named after the identifier, which is also the
+Wayland app id) and `$XDG_DATA_HOME/icons/hicolor/256x256/apps/ink.penroam.app.png`. `Exec` and
+`TryExec` name the AppImage, so a moved file is picked up on its next launch and a deleted one
+hides the entry. Only an entry containing `X-Penroam-AppImage=true` is replaced or deleted.
+
+**Settings → Advanced → App menu** removes the entry and icon and leaves `desktop-entry-removed` in
+the app data directory, so later launches don't re-add it; **Add to app menu** deletes that marker.
+Running both the `.deb` and an AppImage gives two Penroam entries.
+
+Only builds from the release workflow (which sets `PENROAM_RELEASE_BUILD=1` at compile time) use
+those names. Any other build, such as a local `pnpm tauri build`, is listed as **Penroam Developer**
+under `ink.penroam.app.developer`, with its own marker (`developer-desktop-entry-removed`), so it
+sits beside an installed release. Both builds share the identifier, so on Wayland a developer
+window may be shown with the release entry's name.
+
 ## Real-input E2E
 
 `tools/linux-e2e/` drives the release binary with XTest mouse and keyboard events (X11 only) and

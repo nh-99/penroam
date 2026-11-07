@@ -67,6 +67,12 @@ pnpm tauri build --no-bundle
 ./target/release/penroam-app
 ```
 
+`pnpm tauri build` also makes an AppImage in `target/release/bundle/appimage/`. When it starts,
+the AppImage adds Penroam to your app menu and keeps the entry pointing at it if you move the file.
+A build you make yourself is listed as **Penroam Developer**, so it doesn't replace an official
+release you've also installed.
+To uninstall, choose **Remove from app menu** in **Settings → Advanced**, then delete the AppImage.
+
 ### Android and BOOX
 
 Building the Android app needs the Android SDK and NDK. See
@@ -204,6 +210,7 @@ PDF text, but not handwriting.
 **Settings → Advanced** chooses between your device's recognizer and the Penroam model where you
 have both, and checks for model updates, installs a model from a file, or removes it. A model you
 remove stays removed.
+On Linux, the AppImage's **App menu** row there removes Penroam from your app menu, or adds it back.
 
 **Moving notebooks between devices.** Use **Export → Notebook (.penroam)** to save a
 notebook as a file, or **This page (.penroam)** for a single page. On the other device, click

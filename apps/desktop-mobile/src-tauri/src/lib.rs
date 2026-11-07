@@ -24,6 +24,7 @@ const _: () = assert!(
 mod backup;
 mod bench;
 mod commands;
+mod desktop_entry;
 mod diagnostics;
 mod models;
 #[cfg(target_os = "linux")]
@@ -106,6 +107,7 @@ pub fn run() {
             models::start(app.handle());
             sync::resume_on_launch(app.handle());
             commands::start_history_retention(app.handle());
+            desktop_entry::install_on_launch(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -211,6 +213,9 @@ pub fn run() {
             updates::update_check,
             updates::update_install,
             power::power_report,
+            desktop_entry::desktop_entry_status,
+            desktop_entry::desktop_entry_install,
+            desktop_entry::desktop_entry_remove,
             search::search_query,
             search::search_status,
             search::search_set_settings,

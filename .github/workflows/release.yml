@@ -111,6 +111,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
           BUILD_ARGS: ${{ matrix.args }}
+          # Read at compile time (src-tauri/src/desktop_entry.rs): builds without it list themselves
+          # as "Penroam Developer" so they don't replace an installed release in the app menu.
+          PENROAM_RELEASE_BUILD: "1"
         run: |
           config='{}'
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
