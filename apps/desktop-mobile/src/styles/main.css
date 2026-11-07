@@ -151,6 +151,8 @@ body {
 .safe-top {
   padding-top: env(safe-area-inset-top);
 }
+/* Replaces any bottom padding; for padded elements add the inset with
+   pb-[calc(<padding>+env(safe-area-inset-bottom))] instead. */
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom);
 }

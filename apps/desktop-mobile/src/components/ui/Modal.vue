@@ -58,7 +58,7 @@ void props;
       role="dialog"
       aria-modal="true"
       :aria-labelledby="titleId"
-      class="safe-bottom max-h-[90vh] w-full overflow-y-auto rounded-t-2xl border border-line bg-surface p-5 shadow-xl sm:rounded-2xl epaper:border-2"
+      class="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl border border-line bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-xl sm:rounded-2xl epaper:border-2"
       :class="wide ? 'sm:max-w-2xl' : 'sm:max-w-md'"
     >
       <div class="mb-4 flex items-center justify-between gap-4">
