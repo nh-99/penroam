@@ -364,8 +364,10 @@ Everything below runs from a tag, and nothing reaches users without a person pub
 The updater never downgrades, so a bad release is fixed by promoting a newer one. Notes are stored
 apart from the app, so installing an older build by hand is safe: it refuses formats it doesn't know.
 
-A stable tag fails unless every signing secret is present. A pre-release may be unsigned, and only
-`tools/release/release.py` decides this. `python3 -m unittest discover -s tools/release` tests it.
+A stable tag fails unless the Apple, Android and update signing secrets are present. Windows is left
+out of a stable release while `WINDOWS_SIGN_COMMAND` is unset, so an unsigned installer is never
+stable; the notes say so, and the app treats a feed without its platform as up to date. A pre-release
+may be unsigned and always includes Windows. `tools/release/release.py` decides all of this. `python3 -m unittest discover -s tools/release` tests it.
 
 | Name (GitHub) | Kind | Used for |
 |---|---|---|

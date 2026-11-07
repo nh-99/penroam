@@ -38,7 +38,19 @@ plugins/*/.tauri/
 # Generated for each release build by tools/release/release.py notices
 apps/desktop-mobile/public/third-party-notices.txt
 __pycache__/
+# Signing material never belongs in the repository
+*.jks
+*.keystore
+*.p12
+*.key
+*.cer
 /benchmarks/
 # Generated for each release build by tools/release/release.py notices
 apps/desktop-mobile/public/third-party-notices.txt
 __pycache__/
+# Signing material never belongs in the repository
+*.jks
+*.keystore
+*.p12
+*.key
+*.cer

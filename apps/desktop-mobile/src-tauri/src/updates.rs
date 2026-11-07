@@ -89,7 +89,7 @@ mod desktop {
     use super::{enabled, OfferedUpdate};
     use serde::Serialize;
     use tauri::{AppHandle, Emitter};
-    use tauri_plugin_updater::{Update, UpdaterExt};
+    use tauri_plugin_updater::{Error, Update, UpdaterExt};
     use url::Url;
 
     /// Download progress, sent as `updates://progress`.
@@ -118,7 +118,12 @@ mod desktop {
             other => return Err(format!("Unknown update channel {other:?}.")),
         }
         let updater = builder.build().map_err(|e| e.to_string())?;
-        updater.check().await.map_err(|e| e.to_string())
+        match updater.check().await {
+            // Not every release has every platform: stable releases leave out Windows until it
+            // can be signed. Nothing for this platform is the same as being up to date.
+            Err(Error::TargetNotFound(_) | Error::TargetsNotFound(_)) => Ok(None),
+            result => result.map_err(|e| e.to_string()),
+        }
     }
 
     pub async fn check(app: AppHandle, channel: String) -> Result<Option<OfferedUpdate>, String> {

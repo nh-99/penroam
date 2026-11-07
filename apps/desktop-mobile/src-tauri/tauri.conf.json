@@ -37,7 +37,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU2ODU3RUVDMTIwM0ZBMzMKUldReitnTVM3SDZGNXJNWHBDREdPKzQyMjR1UXc4c0JGM2h3RkpCNUhLVHJWSE9KNXk5VThYc2QK",
       "requireSignedVersion": true,
       "endpoints": ["https://github.com/nh-99/penroam/releases/download/updates-stable/latest.json"]
     },

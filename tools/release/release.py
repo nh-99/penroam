@@ -4,7 +4,8 @@
     release.py check-version v1.2.3        the tag matches every version in the repository
     release.py notices OUT                 third-party licence notices for the app bundle
     release.py assemble VERSION SHA DIR    checksums, manifests, notes and update feed for DIR
-    release.py sign-status                 which signing secrets this run has (never their values)
+    release.py sign-status TAG             which signing secrets this run has (never their values)
+    release.py desktop-matrix TAG          the desktop builds for this tag, as JSON
 
 Only the standard library, so it runs before anything is installed. docs/development.md#releases
 describes the whole process.
@@ -75,8 +76,12 @@ def compatibility_table(contract):
     ])
 
 
-def release_notes(version, contract, changelog):
+def release_notes(version, contract, changelog, has_windows=True):
     parts = [changelog_section(version, changelog)]
+    if not has_windows:
+        parts.append(
+            "There is no Windows installer in this release. Windows builds are on the beta "
+            f"channel for now: see the [releases page]({REPO_URL}/releases).")
     parts += [
         "## Compatibility\n\n" + compatibility_table(contract),
         "A build that meets a file or sync format newer than it knows refuses it and leaves it "
@@ -121,9 +126,10 @@ def assemble(version, sha, directory, root=ROOT, pub_date=None):
     contract["git_sha"] = sha
     (directory / "contract-manifest.json").write_text(json.dumps(contract, indent=2) + "\n")
     changelog = (root / "CHANGELOG.md").read_text()
-    notes = release_notes(version, contract, changelog)
-    (directory / "release-notes.md").write_text(notes)
     assets = sorted(p for p in directory.iterdir() if p.is_file())
+    has_windows = any(p.name.endswith(".exe") for p in assets)
+    notes = release_notes(version, contract, changelog, has_windows)
+    (directory / "release-notes.md").write_text(notes)
     feed = update_feed(version, assets, changelog_section(version, changelog), pub_date)
     if feed["platforms"]:
         (directory / "latest.json").write_text(json.dumps(feed, indent=2) + "\n")
@@ -185,15 +191,33 @@ SIGNING = {
     "windows": ["WINDOWS_SIGN_COMMAND"],
     "android": ["PENROAM_ANDROID_KEYSTORE_BASE64"],
 }
+# A stable release leaves Windows out rather than failing or shipping it unsigned.
+LEFT_OUT_IF_UNSIGNED = {"windows"}
+
+DESKTOP_BUILDS = [
+    {"os": "ubuntu-24.04", "name": "linux-x86_64", "args": "--bundles deb,appimage"},
+    {"os": "windows-latest", "name": "windows-x86_64", "args": "--bundles nsis"},
+    {"os": "macos-latest", "name": "macos-aarch64", "args": "--bundles dmg,app --target aarch64-apple-darwin",
+     "target": "aarch64-apple-darwin"},
+    {"os": "macos-latest", "name": "macos-x86_64", "args": "--bundles dmg,app --target x86_64-apple-darwin",
+     "target": "x86_64-apple-darwin"},
+]
 
 
 def sign_status(tag, env):
-    """Stable tags must be fully signed. Pre-releases may not be, and their notes say so."""
+    """Stable tags need every signature they ship. Pre-releases may lack any, and their notes say so."""
     missing = {k: [n for n in v if not env.get(n)] for k, v in SIGNING.items()}
     missing = {k: v for k, v in missing.items() if v}
-    if missing and not is_prerelease(tag):
-        raise ValueError(f"a stable release needs every signing secret; missing {missing}")
+    blocking = {k: v for k, v in missing.items() if k not in LEFT_OUT_IF_UNSIGNED}
+    if blocking and not is_prerelease(tag):
+        raise ValueError(f"a stable release needs these signing secrets; missing {blocking}")
     return sorted(missing)
+
+
+def desktop_matrix(tag, env):
+    """The builds for a tag. Windows joins stable releases once they can be signed."""
+    unsigned = not env.get("WINDOWS_SIGN_COMMAND") and not is_prerelease(tag)
+    return [b for b in DESKTOP_BUILDS if not (unsigned and b["name"].startswith("windows"))]
 
 
 def main(argv):
@@ -207,6 +231,8 @@ def main(argv):
         print(f"update feed platforms: {sorted(feed['platforms'])}")
     elif command == "sign-status" and len(argv) == 3:
         print("unsigned:", ", ".join(sign_status(argv[2], os.environ)) or "nothing")
+    elif command == "desktop-matrix" and len(argv) == 3:
+        print(json.dumps(desktop_matrix(argv[2], os.environ), separators=(",", ":")))
     else:
         sys.exit(__doc__)
 

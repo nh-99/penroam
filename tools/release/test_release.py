@@ -95,12 +95,16 @@ class Assemble(unittest.TestCase):
 class Signing(unittest.TestCase):
     ALL = {n: "x" for names in release.SIGNING.values() for n in names}
 
-    def test_a_stable_release_needs_every_secret(self):
+    def test_a_stable_release_needs_what_it_ships(self):
         self.assertEqual(release.sign_status("v1.0.0", self.ALL), [])
         env = dict(self.ALL, APPLE_ID="")
         with self.assertRaises(ValueError) as caught:
             release.sign_status("v1.0.0", env)
         self.assertIn("APPLE_ID", str(caught.exception))
+
+    def test_a_stable_release_goes_ahead_without_windows_signing(self):
+        env = dict(self.ALL, WINDOWS_SIGN_COMMAND="")
+        self.assertEqual(release.sign_status("v1.0.0", env), ["windows"])
 
     def test_a_prerelease_reports_what_is_unsigned(self):
         self.assertEqual(release.sign_status("v1.0.0-beta.1", {}), ["android", "macos", "updates", "windows"])
@@ -110,6 +114,25 @@ class Signing(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             release.sign_status("v1.0.0", env)
         self.assertNotIn("'x'", str(caught.exception))
+
+
+class Matrix(unittest.TestCase):
+    @staticmethod
+    def names(tag, env):
+        return [b["name"] for b in release.desktop_matrix(tag, env)]
+
+    def test_stable_leaves_out_an_unsigned_windows_build(self):
+        self.assertEqual(self.names("v1.0.0", {}), ["linux-x86_64", "macos-aarch64", "macos-x86_64"])
+
+    def test_stable_includes_windows_once_it_can_be_signed(self):
+        self.assertIn("windows-x86_64", self.names("v1.0.0", {"WINDOWS_SIGN_COMMAND": "sign %1"}))
+
+    def test_prereleases_always_include_windows(self):
+        self.assertIn("windows-x86_64", self.names("v1.0.0-beta.1", {}))
+
+    def test_notes_say_when_windows_is_missing(self):
+        self.assertIn("no Windows installer", release.release_notes("1.2.0", CONTRACT, CHANGELOG, False))
+        self.assertNotIn("no Windows installer", release.release_notes("1.2.0", CONTRACT, CHANGELOG))
 
 
 if __name__ == "__main__":
