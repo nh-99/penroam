@@ -12,7 +12,7 @@
 Only the standard library, so it runs before anything is installed. docs/development.md#releases
 describes the whole process.
 """
-import hashlib, json, os, pathlib, re, subprocess, sys
+import hashlib, json, os, pathlib, re, shutil, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 REPO_URL = "https://github.com/nh-99/penroam"
@@ -22,7 +22,6 @@ FEED_PLATFORMS = [
     (re.compile(r"\.AppImage$"), "linux-x86_64"),
     (re.compile(r"-setup\.exe$"), "windows-x86_64"),
     (re.compile(r"aarch64.*\.app\.tar\.gz$"), "darwin-aarch64"),
-    (re.compile(r"x64.*\.app\.tar\.gz$|x86_64.*\.app\.tar\.gz$"), "darwin-x86_64"),
 ]
 
 
@@ -166,7 +165,8 @@ def notices(out):
                 pathlib.Path(pkg["manifest_path"]).parent)
     app = ROOT / "apps/desktop-mobile"
     tree = json.loads(subprocess.check_output(
-        ["pnpm", "ls", "--prod", "--depth", "Infinity", "--json"], cwd=app))
+        # By full path: on Windows pnpm is `pnpm.cmd`, which CreateProcess won't find by name.
+        [shutil.which("pnpm") or "pnpm", "ls", "--prod", "--depth", "Infinity", "--json"], cwd=app))
     seen = {}
 
     def walk(deps):
@@ -209,9 +209,9 @@ DESKTOP_BUILDS = [
     {"os": "windows-latest", "name": "windows-x86_64", "args": "--bundles nsis"},
     {"os": "macos-latest", "name": "macos-aarch64", "args": "--bundles dmg,app --target aarch64-apple-darwin",
      "target": "aarch64-apple-darwin"},
-    {"os": "macos-latest", "name": "macos-x86_64", "args": "--bundles dmg,app --target x86_64-apple-darwin",
-     "target": "x86_64-apple-darwin"},
 ]
+# No Intel Mac build: ONNX Runtime, which the handwriting model needs, has no prebuilt library for
+# x86_64-apple-darwin, and building it from source isn't worth it for a platform Apple is leaving.
 
 
 def sign_status(tag, env):

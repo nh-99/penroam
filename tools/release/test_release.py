@@ -141,7 +141,7 @@ class Matrix(unittest.TestCase):
         return [b["name"] for b in release.desktop_matrix(tag, env)]
 
     def test_stable_leaves_out_an_unsigned_windows_build(self):
-        self.assertEqual(self.names("v1.0.0", {}), ["linux-x86_64", "macos-aarch64", "macos-x86_64"])
+        self.assertEqual(self.names("v1.0.0", {}), ["linux-x86_64", "macos-aarch64"])
 
     def test_stable_includes_windows_once_it_can_be_signed(self):
         self.assertIn("windows-x86_64", self.names("v1.0.0", {"WINDOWS_SIGN_COMMAND": "sign %1"}))

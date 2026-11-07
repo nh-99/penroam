@@ -378,8 +378,11 @@ well: losing it means existing installs can't update. `promote.yml` uses the `re
 environment, so required reviewers can be added there.
 
 The same tag uploads to testers when the store secrets below are set, and skips that step when they
-aren't. The `testflight` job generates `gen/apple` on a macOS runner and signs through Apple's
-cloud-managed certificates, so it needs no certificate or profile. The `google-play` job uploads to
+aren't. The `ios` job generates `gen/apple` on a macOS runner and signs through Apple's
+cloud-managed certificates, so it needs no certificate or profile, but the API key must have the
+Admin role and `ink.penroam.app` must be registered to the team. The `testflight` job then uploads
+that IPA, and can be re-run on its own. The IPA is App Store-signed, so it isn't attached to the
+GitHub release. The `google-play` job uploads to
 the track in the `GOOGLE_PLAY_TRACK` variable, `internal` by default. Moving a build further happens
 in App Store Connect or the Play Console. Build numbers come from the workflow's run number, because
 a beta and its final release share `X.Y.Z` and the stores refuse a repeated build number.

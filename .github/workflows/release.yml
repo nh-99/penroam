@@ -213,8 +213,10 @@ jobs:
 
   # gen/apple isn't checked in: it needs macOS to generate, so each run makes it fresh. With an
   # App Store Connect key, Tauri skips local signing and Xcode signs at export through Apple's
-  # cloud-managed certificates, so no certificate or profile is stored here.
-  testflight:
+  # cloud-managed certificates, so no certificate or profile is stored here. The IPA is signed for
+  # the App Store, which means it installs from TestFlight or the store and nowhere else, so like
+  # the AAB it stays out of the GitHub release.
+  ios:
     needs: verify
     if: needs.verify.outputs.testflight == 'true'
     runs-on: macos-latest
@@ -233,7 +235,6 @@ jobs:
       - name: App Store Connect key
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-        # altool looks for the key in this folder under this name.
         run: |
           mkdir -p ~/.appstoreconnect/private_keys
           key=~/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY}.p8
@@ -249,10 +250,35 @@ jobs:
         run: |
           pnpm tauri ios build --ci --target aarch64 --export-method app-store-connect \
             --config "$(python3 tools/release/release.py store-config ios "$GITHUB_RUN_NUMBER")"
+          mkdir store
+          find apps/desktop-mobile/src-tauri/gen/apple/build -name '*.ipa' -exec cp {} store/penroam.ipa \;
+          test -s store/penroam.ipa
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-store
+          path: store/penroam.ipa
+          if-no-files-found: error
+
+  # Separate from `ios` for the same reason as `google-play`: an upload Apple refuses can be
+  # re-run without building again.
+  testflight:
+    needs: ios
+    runs-on: macos-latest # altool only exists on macOS
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ios-store
+          path: store
       - name: Upload to TestFlight
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        # altool looks for the key in this folder under this name.
         run: |
-          ipa=$(find apps/desktop-mobile/src-tauri/gen/apple/build -name '*.ipa' | head -1)
-          xcrun altool --upload-app --type ios --file "$ipa" \
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "$APPLE_API_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY}.p8
+          xcrun altool --upload-app --type ios --file store/penroam.ipa \
             --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
 
   draft:
@@ -271,7 +297,7 @@ jobs:
           path: release
           merge-multiple: true
       - name: Store-only files stay out of the release
-        run: rm -f release/penroam.aab release/mapping.txt
+        run: rm -f release/penroam.aab release/mapping.txt release/penroam.ipa
       - name: Software bill of materials
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
