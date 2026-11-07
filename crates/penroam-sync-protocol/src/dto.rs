@@ -39,6 +39,9 @@ pub mod capabilities {
     /// Signed handwriting model catalog and model downloads (`/v1/models/*`, protocol 1.4; see
     /// [`crate::models`]).
     pub const MODELS_V1: &str = "models.v1";
+    /// Paid plans bought through an app store (`POST /v1/account/store-purchase` and the store
+    /// fields of [`crate::account`], protocol 1.5).
+    pub const STORE_PURCHASES_V1: &str = "store-purchases.v1";
 }
 
 /// `GET /v1/meta` response.

@@ -6,6 +6,11 @@
 //! own billing pages in the system browser. Payment providers, prices and receipts stay inside
 //! the server; the app never sees a provider id and never tells the server what was paid.
 //!
+//! Plans bought through an app store (capability `store-purchases.v1`, protocol 1.5) work the
+//! same way. The store takes the payment, and the app passes on the store's own identifier for
+//! it. That identifier is only a lookup key: the server asks the store what it means and
+//! derives the plan from the answer, so a client can't claim a payment by inventing one.
+//!
 //! Routes (all need an account or device session unless stated):
 //!
 //! * `GET /v1/account` returns an [`AccountState`].
@@ -17,6 +22,10 @@
 //!   and returns the [`DeletionState`]. It needs an **account session** obtained by a sign-in
 //!   within the server's re-authentication window (otherwise `reauth_required`). `DELETE` on
 //!   the same route withdraws the request while the cooling-off period runs.
+//! * `POST /v1/account/store-purchase` takes a [`StorePurchaseRequest`] and returns the updated
+//!   [`AccountState`]. `conflict` means the purchase belongs to another account. Retryable
+//!   errors mean the server couldn't reach the store yet: the app keeps the store transaction
+//!   unfinished and tries again, so a purchase is never lost.
 //!
 //! Invariants that matter to clients:
 //!
@@ -26,7 +35,8 @@
 //!   ignore values they do not know (an unknown action is not offered, an unknown status is
 //!   shown by its plan name only).
 //! * Store-distributed apps may be forbidden from showing [`AccountState::offers`] or opening a
-//!   billing link. That decision belongs to the client build, not to the server.
+//!   billing link. That decision belongs to the client build, not to the server. Those builds
+//!   sell [`PlanOffer::store_products`] instead, under [`actions::SUBSCRIBE_IN_STORE`].
 //!
 //! Normative description: `docs/protocol/sync-protocol-v1.md` §12b.
 
@@ -40,6 +50,27 @@ pub const MAX_BILLING_URL_LEN: usize = 2048;
 pub const MAX_LABEL_LEN: usize = 128;
 /// Most offers an [`AccountState`] may list.
 pub const MAX_OFFERS: usize = 8;
+/// Longest accepted [`StorePurchaseRequest::transaction`]. Play purchase tokens are long.
+pub const MAX_STORE_TRANSACTION_LEN: usize = 4096;
+
+/// App stores, in [`StorePurchaseRequest::store`] and [`PlanState::managed_in`].
+pub mod stores {
+    /// The Apple App Store.
+    pub const APP_STORE: &str = "app_store";
+    /// Google Play.
+    pub const GOOGLE_PLAY: &str = "google_play";
+}
+
+/// Values of [`PlanState::managed_in`]: where the user changes or cancels a paid plan. An open
+/// set, like the other strings here.
+pub mod plan_managers {
+    /// The server's billing pages ([`super::actions::MANAGE_BILLING`]).
+    pub const WEB: &str = "web";
+    /// App Store subscription settings.
+    pub const APP_STORE: &str = super::stores::APP_STORE;
+    /// Google Play subscription settings.
+    pub const GOOGLE_PLAY: &str = super::stores::GOOGLE_PLAY;
+}
 
 /// Values of [`PlanState::status`].
 pub mod plan_status {
@@ -73,6 +104,9 @@ pub mod read_only_reasons {
 pub mod actions {
     /// Start a paid plan ([`super::BillingLinkRequest`] with an offer id).
     pub const SUBSCRIBE: &str = "subscribe";
+    /// Start a paid plan through an app store, using [`super::PlanOffer::store_products`] and
+    /// [`super::AccountState::store_account_token`], then `POST /v1/account/store-purchase`.
+    pub const SUBSCRIBE_IN_STORE: &str = "subscribe_in_store";
     /// Open the billing account: payment method, invoices, cancellation ([`super::BillingLinkRequest`]).
     pub const MANAGE_BILLING: &str = "manage_billing";
     /// `POST /v1/account/deletion`.
@@ -105,6 +139,11 @@ pub struct AccountState {
     /// Present while a deletion request is pending.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deletion: Option<DeletionState>,
+    /// Opaque UUID to attach to store purchases (Apple's `appAccountToken`, Play's
+    /// `obfuscatedAccountId`), so a purchase can be tied to this account. It isn't the account
+    /// id, which stays out of the stores' records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_account_token: Option<String>,
 }
 
 impl AccountState {
@@ -135,6 +174,13 @@ impl AccountState {
         if self.writable == self.read_only_reason.is_some() {
             return Err("writable and read_only_reason disagree");
         }
+        if self
+            .store_account_token
+            .as_deref()
+            .is_some_and(|t| !is_uuid(t))
+        {
+            return Err("store_account_token");
+        }
         Ok(())
     }
 }
@@ -155,11 +201,18 @@ pub struct PlanState {
     /// payment grace period, end of a grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ends_at_unix_s: Option<u64>,
+    /// Where a paid plan is managed (one of [`plan_managers`]). Absent when there's nothing to
+    /// manage. A store plan can't be changed or cancelled through this server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_in: Option<String>,
 }
 
 impl PlanState {
     fn validate(&self) -> Result<(), &'static str> {
         if !label_ok(&self.id) || !label_ok(&self.name) || !label_ok(&self.status) {
+            return Err("plan");
+        }
+        if self.managed_in.as_deref().is_some_and(|m| !label_ok(m)) {
             return Err("plan");
         }
         Ok(())
@@ -191,12 +244,68 @@ pub struct PlanOffer {
     pub price_label: String,
     /// Allowance the plan gives.
     pub quota_bytes: u64,
+    /// The same plan's products in the app stores, if it's sold there. A store app shows the
+    /// price the store reports, not [`Self::price_label`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_products: Option<StoreProducts>,
 }
 
 impl PlanOffer {
     fn validate(&self) -> Result<(), &'static str> {
         if !label_ok(&self.id) || !label_ok(&self.name) || !label_ok(&self.price_label) {
             return Err("offer");
+        }
+        if let Some(p) = &self.store_products {
+            let ids = [
+                &p.apple_product_id,
+                &p.google_product_id,
+                &p.google_base_plan_id,
+            ];
+            let bad = |id: &&Option<String>| id.as_ref().is_some_and(|id| !label_ok(id));
+            if ids.iter().any(bad) {
+                return Err("offer");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Store product identifiers of a [`PlanOffer`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreProducts {
+    /// App Store product id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apple_product_id: Option<String>,
+    /// Google Play subscription product id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_product_id: Option<String>,
+    /// Google Play base plan of that subscription (monthly and yearly are two base plans).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_base_plan_id: Option<String>,
+}
+
+/// `POST /v1/account/store-purchase` request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorePurchaseRequest {
+    /// One of [`stores`].
+    pub store: String,
+    /// The store's identifier for the purchase: an App Store transaction id, or a Play purchase
+    /// token. The server looks it up with the store and trusts nothing else about it.
+    pub transaction: String,
+}
+
+impl StorePurchaseRequest {
+    /// Check bounds. The server calls this before asking a store.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !label_ok(&self.store) {
+            return Err("store");
+        }
+        let t = &self.transaction;
+        if t.is_empty()
+            || t.len() > MAX_STORE_TRANSACTION_LEN
+            || t.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err("transaction");
         }
         Ok(())
     }
@@ -255,6 +364,15 @@ fn label_ok(s: &str) -> bool {
     !s.is_empty() && s.len() <= MAX_LABEL_LEN && !s.chars().any(char::is_control)
 }
 
+/// The hyphenated, lowercase form both stores accept.
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_digit() || ('a'..='f').contains(&c),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +386,7 @@ mod tests {
                 status: plan_status::FREE.into(),
                 renews_at_unix_s: None,
                 ends_at_unix_s: None,
+                managed_in: None,
             },
             storage: StorageState {
                 used_bytes: 10,
@@ -279,7 +398,53 @@ mod tests {
             offers: vec![],
             actions: vec![actions::REQUEST_DELETION.into()],
             deletion: None,
+            store_account_token: None,
         }
+    }
+
+    #[test]
+    fn store_account_tokens_are_uuids() {
+        let mut s = state();
+        s.store_account_token = Some("3f2c1b7e-8d4a-4f6e-9b21-0c7d5e1a2b3c".into());
+        s.validate().unwrap();
+        for bad in ["acct-1", "", "3F2C1B7E-8D4A-4F6E-9B21-0C7D5E1A2B3C"] {
+            s.store_account_token = Some(bad.into());
+            assert!(s.validate().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn store_purchase_requests_are_bounded() {
+        let req = |t: &str| StorePurchaseRequest {
+            store: stores::APP_STORE.into(),
+            transaction: t.into(),
+        };
+        req("2000000123456789").validate().unwrap();
+        req(&"a".repeat(MAX_STORE_TRANSACTION_LEN))
+            .validate()
+            .unwrap();
+        for bad in [
+            String::new(),
+            "a b".to_string(),
+            "a\nb".to_string(),
+            "a".repeat(MAX_STORE_TRANSACTION_LEN + 1),
+        ] {
+            assert!(req(&bad).validate().is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn older_servers_and_clients_stay_compatible() {
+        // A 1.4 server sends none of the store fields.
+        let old = r#"{"account_id":"acct-1","plan":{"id":"free","name":"Free","status":"free"},
+            "storage":{"used_bytes":0,"quota_bytes":100},"writable":true,
+            "offers":[{"id":"m","name":"M","price_label":"$1","quota_bytes":5}]}"#;
+        let s: AccountState = serde_json::from_str(old).unwrap();
+        s.validate().unwrap();
+        assert!(s.store_account_token.is_none() && s.offers[0].store_products.is_none());
+        // Without store fields, nothing new is written for a 1.4 client to meet.
+        let out = serde_json::to_string(&state()).unwrap();
+        assert!(!out.contains("store") && !out.contains("managed_in"));
     }
 
     #[test]

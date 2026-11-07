@@ -821,6 +821,7 @@ impl InMemoryServer {
                     status: plan_status::FREE.into(),
                     renews_at_unix_s: None,
                     ends_at_unix_s: None,
+                    managed_in: None,
                 },
                 storage: StorageState {
                     used_bytes: used,
@@ -832,6 +833,7 @@ impl InMemoryServer {
                 offers: Vec::new(),
                 actions: Vec::new(),
                 deletion: None,
+                store_account_token: None,
             })
         })
     }

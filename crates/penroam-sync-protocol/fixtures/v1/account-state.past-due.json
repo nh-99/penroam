@@ -4,7 +4,8 @@
     "id": "cloud",
     "name": "Penroam Cloud",
     "status": "past_due",
-    "ends_at_unix_s": 1794960000
+    "ends_at_unix_s": 1794960000,
+    "managed_in": "web"
   },
   "storage": {
     "used_bytes": 851443712,

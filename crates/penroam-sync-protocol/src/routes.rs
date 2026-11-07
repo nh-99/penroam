@@ -57,6 +57,9 @@ pub const ACCOUNT_BILLING_LINK: &str = "/v1/account/billing-link";
 /// `POST` request account deletion (fresh account session) / `DELETE` withdraw the request.
 /// Capability `account.v1`.
 pub const ACCOUNT_DELETION: &str = "/v1/account/deletion";
+/// `POST` a [`crate::account::StorePurchaseRequest`], get the updated
+/// [`crate::account::AccountState`]. Capability `store-purchases.v1` (protocol 1.5).
+pub const ACCOUNT_STORE_PURCHASE: &str = "/v1/account/store-purchase";
 
 /// `GET` the signed handwriting model catalog ([`crate::models::SignedCatalog`]).
 /// Unauthenticated. 404 `not_found` until one is published. Capability `models.v1` (protocol
@@ -83,7 +86,7 @@ pub const HEADER_HAS_MORE: &str = "Penroam-Has-More";
 pub const HEADER_PROTOCOL: &str = "Penroam-Protocol";
 
 /// Every route, for documentation/compat tests.
-pub const ALL: [&str; 21] = [
+pub const ALL: [&str; 22] = [
     META,
     DEVICES,
     DEVICE,
@@ -105,6 +108,7 @@ pub const ALL: [&str; 21] = [
     ACCOUNT,
     ACCOUNT_BILLING_LINK,
     ACCOUNT_DELETION,
+    ACCOUNT_STORE_PURCHASE,
 ];
 
 #[cfg(test)]

@@ -173,6 +173,7 @@ components:
             status: { type: string, description: "free, trialing, active, canceling, past_due, granted (open set)" }
             renews_at_unix_s: { type: integer }
             ends_at_unix_s: { type: integer }
+            managed_in: { type: string, description: "web, app_store, google_play (open set)" }
         storage:
           type: object
           required: [used_bytes, quota_bytes]
@@ -193,10 +194,17 @@ components:
               name: { type: string }
               price_label: { type: string }
               quota_bytes: { type: integer }
+              store_products:
+                type: object
+                properties:
+                  apple_product_id: { type: string }
+                  google_product_id: { type: string }
+                  google_base_plan_id: { type: string }
         actions:
           type: array
-          items: { type: string, description: "subscribe, manage_billing, request_deletion, cancel_deletion (open set)" }
+          items: { type: string, description: "subscribe, subscribe_in_store, manage_billing, request_deletion, cancel_deletion (open set)" }
         deletion: { $ref: "#/components/schemas/DeletionState" }
+        store_account_token: { type: string, format: uuid }
     DeletionState:
       type: object
       required: [requested_at_unix_s, erase_after_unix_s]
@@ -650,6 +658,26 @@ paths:
                 properties:
                   url: { type: string, format: uri, maxLength: 2048 }
                   expires_in_s: { type: integer }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/account/store-purchase:
+    post:
+      summary: Tell the server about an app store purchase; it verifies with the store (store-purchases.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [store, transaction]
+              properties:
+                store: { type: string, enum: [app_store, google_play] }
+                transaction: { type: string, maxLength: 4096 }
+      responses:
+        "200":
+          description: Account state after the purchase
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountState" }
         default: { $ref: "#/components/responses/Error" }
   /v1/account/deletion:
     post:

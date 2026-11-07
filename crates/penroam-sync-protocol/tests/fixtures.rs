@@ -87,6 +87,8 @@ fn every_fixture_is_checked() {
         "account-state.free.json",
         "account-state.over-quota.json",
         "account-state.past-due.json",
+        "account-state.store-offers.json",
+        "account-store-purchase-request.json",
         "account-billing-link-request.json",
         "account-billing-link.json",
         "account-deletion.json",
@@ -261,12 +263,20 @@ fn account_documents() {
         "account-state.free.json",
         "account-state.over-quota.json",
         "account-state.past-due.json",
+        "account-state.store-offers.json",
     ] {
         let s: AccountState = roundtrip(name);
         s.validate().unwrap_or_else(|e| panic!("{name}: {e}"));
     }
     let free: AccountState = roundtrip("account-state.free.json");
     assert!(free.allows(actions::SUBSCRIBE));
+    let store: AccountState = roundtrip("account-state.store-offers.json");
+    assert!(store.allows(penroam_sync_protocol::account::actions::SUBSCRIBE_IN_STORE));
+    assert!(store.store_account_token.is_some());
+    assert_eq!(store.offers.len(), 2);
+    let purchase: penroam_sync_protocol::StorePurchaseRequest =
+        roundtrip("account-store-purchase-request.json");
+    purchase.validate().unwrap();
     let req: BillingLinkRequest = roundtrip("account-billing-link-request.json");
     assert_eq!(req.offer_id.as_deref(), Some(free.offers[0].id.as_str()));
     let link: BillingLink = roundtrip("account-billing-link.json");

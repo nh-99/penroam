@@ -503,6 +503,21 @@ mod http {
             Ok(l)
         }
 
+        /// `POST /v1/account/store-purchase`: tell the server about a store purchase, and get the
+        /// resulting account state. Finish the store transaction only after this succeeds or
+        /// the error is `conflict`; a retryable error means try again later.
+        pub fn store_purchase(
+            &self,
+            req: &penroam_sync_protocol::StorePurchaseRequest,
+        ) -> TResult<penroam_sync_protocol::AccountState> {
+            let s: penroam_sync_protocol::AccountState = self
+                .post_json(routes::ACCOUNT_STORE_PURCHASE, req)?
+                .ok_or_else(|| TransportError::Protocol("empty store purchase response".into()))?;
+            s.validate()
+                .map_err(|e| TransportError::Protocol(format!("account state: {e}")))?;
+            Ok(s)
+        }
+
         /// `POST /v1/account/deletion`. Needs an account session from a recent sign-in;
         /// otherwise the error code is `reauth_required`.
         pub fn request_deletion(&self) -> TResult<penroam_sync_protocol::DeletionState> {

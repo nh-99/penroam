@@ -49,7 +49,7 @@ pub mod version;
 
 pub use account::{
     AccountState, BillingLink, BillingLinkRequest, DeletionState, PlanOffer, PlanState,
-    StorageState,
+    StorageState, StoreProducts, StorePurchaseRequest,
 };
 pub use auth::{
     canonical_device_auth_bytes, AuthConfig, DeviceChallenge, DeviceChallengeRequest,

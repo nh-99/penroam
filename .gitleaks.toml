@@ -8,5 +8,6 @@ description = "Published crypto test vectors and sync protocol fixtures"
 paths = [
   '''^crates/penroam-sync/tests/vectors/crypto-vectors\.json$''',
   '''^crates/penroam-sync-protocol/fixtures/v1/auth-session-request\.json$''',
+  '''^crates/penroam-sync-protocol/fixtures/v1/account-state\.store-offers\.json$''',
   '''^crates/penroam-sync-testkit/src/fixtures\.rs$''',
 ]

@@ -416,10 +416,12 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
     );
 
     // Plan, storage and billing links (account.v1, protocol 1.3).
-    use penroam_sync_protocol::account::{actions, plan_status, read_only_reasons};
+    use penroam_sync_protocol::account::{
+        actions, plan_managers, plan_status, read_only_reasons, stores,
+    };
     use penroam_sync_protocol::{
         AccountState, BillingLink, BillingLinkRequest, DeletionState, PlanOffer, PlanState,
-        StorageState,
+        StorageState, StoreProducts, StorePurchaseRequest,
     };
     const MIB: u64 = 1024 * 1024;
     json(
@@ -432,6 +434,7 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
                 status: plan_status::FREE.into(),
                 renews_at_unix_s: None,
                 ends_at_unix_s: None,
+                managed_in: None,
             },
             storage: StorageState {
                 used_bytes: 2098,
@@ -445,9 +448,71 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
                 name: "Penroam Cloud".into(),
                 price_label: "$3.99 / month".into(),
                 quota_bytes: 5 * 1024 * MIB,
+                store_products: None,
             }],
             actions: vec![actions::SUBSCRIBE.into(), actions::REQUEST_DELETION.into()],
             deletion: None,
+            store_account_token: None,
+        }),
+    );
+    // Plans bought through an app store (store-purchases.v1, protocol 1.5).
+    json(
+        "account-state.store-offers.json",
+        to_fixture_json(&AccountState {
+            account_id: account.clone(),
+            plan: PlanState {
+                id: "free".into(),
+                name: "Free".into(),
+                status: plan_status::FREE.into(),
+                renews_at_unix_s: None,
+                ends_at_unix_s: None,
+                managed_in: None,
+            },
+            storage: StorageState {
+                used_bytes: 2098,
+                quota_bytes: Some(100 * MIB),
+                free_quota_bytes: Some(100 * MIB),
+            },
+            writable: true,
+            read_only_reason: None,
+            offers: vec![
+                PlanOffer {
+                    id: "cloud-monthly".into(),
+                    name: "Penroam Cloud".into(),
+                    price_label: "$3.99 / month".into(),
+                    quota_bytes: 5 * 1024 * MIB,
+                    store_products: Some(StoreProducts {
+                        apple_product_id: Some("ink.penroam.app.cloud.monthly".into()),
+                        google_product_id: Some("penroam_cloud".into()),
+                        google_base_plan_id: Some("monthly".into()),
+                    }),
+                },
+                PlanOffer {
+                    id: "cloud-annual".into(),
+                    name: "Penroam Cloud (yearly)".into(),
+                    price_label: "$36 / year".into(),
+                    quota_bytes: 5 * 1024 * MIB,
+                    store_products: Some(StoreProducts {
+                        apple_product_id: Some("ink.penroam.app.cloud.yearly".into()),
+                        google_product_id: Some("penroam_cloud".into()),
+                        google_base_plan_id: Some("yearly".into()),
+                    }),
+                },
+            ],
+            actions: vec![
+                actions::SUBSCRIBE.into(),
+                actions::SUBSCRIBE_IN_STORE.into(),
+                actions::REQUEST_DELETION.into(),
+            ],
+            deletion: None,
+            store_account_token: Some("3f2c1b7e-8d4a-4f6e-9b21-0c7d5e1a2b3c".into()),
+        }),
+    );
+    json(
+        "account-store-purchase-request.json",
+        to_fixture_json(&StorePurchaseRequest {
+            store: stores::APP_STORE.into(),
+            transaction: "2000000123456789".into(),
         }),
     );
     json(
@@ -460,6 +525,7 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
                 status: plan_status::FREE.into(),
                 renews_at_unix_s: None,
                 ends_at_unix_s: None,
+                managed_in: None,
             },
             storage: StorageState {
                 used_bytes: 812 * MIB,
@@ -477,6 +543,7 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
                 requested_at_unix_s: 1_793_750_400,
                 erase_after_unix_s: 1_796_342_400,
             }),
+            store_account_token: None,
         }),
     );
     json(
@@ -489,6 +556,7 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
                 status: plan_status::PAST_DUE.into(),
                 renews_at_unix_s: None,
                 ends_at_unix_s: Some(1_794_960_000),
+                managed_in: Some(plan_managers::WEB.into()),
             },
             storage: StorageState {
                 used_bytes: 812 * MIB,
@@ -503,6 +571,7 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
                 actions::REQUEST_DELETION.into(),
             ],
             deletion: None,
+            store_account_token: None,
         }),
     );
     json(

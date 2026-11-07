@@ -1,0 +1,44 @@
+{
+  "account_id": "acct-fixture-0001",
+  "plan": {
+    "id": "free",
+    "name": "Free",
+    "status": "free"
+  },
+  "storage": {
+    "used_bytes": 2098,
+    "quota_bytes": 104857600,
+    "free_quota_bytes": 104857600
+  },
+  "writable": true,
+  "offers": [
+    {
+      "id": "cloud-monthly",
+      "name": "Penroam Cloud",
+      "price_label": "$3.99 / month",
+      "quota_bytes": 5368709120,
+      "store_products": {
+        "apple_product_id": "ink.penroam.app.cloud.monthly",
+        "google_product_id": "penroam_cloud",
+        "google_base_plan_id": "monthly"
+      }
+    },
+    {
+      "id": "cloud-annual",
+      "name": "Penroam Cloud (yearly)",
+      "price_label": "$36 / year",
+      "quota_bytes": 5368709120,
+      "store_products": {
+        "apple_product_id": "ink.penroam.app.cloud.yearly",
+        "google_product_id": "penroam_cloud",
+        "google_base_plan_id": "yearly"
+      }
+    }
+  ],
+  "actions": [
+    "subscribe",
+    "subscribe_in_store",
+    "request_deletion"
+  ],
+  "store_account_token": "3f2c1b7e-8d4a-4f6e-9b21-0c7d5e1a2b3c"
+}

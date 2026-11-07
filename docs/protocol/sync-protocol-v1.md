@@ -44,7 +44,7 @@ The local-format numbers are copied into the protocol crate on purpose, because 
   * `MalformedRange`: an advertised range has min > max.
 
   Every `Incompatible` maps to `upgrade_required`. The client stops syncing, keeps its outbox and local data, and shows an actionable state. It never "tries anyway".
-* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b), `models.v1` (1.4, §12c). Clients ignore unknown capabilities.
+* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b), `models.v1` (1.4, §12c), `store-purchases.v1` (1.5, §12d). Clients ignore unknown capabilities.
 * Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind. 1.3 adds `account.v1` (§12b) and the error code `reauth_required`; older clients never call the new routes and read the new code as `unknown`. 1.4 adds `models.v1` (§12c) and nothing else.
 * Clients must call `Limits::validate()` on advertised limits. They refuse values that are 0 or above the hard maxima.
 * Op schema: servers relay payloads whose `op_schema_version` is newer than they know, because the payload is opaque to them. A client that cannot apply a newer schema calls `EnvelopeHeader::check_op_schema_supported()`. On failure it pauses with `upgrade_required` and keeps the ciphertext. It never drops the operation.
@@ -400,7 +400,8 @@ The development test server does not list `auth.v1`; it keeps its `/_test/sessio
 Servers that give accounts a storage allowance, and possibly sell larger ones, list
 `account.v1`. Types are in `penroam_sync_protocol::account`; the client calls are inherent
 methods of `penroam_sync::transport::HttpTransport`. Payment providers are **not** part of the
-protocol: the app never sees a provider id or a price id, and never reports a payment.
+protocol: the app never sees a provider id or a price id, and never reports a payment. Plans
+bought through an app store are in §12d.
 
 | Route | Token | Request | Response |
 |---|---|---|---|
@@ -410,9 +411,9 @@ protocol: the app never sees a provider id or a price id, and never reports a pa
 | `DELETE /v1/account/deletion` | account or device | — | 204 |
 
 `AccountState { account_id, plan, storage, writable, read_only_reason?, offers, actions,
-deletion? }`:
+deletion?, store_account_token? }`:
 
-* `plan { id, name, status, renews_at_unix_s?, ends_at_unix_s? }`. `status` is one of `free`,
+* `plan { id, name, status, renews_at_unix_s?, ends_at_unix_s?, managed_in? }`. `status` is one of `free`,
   `trialing`, `active`, `canceling` (ends at `ends_at_unix_s`), `past_due` (a payment failed; the
   plan's allowance holds until `ends_at_unix_s`, the end of the grace period) or `granted`
   (operator allowance, may end at `ends_at_unix_s`).
@@ -422,10 +423,10 @@ deletion? }`:
   the allowance, for example after a plan ended), `suspended` (operator) or `deletion_pending`.
   A read-only account still pulls, downloads blobs and lets the user export; uploads fail with
   `quota_exceeded` and stay queued on the device. Nothing on the device is deleted or locked.
-* `offers [{ id, name, price_label, quota_bytes }]`: paid plans the account can start. The
+* `offers [{ id, name, price_label, quota_bytes, store_products? }]`: paid plans the account can start. The
   server formats `price_label`; the billing page shows the binding price.
-* `actions`: what the user can do now, from `subscribe`, `manage_billing`, `request_deletion`,
-  `cancel_deletion`. Clients only call an action that is listed.
+* `actions`: what the user can do now, from `subscribe`, `subscribe_in_store`, `manage_billing`,
+  `request_deletion`, `cancel_deletion`. Clients only call an action that is listed.
 
 All strings except ids are open sets: clients ignore unknown statuses, reasons and actions.
 Clients call `AccountState::validate()` and refuse responses that fail it.
@@ -437,8 +438,8 @@ accepts (absolute `https://`, no credentials, at most 2048 characters) and open 
 **system browser**. The app does not learn the outcome from the browser: it reads
 `GET /v1/account` again when it returns to the foreground. The server derives the plan from its
 payment provider's verified records, never from the client. A client build distributed through
-an app store whose rules forbid outside purchase links does not show `offers` or open billing
-links; that is a client decision.
+an app store whose rules forbid outside purchase links does not open billing links; that is a
+client decision.
 
 **Deletion.** `POST /v1/account/deletion` needs an **account** session created by a sign-in within
 the server's re-authentication window (the hosted service uses 10 minutes); otherwise it answers
@@ -511,6 +512,42 @@ Client rules:
    nothing.
 
 Servers may answer 429 and 503 like any route. Nothing about models affects sync.
+
+## 12d. Plans bought through an app store (`store-purchases.v1`, protocol 1.5)
+
+Servers that sell plans through the App Store or Google Play list `store-purchases.v1`. It adds
+to §12b, and a client that doesn't know it loses nothing.
+
+| Route | Token | Request | Response |
+|---|---|---|---|
+| `POST /v1/account/store-purchase` | account or device | `StorePurchaseRequest { store, transaction }` | `AccountState` |
+
+* `offers[].store_products { apple_product_id?, google_product_id?, google_base_plan_id? }` name the
+  plan in each store. A store app shows the price the store reports, never `price_label`.
+* `actions` lists `subscribe_in_store` when the account can start a store plan. Each account has one
+  paid plan at a time, across every way of paying.
+* `store_account_token` is an opaque UUID. The app attaches it to the purchase, as Apple's
+  `appAccountToken` or Play's `obfuscatedAccountId`. It isn't the account id.
+* `plan.managed_in` says where a paid plan is changed or cancelled: `web`, `app_store` or
+  `google_play`. A store plan can't be changed through this server, so the app links to the store's
+  subscription settings. The server can't cancel a store plan either, so a client warns about that
+  before requesting account deletion.
+
+**Purchase flow.**
+
+1. The app buys `store_products` through the store, attaching `store_account_token`.
+2. It sends `POST /v1/account/store-purchase`, with `store` `app_store` and an App Store transaction
+   id as `transaction`, or `google_play` and a Play purchase token.
+3. The server looks the identifier up with the store and derives the plan from the answer. The
+   identifier is only a lookup key, so a client can't claim a payment.
+4. On success the app finishes the store transaction. The app must not finish it earlier: a
+   transaction left unfinished is delivered again, which is what makes a crash or an outage safe.
+
+`conflict` (409) means the purchase already belongs to another account: the plan stays there, and the
+app finishes the transaction and tells the user. `validation_failed` (422) means the store doesn't
+know the purchase or it isn't active. A retryable error means the store couldn't be reached.
+
+Restoring repeats step 2 with the store's current purchases. It's idempotent.
 
 ## 13. Payloads, encryption and signatures (client rules)
 
