@@ -5,6 +5,12 @@
 //! left out of device backups, and it is never exported or synced. It is rebuilt from the
 //! notes whenever it is missing, damaged or from another library.
 //!
+//! Each vault unlocked here has an index of its own (`…/vaults/<vault id>/index.db`), so a
+//! vault's text never sits in the main index and is encrypted with its notebooks when the
+//! vault is locked ([`SearchSlot::close_vault`]). Notebooks are routed by the owners file;
+//! queries run over every open index. An index that lost notebooks is scrubbed when the
+//! worker is idle (`SearchIndex::scrub`), so removed text doesn't linger in its files.
+//!
 //! # Worker
 //!
 //! One thread owns the index writer. It learns about changes from the commands
@@ -33,9 +39,10 @@ use crate::AppState;
 use penroam_search::index::Recognition;
 use penroam_search::{IndexStats, Recognizer, RecognizerInfo, SearchHit, SearchIndex};
 use penroam_storage::ErrorCode;
+use penroam_sync::vault::NotebookOwners;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -50,6 +57,35 @@ const EDIT_QUIET: Duration = Duration::from_millis(1500);
 const POWER_POLL: Duration = Duration::from_secs(60);
 /// Most results returned by one query.
 const MAX_RESULTS: usize = 100;
+
+/// Which index a notebook's rows live in: `None` for the main index, or the vault it belongs
+/// to. Each open vault has its own index, so a vault's text can be encrypted with its notebooks
+/// when the vault is locked, and never sits in the main index.
+type Owner = Option<String>;
+
+/// The index file of `owner`, next to the main one.
+fn index_path(main: &Path, owner: &Owner) -> PathBuf {
+    match owner {
+        None => main.to_path_buf(),
+        Some(v) => vault_index_dir(main, v).join("index.db"),
+    }
+}
+
+fn vault_index_dir(main: &Path, vault: &str) -> PathBuf {
+    main.parent()
+        .unwrap_or(Path::new("."))
+        .join("vaults")
+        .join(vault)
+}
+
+fn add_stats(a: &mut IndexStats, b: IndexStats) {
+    a.pages += b.pages;
+    a.incomplete_pages += b.incomplete_pages;
+    a.text_entries += b.text_entries;
+    a.ink_entries += b.ink_entries;
+    a.pdf_entries += b.pdf_entries;
+    a.corrections += b.corrections;
+}
 
 /// User settings for search, stored in the app config directory (`search.json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -189,6 +225,10 @@ enum Msg {
     Notebook(Uuid),
     Settings(SearchSettings),
     Rebuild,
+    /// A vault was unlocked here: open its index.
+    VaultOpened(String),
+    /// A vault is about to be locked: flush and close its index, then answer.
+    VaultClosing(String, Sender<()>),
     Correct {
         notebook: Uuid,
         page: Uuid,
@@ -201,10 +241,15 @@ enum Msg {
 struct Shared {
     cancel: AtomicBool,
     status: Mutex<SearchStatus>,
+    /// The main index file.
     path: Mutex<Option<PathBuf>>,
-    /// Bumped whenever the index file is replaced, so readers reopen it.
+    /// The library folder (for the notebook owners file).
+    root: Mutex<Option<PathBuf>>,
+    /// Vaults unlocked here, each with an index of its own.
+    vaults: Mutex<BTreeSet<String>>,
+    /// Bumped whenever an index file is replaced or closed, so readers reopen it.
     generation: AtomicU64,
-    reader: Mutex<Option<(u64, SearchIndex)>>,
+    readers: Mutex<HashMap<Owner, (u64, SearchIndex)>>,
 }
 
 /// Handle to the search worker, kept in [`AppState`].
@@ -224,8 +269,10 @@ impl Default for SearchSlot {
                     ..Default::default()
                 }),
                 path: Mutex::new(None),
+                root: Mutex::new(None),
+                vaults: Mutex::new(BTreeSet::new()),
                 generation: AtomicU64::new(0),
-                reader: Mutex::new(None),
+                readers: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -238,30 +285,84 @@ impl SearchSlot {
         }
     }
 
-    /// Runs `f` on a read-only view of the index, or returns `None` if there isn't one yet.
-    fn read<T>(&self, f: impl FnOnce(&SearchIndex) -> Option<T>) -> Option<T> {
-        let path = self.shared.path.lock().ok()?.clone()?;
+    /// Runs `f` on a read-only view of `owner`'s index, or returns `None` if there isn't one.
+    fn read<T>(&self, owner: &Owner, f: impl FnOnce(&SearchIndex) -> Option<T>) -> Option<T> {
+        let main = self.shared.path.lock().ok()?.clone()?;
+        if let Some(v) = owner {
+            if !self.shared.vaults.lock().ok()?.contains(v) {
+                return None;
+            }
+        }
+        let path = index_path(&main, owner);
         if !path.exists() {
             return None;
         }
         let generation = self.shared.generation.load(Ordering::SeqCst);
-        let mut g = self.shared.reader.lock().ok()?;
-        if g.as_ref().is_none_or(|(gen, _)| *gen != generation) {
-            *g = Some((generation, SearchIndex::open_reader(&path).ok()?));
+        let mut g = self.shared.readers.lock().ok()?;
+        if g.get(owner).is_none_or(|(gen, _)| *gen != generation) {
+            g.insert(
+                owner.clone(),
+                (generation, SearchIndex::open_reader(&path).ok()?),
+            );
         }
-        f(&g.as_ref()?.1)
+        f(&g.get(owner)?.1)
+    }
+
+    /// The vault a notebook belongs to, by the owners file.
+    fn owner_of(&self, notebook: Uuid) -> Owner {
+        let root = self.shared.root.lock().ok()?.clone()?;
+        NotebookOwners::load(&root)
+            .ok()?
+            .owner(&notebook)
+            .map(String::from)
     }
 
     /// The text read from a page's handwriting, with corrections applied. `None` when
     /// nothing has been read, for instance while indexing hasn't reached it.
     pub fn page_text(&self, notebook: Uuid, page: Uuid) -> Option<String> {
-        self.read(|r| r.page_text(notebook, page).ok())
-            .filter(|t| !t.trim().is_empty())
+        self.read(&self.owner_of(notebook), |r| {
+            r.page_text(notebook, page).ok()
+        })
+        .filter(|t| !t.trim().is_empty())
     }
 
-    /// Every search correction as (notebook, page, region, text), for backups.
+    /// Every search correction of the main index as (notebook, page, region, text), for
+    /// backups. Vault notebooks aren't in backups, so neither are their corrections.
     pub fn all_corrections(&self) -> Vec<(String, String, String, String)> {
-        self.read(|r| r.all_corrections().ok()).unwrap_or_default()
+        self.read(&None, |r| r.all_corrections().ok())
+            .unwrap_or_default()
+    }
+
+    /// Where `vault`'s index lives (to lock it with the vault), once search has started.
+    pub fn vault_dir(&self, vault: &str) -> Option<PathBuf> {
+        let main = self.shared.path.lock().ok()?.clone()?;
+        Some(vault_index_dir(&main, vault))
+    }
+
+    /// A vault was unlocked: its notebooks are indexed into its own index.
+    pub fn vault_opened(&self, vault: &str) {
+        if let Ok(mut v) = self.shared.vaults.lock() {
+            v.insert(vault.to_string());
+        }
+        self.send(Msg::VaultOpened(vault.to_string()));
+    }
+
+    /// A vault is being locked: waits until its index is flushed and closed, so its files can
+    /// be encrypted. Returns false when the worker didn't answer in time.
+    pub fn close_vault(&self, vault: &str) -> bool {
+        if let Ok(mut v) = self.shared.vaults.lock() {
+            v.remove(vault);
+        }
+        if let Ok(mut r) = self.shared.readers.lock() {
+            r.remove(&Some(vault.to_string()));
+        }
+        self.shared.cancel.store(true, Ordering::Relaxed);
+        let (reply, rx) = mpsc::channel();
+        if self.tx.lock().ok().and_then(|g| g.clone()).is_none() {
+            return true; // no worker: nothing holds the index open
+        }
+        self.send(Msg::VaultClosing(vault.to_string(), reply));
+        rx.recv_timeout(Duration::from_secs(60)).is_ok()
     }
 
     /// Stores a correction brought back from a backup. It is applied in order with
@@ -484,9 +585,18 @@ struct Worker {
     app: AppHandle,
     shared: Arc<Shared>,
     settings: SearchSettings,
+    /// The main index file; vault indexes sit next to it ([`index_path`]).
     path: PathBuf,
     library_id: Uuid,
-    index: Option<SearchIndex>,
+    /// Open indexes: the main one and one per unlocked vault.
+    indexes: BTreeMap<Owner, SearchIndex>,
+    /// Vaults unlocked here.
+    vaults: BTreeSet<String>,
+    /// Which notebooks belong to vaults, reread before routing.
+    owners: NotebookOwners,
+    root: PathBuf,
+    /// Indexes that lost notebooks and must be scrubbed when idle.
+    needs_scrub: BTreeSet<Owner>,
     recognizer: Option<Box<dyn Recognizer>>,
     platform: Option<RecognizerInfo>,
     model: Option<ModelSummary>,
@@ -523,17 +633,37 @@ impl Worker {
         }
     }
 
+    /// Opens the main index and every unlocked vault's.
     fn open_index(&mut self) {
-        match SearchIndex::open(&self.path, self.library_id) {
+        let owners: Vec<Owner> = std::iter::once(None)
+            .chain(self.vaults.iter().cloned().map(Some))
+            .collect();
+        for o in owners {
+            self.open_one(o);
+        }
+    }
+
+    fn open_one(&mut self, owner: Owner) {
+        match SearchIndex::open(&index_path(&self.path, &owner), self.library_id) {
             Ok((ix, _fresh)) => {
-                self.index = Some(ix);
+                self.indexes.insert(owner, ix);
                 self.shared.generation.fetch_add(1, Ordering::SeqCst);
             }
             Err(e) => {
-                self.index = None;
+                self.indexes.remove(&owner);
                 self.last_error = Some(e.to_string());
             }
         }
+    }
+
+    fn reload_owners(&mut self) {
+        if let Ok(o) = NotebookOwners::load(&self.root) {
+            self.owners = o;
+        }
+    }
+
+    fn owner_of(&self, nb: &Uuid) -> Owner {
+        self.owners.owner(nb).map(String::from)
     }
 
     fn enqueue(&mut self, key: (Uuid, Uuid), hot: bool) {
@@ -557,23 +687,34 @@ impl Worker {
         }) else {
             return;
         };
-        let Some(ix) = self.index.as_mut() else {
-            return;
-        };
-        let live: HashSet<Uuid> = nbs.iter().map(|n| n.id).collect();
-        for id in ix.notebook_ids().unwrap_or_default() {
-            if !live.contains(&id) {
-                let _ = ix.remove_notebook(id);
+        self.reload_owners();
+        let mut pages = Vec::new();
+        let owned: Vec<(Owner, &penroam_core::Notebook)> =
+            nbs.iter().map(|n| (self.owner_of(&n.id), n)).collect();
+        let mut errors = Vec::new();
+        for (owner, ix) in self.indexes.iter_mut() {
+            let live: HashSet<Uuid> = owned
+                .iter()
+                .filter(|(o, _)| o == owner)
+                .map(|(_, n)| n.id)
+                .collect();
+            for id in ix.notebook_ids().unwrap_or_default() {
+                if !live.contains(&id) {
+                    let _ = ix.remove_notebook(id);
+                    self.needs_scrub.insert(owner.clone());
+                }
+            }
+            for (_, nb) in owned.iter().filter(|(o, _)| o == owner) {
+                if let Err(e) = ix.sync_notebook(nb) {
+                    errors.push(e.to_string());
+                }
+                if nb.deleted_at.is_none() {
+                    pages.extend(nb.page_order.iter().map(|p| (nb.id, *p)));
+                }
             }
         }
-        let mut pages = Vec::new();
-        for nb in &nbs {
-            if let Err(e) = ix.sync_notebook(nb) {
-                self.last_error = Some(e.to_string());
-            }
-            if nb.deleted_at.is_none() {
-                pages.extend(nb.page_order.iter().map(|p| (nb.id, *p)));
-            }
+        if let Some(e) = errors.pop() {
+            self.last_error = Some(e);
         }
         for k in pages {
             self.enqueue(k, false);
@@ -584,28 +725,39 @@ impl Worker {
         let nb = self
             .with_lib(|lib| lib.notebook(id).ok().cloned())
             .flatten();
-        let Some(ix) = self.index.as_mut() else {
-            return;
-        };
-        let new_pages = match nb {
-            Some(nb) => ix
-                .sync_notebook(&nb)
-                .map(|v| v.into_iter().map(|p| (id, p)).collect()),
-            None => ix.remove_notebook(id).map(|_| vec![]),
-        };
-        match new_pages {
-            Ok(v) => {
-                for k in v {
-                    self.enqueue(k, false);
+        self.reload_owners();
+        let owner = self.owner_of(&id);
+        let mut new_pages: Vec<(Uuid, Uuid)> = Vec::new();
+        let mut error = None;
+        for (o, ix) in self.indexes.iter_mut() {
+            match &nb {
+                Some(nb) if *o == owner => match ix.sync_notebook(nb) {
+                    Ok(v) => new_pages.extend(v.into_iter().map(|p| (id, p))),
+                    Err(e) => error = Some(e.to_string()),
+                },
+                // gone, or in another index now (moved into a vault)
+                _ => {
+                    if ix.notebook_ids().unwrap_or_default().contains(&id) {
+                        if let Err(e) = ix.remove_notebook(id) {
+                            error = Some(e.to_string());
+                        }
+                        self.needs_scrub.insert(o.clone());
+                    }
                 }
             }
-            Err(e) => self.last_error = Some(e.to_string()),
+        }
+        if let Some(e) = error {
+            self.last_error = Some(e);
+        }
+        for k in new_pages {
+            self.enqueue(k, false);
         }
     }
 
     fn index_one(&mut self, (nb_id, page_id): (Uuid, Uuid)) {
         let has_pdf = |ix: &SearchIndex, h: &str| ix.has_pdf(h).unwrap_or(true);
-        let Some(ix) = self.index.as_ref() else {
+        let owner = self.owner_of(&nb_id);
+        let Some(ix) = self.indexes.get(&owner) else {
             return;
         };
         // copy what is needed under the lock, then let go of it
@@ -630,7 +782,7 @@ impl Worker {
             return;
         };
         let rkey = self.recognizer_key();
-        let Some(ix) = self.index.as_mut() else {
+        let Some(ix) = self.indexes.get_mut(&owner) else {
             return;
         };
         if let Some((hash, bytes)) = pdf {
@@ -690,16 +842,20 @@ impl Worker {
             model: self.model.clone(),
             model_error: self.model_error.clone(),
             language: self.language.clone(),
-            stats: self
-                .index
-                .as_ref()
-                .and_then(|ix| ix.stats().ok())
-                .unwrap_or_default(),
-            index_bytes: if self.index.is_some() {
-                index_bytes(&self.path)
-            } else {
-                0
+            stats: {
+                let mut total = IndexStats::default();
+                for ix in self.indexes.values() {
+                    if let Ok(st) = ix.stats() {
+                        add_stats(&mut total, st);
+                    }
+                }
+                total
             },
+            index_bytes: self
+                .indexes
+                .keys()
+                .map(|o| index_bytes(&index_path(&self.path, o)))
+                .sum(),
             on_battery: on_battery(),
             last_error: self.last_error.clone(),
         };
@@ -717,16 +873,21 @@ impl Worker {
             self.language = pick_language(r.info(), self.settings.language.as_deref());
         }
         if !self.settings.enabled {
-            self.index = None;
+            let owners: Vec<Owner> = std::iter::once(None)
+                .chain(self.vaults.iter().cloned().map(Some))
+                .collect();
+            self.indexes.clear();
             self.hot.clear();
             self.background.clear();
             self.queued.clear();
-            if let Ok(mut g) = self.shared.reader.lock() {
-                *g = None;
+            if let Ok(mut g) = self.shared.readers.lock() {
+                g.clear();
             }
             self.shared.generation.fetch_add(1, Ordering::SeqCst);
-            if let Err(e) = SearchIndex::delete_files(&self.path) {
-                self.last_error = Some(e.to_string());
+            for o in owners {
+                if let Err(e) = SearchIndex::delete_files(&index_path(&self.path, &o)) {
+                    self.last_error = Some(e.to_string());
+                }
             }
             return;
         }
@@ -736,7 +897,7 @@ impl Worker {
         }
         let rkey_changed =
             was.handwriting != self.settings.handwriting || was.language != self.settings.language;
-        if self.index.is_none() {
+        if self.indexes.is_empty() {
             self.open_index();
             self.rescan();
         } else if rkey_changed || (was.paused && !self.settings.paused) {
@@ -757,7 +918,7 @@ impl Worker {
             .recognizer
             .as_ref()
             .and_then(|r| pick_language(r.info(), self.settings.language.as_deref()));
-        if self.index.is_some() {
+        if !self.indexes.is_empty() {
             self.rescan();
         }
     }
@@ -820,7 +981,7 @@ impl Worker {
                 let _ = reply.send(r);
             }
             Msg::Page(nb, p) => {
-                if self.index.is_some() {
+                if !self.indexes.is_empty() {
                     self.last_edit = Some(Instant::now());
                     self.enqueue((nb, p), true);
                 }
@@ -828,13 +989,42 @@ impl Worker {
             Msg::Notebook(nb) => self.notebook(nb),
             Msg::Settings(s) => self.apply_settings(s),
             Msg::Rebuild => {
-                if let Some(ix) = self.index.as_mut() {
+                let mut error = None;
+                for ix in self.indexes.values_mut() {
                     if let Err(e) = ix.clear() {
+                        error = Some(e.to_string());
+                    }
+                }
+                self.last_error = error;
+                self.rescan();
+            }
+            Msg::VaultOpened(v) => {
+                if self.vaults.insert(v.clone()) && self.settings.enabled {
+                    self.open_one(Some(v));
+                    self.rescan();
+                }
+            }
+            Msg::VaultClosing(v, reply) => {
+                let owner = Some(v.clone());
+                if let Some(ix) = self.indexes.remove(&owner) {
+                    if let Err(e) = ix.checkpoint() {
                         self.last_error = Some(e.to_string());
                     }
                 }
-                self.last_error = None;
-                self.rescan();
+                self.vaults.remove(&v);
+                self.needs_scrub.remove(&owner);
+                if let Ok(mut g) = self.shared.readers.lock() {
+                    g.remove(&owner);
+                }
+                self.shared.generation.fetch_add(1, Ordering::SeqCst);
+                // its notebooks are leaving the library: drop their queued pages
+                self.reload_owners();
+                let owners = &self.owners;
+                let theirs = |k: &(Uuid, Uuid)| owners.owner(&k.0) == Some(v.as_str());
+                self.hot.retain(|k| !theirs(k));
+                self.background.retain(|k| !theirs(k));
+                self.queued.retain(|k| !theirs(k));
+                let _ = reply.send(());
             }
             Msg::Correct {
                 notebook,
@@ -843,7 +1033,9 @@ impl Worker {
                 text,
                 reply,
             } => {
-                let r = match self.index.as_mut() {
+                self.reload_owners();
+                let owner = self.owner_of(&notebook);
+                let r = match self.indexes.get_mut(&owner) {
                     Some(ix) => ix
                         .set_correction(notebook, page, &region, text.as_deref())
                         .map_err(|e| e.to_string()),
@@ -865,6 +1057,10 @@ impl Worker {
 
     fn run(mut self, rx: Receiver<Msg>) {
         background_priority();
+        // vaults unlocked before this thread got going
+        if let Ok(v) = self.shared.vaults.lock() {
+            self.vaults.extend(v.iter().cloned());
+        }
         if self.settings.enabled {
             self.open_index();
             self.rescan();
@@ -886,7 +1082,7 @@ impl Worker {
             };
             let state = if !self.settings.enabled {
                 "off"
-            } else if self.index.is_none() {
+            } else if !self.indexes.contains_key(&None) {
                 "error"
             } else if self.settings.paused {
                 "paused"
@@ -927,8 +1123,15 @@ impl Worker {
                     pruned = false;
                 }
                 None if !pruned => {
-                    if let Some(ix) = self.index.as_mut() {
+                    for ix in self.indexes.values_mut() {
                         let _ = ix.prune_corrections();
+                    }
+                    for o in std::mem::take(&mut self.needs_scrub) {
+                        if let Some(ix) = self.indexes.get_mut(&o) {
+                            if let Err(e) = ix.scrub() {
+                                self.last_error = Some(e.to_string());
+                            }
+                        }
                     }
                     pruned = true;
                 }
@@ -959,9 +1162,16 @@ pub fn start(app: &AppHandle) {
     let language = recognizer
         .as_ref()
         .and_then(|r| pick_language(r.info(), settings.language.as_deref()));
+    let root = match st.lib.lock() {
+        Ok(l) => l.root().to_path_buf(),
+        Err(_) => return,
+    };
     let shared = st.search.shared.clone();
     if let Ok(mut p) = shared.path.lock() {
         *p = Some(path.clone());
+    }
+    if let Ok(mut r) = shared.root.lock() {
+        *r = Some(root.clone());
     }
     let (tx, rx) = mpsc::channel();
     if let Ok(mut g) = st.search.tx.lock() {
@@ -973,7 +1183,11 @@ pub fn start(app: &AppHandle) {
         settings,
         path,
         library_id,
-        index: None,
+        indexes: BTreeMap::new(),
+        vaults: BTreeSet::new(),
+        owners: NotebookOwners::load(&root).unwrap_or_default(),
+        root,
+        needs_scrub: BTreeSet::new(),
         recognizer,
         platform: stack.platform,
         model: stack.model,
@@ -998,7 +1212,7 @@ pub fn start(app: &AppHandle) {
 #[tauri::command(async)]
 pub fn search_query(state: State<'_, AppState>, query: String) -> Result<Vec<SearchHit>, CmdError> {
     let shared = &state.search.shared;
-    let path = shared
+    let main = shared
         .path
         .lock()
         .ok()
@@ -1007,22 +1221,50 @@ pub fn search_query(state: State<'_, AppState>, query: String) -> Result<Vec<Sea
     if !shared.status.lock().is_ok_and(|s| s.settings.enabled) {
         return Err(cmd_err("search is turned off"));
     }
+    let owners: Vec<Owner> = std::iter::once(None)
+        .chain(
+            shared
+                .vaults
+                .lock()
+                .map(|v| v.iter().cloned().map(Some).collect::<Vec<_>>())
+                .unwrap_or_default(),
+        )
+        .collect();
     let generation = shared.generation.load(Ordering::SeqCst);
     let mut g = shared
-        .reader
+        .readers
         .lock()
         .map_err(|_| cmd_err("search lock poisoned"))?;
-    if g.as_ref().is_none_or(|(gen, _)| *gen != generation) {
-        if !path.exists() {
-            return Ok(vec![]); // not created yet
+    let mut hits = Vec::new();
+    for owner in owners {
+        let path = index_path(&main, &owner);
+        if g.get(&owner).is_none_or(|(gen, _)| *gen != generation) {
+            if !path.exists() {
+                continue; // not created yet
+            }
+            match SearchIndex::open_reader(&path) {
+                Ok(r) => {
+                    g.insert(owner.clone(), (generation, r));
+                }
+                // a vault's index can fail on its own; the rest still answers
+                Err(e) if owner.is_some() => {
+                    eprintln!("penroam: a vault's search index could not be read: {e}");
+                    continue;
+                }
+                Err(e) => return Err(cmd_err(e.to_string())),
+            }
         }
-        let r = SearchIndex::open_reader(&path).map_err(|e| cmd_err(e.to_string()))?;
-        *g = Some((generation, r));
+        let (_, reader) = g.get(&owner).expect("just opened");
+        hits.extend(
+            reader
+                .search(&query, MAX_RESULTS)
+                .map_err(|e| cmd_err(e.to_string()))?,
+        );
     }
-    let (_, reader) = g.as_ref().expect("just opened");
-    reader
-        .search(&query, MAX_RESULTS)
-        .map_err(|e| cmd_err(e.to_string()))
+    // scores come from separate indexes; close enough to interleave by
+    hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+    hits.truncate(MAX_RESULTS);
+    Ok(hits)
 }
 
 /// Current worker status.

@@ -6,7 +6,9 @@ recognition) and `apps/desktop-mobile/src-tauri/src/search.rs` (worker, commands
 
 ## What is stored
 
-One SQLite database per library, `index.db` (plus SQLite's `-wal`/`-shm` side files):
+One SQLite database per library, `index.db` (plus SQLite's `-wal`/`-shm` side files), and one
+more for each vault unlocked on the device, `vaults/<vault id>/index.db` next to it, with the same
+tables for that vault's notebooks only:
 
 | Table | Content |
 |---|---|
@@ -36,7 +38,14 @@ written to from it.
 
 ## Encryption at rest
 
-The index is **not encrypted** by Penroam. That matches the notes it is derived from, which are
+A vault's index is encrypted with the vault's notebooks when the vault is locked on the device, and
+deleted in plaintext ([`../formats/locked-vault.md`](../formats/locked-vault.md)). Keeping vaults in
+their own indexes is what makes that possible. The main index runs with SQLite's `secure_delete`,
+and after notebooks leave it (moved into a vault, or deleted) the worker merges the full-text index,
+drops PDF text nothing uses and truncates the write-ahead log, so their text doesn't stay in its
+files.
+
+The main index, and a vault's index while the vault is unlocked, are **not encrypted** by Penroam. That matches the notes it is derived from, which are
 also stored unencrypted in the app's private data folder: anyone who can read one can read the
 other, so encrypting only the index would add no protection. Both rely on the operating
 system's app sandbox and on device encryption (FileVault, BitLocker, iOS/Android data

@@ -15,6 +15,7 @@
 //! * [`engine`]: the reconcile loop (prepare → exchange → apply).
 //! * [`models`]: the signed handwriting model catalog and model downloads.
 //! * [`vault`]: passphrase-locked vaults, and which notebooks belong to them.
+//! * [`locker`]: vaults locked on this device, encrypted at rest.
 //! * `auth` (feature `http`): OpenID Connect sign-in with PKCE in the system
 //!   browser and device sessions, for servers that advertise `auth.v1`.
 //!
@@ -40,6 +41,7 @@ pub mod auth;
 pub mod crypto;
 pub mod engine;
 pub mod keylog;
+pub mod locker;
 pub mod models;
 pub mod secrets;
 pub mod store;

@@ -137,6 +137,14 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   same critical section that creates a notebook, because the main engine uploads whatever isn't
   assigned elsewhere; it sits outside `sync/` so that disconnecting can't release vault notebooks to
   the main account. The library releases a journal entry only when every engine has copied it.
+* **Locking a vault on a device.** `penroam_sync::locker` takes a vault's notebooks out of the
+  library (`Library::detach_notebooks`, which also drops their journal transactions), encrypts them
+  with the vault's sync folder and its own search index under a key derived from the vault's root,
+  and deletes the plaintext and the device's keys for the vault. A committed pack means the vault is
+  locked; start-up deletes any plaintext found next to one. Unlocking decrypts into a staging folder
+  before moving anything, then the notebooks rejoin the library (`Library::attach_notebooks`) and the
+  engine resumes reading the journal at the current position. Format:
+  [`../formats/locked-vault.md`](../formats/locked-vault.md).
 * **Sync engine.** `penroam-sync` keeps its own state under
   `<library>/sync/`: an append-only operation log of every synced operation (local and remote),
   parked and quarantined envelopes, and the verified key log pin. One reconcile has three phases

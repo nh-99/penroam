@@ -23,6 +23,7 @@ vi.mock("../src/platform/sync", async (orig) => ({
   syncApi: api,
   onSyncStatus: vi.fn(async () => () => {}),
   onSyncChanged: vi.fn(async () => () => {}),
+  onVaultsChanged: vi.fn(async () => () => {}),
 }));
 vi.mock("../src/platform/ipc", async (orig) => ({
   ...(await orig<typeof import("../src/platform/ipc")>()),

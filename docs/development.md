@@ -170,7 +170,7 @@ pnpm tauri dev
 ```
 
 In the app: **Settings → Sync**. Connect a first device with an account name, then a second profile
-(another `PENROAM_LIBRARY_DIR`) with the same name. Vaults are under **Settings → Sync → Vaults**.
+(another `PENROAM_LIBRARY_DIR`) with the same name. Vaults are in the **Vaults** row on the library screen.
 
 Scripted UI runs that sign in must not reach the developer's real browser or keychain: give the
 app its own XDG data, config and runtime directories, and register a stand-in browser as the

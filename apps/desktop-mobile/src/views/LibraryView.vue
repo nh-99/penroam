@@ -8,6 +8,7 @@ import NotebookCard from "../components/NotebookCard.vue";
 import CloudNotebookCard from "../components/CloudNotebookCard.vue";
 import NewNotebookDialog from "../components/NewNotebookDialog.vue";
 import MoveToVaultDialog from "../components/MoveToVaultDialog.vue";
+import VaultBar from "../components/VaultBar.vue";
 import PromptDialog from "../components/PromptDialog.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import SettingsDialog from "../components/SettingsDialog.vue";
@@ -114,6 +115,7 @@ function recolor(nb: NotebookSummary) {
       </div>
 
       <template v-else-if="!showTrash">
+        <VaultBar v-if="sync.status?.phase !== 'revoked'" />
         <div v-if="lib.loaded && list.length === 0 && sync.cloudNotebooks.length === 0" class="mx-auto mt-16 max-w-md text-center">
           <NotebookPen :size="40" class="mx-auto mb-4 text-muted" />
           <h2 class="text-lg font-semibold">Your shelf is empty</h2>

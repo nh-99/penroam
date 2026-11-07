@@ -22,6 +22,7 @@ vi.mock("../src/platform/sync", async (real) => ({
     return () => {};
   },
   onSyncChanged: async () => () => {},
+  onVaultsChanged: async () => () => {},
 }));
 
 const nb = (id: string, inTrash = false): ErasedNotebook => ({ notebookId: id, title: id, inTrash, cover: "#123456", pageCount: 2 });

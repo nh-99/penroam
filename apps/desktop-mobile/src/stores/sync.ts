@@ -5,7 +5,7 @@ import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { hasHost } from "../platform/ipc";
 import { useSettings } from "./settings";
-import { canBuy, cloudNotice, describeRestore, describeStorePurchase, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ErasedNotebook, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus, type VaultSecret, type VaultsView } from "../platform/sync";
+import { canBuy, cloudNotice, describeRestore, describeStorePurchase, onSyncChanged, onSyncStatus, onVaultsChanged as listenVaultsChanged, syncApi, type AccountView, type ErasedNotebook, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus, type VaultSecret, type VaultsView } from "../platform/sync";
 
 /** Penroam Cloud; the backend's value replaces this once known. */
 export const PENROAM_CLOUD_URL = "https://sync.penroam.ink";
@@ -56,6 +56,7 @@ export const useSync = defineStore("sync", () => {
     return n && !dismissedNotices.value.includes(n.kind) ? n : null;
   });
   const changeListeners = new Set<(c: SyncChanged) => void>();
+  const vaultListeners = new Set<() => void>();
   let unlisten: UnlistenFn[] = [];
   let started = false;
 
@@ -89,6 +90,12 @@ export const useSync = defineStore("sync", () => {
       }),
     );
     unlisten.push(await onSyncChanged((c) => changeListeners.forEach((l) => l(c))));
+    unlisten.push(
+      await listenVaultsChanged(() => {
+        void refreshVaults();
+        vaultListeners.forEach((l) => l());
+      }),
+    );
     // coming back from the browser (checkout, billing portal): show the new plan
     window.addEventListener("focus", onFocus);
     // plan and storage for the banner (one request; servers without account.v1 answer null)
@@ -198,6 +205,12 @@ export const useSync = defineStore("sync", () => {
     await refreshAccount();
   }
 
+  /** Calls `cb` whenever a vault is locked or unlocked here (notebooks left or came back). */
+  function onVaultsChanged(cb: () => void): () => void {
+    vaultListeners.add(cb);
+    return () => vaultListeners.delete(cb);
+  }
+
   function onChanged(cb: (c: SyncChanged) => void): () => void {
     changeListeners.add(cb);
     return () => changeListeners.delete(cb);
@@ -292,9 +305,33 @@ export const useSync = defineStore("sync", () => {
     vaultStep(async () => {
       vaultRecoveryCode.value = await syncApi.vaultCreate(name, passphrase);
     });
-  const unlockVault = (id: string, secret: VaultSecret) => vaultStep(() => syncApi.vaultUnlock(id, secret));
+  /** Shows a vault's new state at once: listing vaults needs the server, and locking and
+   * unlocking work offline. */
+  function markVault(id: string, unlocked: boolean) {
+    vaults.value = {
+      ...vaults.value,
+      vaults: vaults.value.vaults.map((v) => (v.vaultId === id ? { ...v, unlocked, locked: !unlocked } : v)),
+    };
+  }
+  const unlockVault = (id: string, secret: VaultSecret) =>
+    vaultStep(async () => {
+      await syncApi.vaultUnlock(id, secret);
+      markVault(id, true);
+    });
   const setVaultPassphrase = (id: string, secret: VaultSecret, next: string) => vaultStep(() => syncApi.vaultSetPassphrase(id, secret, next));
-  const deleteVault = (id: string) => vaultStep(() => syncApi.vaultDelete(id));
+  const stopVaultSync = (id: string) => vaultStep(() => syncApi.vaultStopSync(id));
+  const restoreVault = (id: string, secret: VaultSecret) => vaultStep(() => syncApi.vaultRestore(id, secret));
+  const forgetVault = (id: string) => vaultStep(() => syncApi.vaultForget(id));
+  /** Locks a vault here: "locked", "needsKey" (ask for the passphrase once) or "failed". */
+  async function lockVault(id: string, secret?: VaultSecret): Promise<"locked" | "needsKey" | "failed"> {
+    let answer: boolean | null = null;
+    const ok = await vaultStep(async () => {
+      answer = await syncApi.vaultLock(id, secret);
+      if (answer) markVault(id, false);
+    });
+    if (!ok) return "failed";
+    return answer ? "locked" : "needsKey";
+  }
 
   /** The user saved the recovery code: it's gone from the app for good. */
   function finishVaultRecovery() {
@@ -386,6 +423,7 @@ export const useSync = defineStore("sync", () => {
     init,
     refresh,
     onChanged,
+    onVaultsChanged,
     checkServer,
     changeServer,
     signIn,
@@ -395,7 +433,10 @@ export const useSync = defineStore("sync", () => {
     createVault,
     unlockVault,
     setVaultPassphrase,
-    deleteVault,
+    stopVaultSync,
+    restoreVault,
+    forgetVault,
+    lockVault,
     finishVaultRecovery,
     remove,
     rename,

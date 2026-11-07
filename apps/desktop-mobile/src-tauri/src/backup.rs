@@ -5,6 +5,7 @@
 //! for each notebook only, so writing can continue during a long backup. It is then read back
 //! through the restore checks before it reaches its destination. Each step reports through the
 //! `portability-progress` event. Format and guarantees: `docs/formats/portability.md`.
+//! Notebooks in a vault are left out, with their search corrections: a backup isn't encrypted.
 //!
 //! Folder and WebDAV destinations are backup storage: whole files come and go, nothing is
 //! merged. The WebDAV password lives in the OS keychain with the sync keys.
@@ -81,7 +82,13 @@ fn web_err(e: penroam_webdav::WebDavError) -> CmdError {
 fn build(app: &AppHandle, state: &State<'_, AppState>) -> R<(StagedFile, BackupManifest)> {
     let (ids, staged) = {
         let lib = lock(state)?;
-        let mut ids = lib.notebook_ids();
+        // Vault notebooks stay out: a backup isn't encrypted, and the vault keeps them.
+        let owners = penroam_sync::vault::NotebookOwners::load(lib.root()).map_err(io_err)?;
+        let mut ids: Vec<Uuid> = lib
+            .notebook_ids()
+            .into_iter()
+            .filter(|id| owners.owner(id).is_none())
+            .collect();
         ids.sort();
         let name = format!("backup-{}.penroam-backup", Uuid::new_v4());
         (ids, StagedFile(lib.staging_dir().join(name)))

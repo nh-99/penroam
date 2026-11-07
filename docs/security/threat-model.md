@@ -111,7 +111,8 @@ root secret (256 bit, not stored by devices)
   account: stored on the server, sealed     vault: passphrase lock + recovery key shown once
  ├─ account signing key (Ed25519)      signs genesis and enrollments in the key log
  ├─ recovery key (X25519)              every epoch key is wrapped to it
- └─ vault name key                     encrypts a vault's name (vaults only)
+ ├─ vault name key                     encrypts a vault's name (vaults only)
+ └─ vault local key                    encrypts a vault locked on a device (vaults only, never sent)
 
 epoch key e (random, 256 bit; new epoch whenever a device is removed)
  ├─ per-notebook payload key   HKDF(e, salt = routing alias)
@@ -182,11 +183,26 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
   There is no attempt limit, because nothing but the client enforces anything. A passphrase's
   strength is the vault's strength. The app requires 12 characters and says why, but doesn't measure
   strength. A short numeric PIN was rejected for this reason.
-* **A vault isn't a device lock.** Its notebooks are plaintext on the device like any others, in the
-  library, search index and version history, and it stays unlocked once a device has opened it.
-  Device loss is left to the operating system's disk encryption. Backups and exports of vault
-  notebooks are plaintext, and a notebook restored from a backup into a library without its
-  assignment is an ordinary notebook, which sync uploads as one.
+* **An unlocked vault is plaintext on the device.** While a vault is unlocked on a device, its
+  notebooks are stored like any others, in the library, its own search index and version history.
+  Locking it there ([`../formats/locked-vault.md`](../formats/locked-vault.md)) encrypts them under
+  the vault's local key, removes them and their journal entries, and deletes the device's keys for
+  the vault until the passphrase or recovery key is entered again
+  (`a_locked_vault_leaves_no_plaintext_and_picks_up_where_it_left_off`). It is not a secure erase:
+  deleted files may stay readable on the storage underneath, which only disk encryption covers.
+  "Lock vaults when the app closes" locks at exit, or at the next launch when the app was stopped
+  without one, so until then a stopped app leaves an unlocked vault in plaintext. A device keeps a
+  copy of the passphrase lock for unlocking offline; it is open to the same offline guessing as the
+  server's copy. Vault notebooks are left out of backups; exports of them are plaintext, and a
+  notebook restored from an export into a library without its assignment is an ordinary notebook,
+  which sync uploads as one.
+* **Stopping a vault's cloud sync never erases local copies.** It erases the vault's account on the
+  server; every device keeps the notebooks and marks the vault not synced until the user restores
+  sync or removes it there. Otherwise a server could erase a vault's notebooks on every device just
+  by no longer listing it. Restoring creates the vault again with the same root and passphrase lock
+  (so the recovery key stays valid), and a device restoring after another one joins the vault whose
+  sealed name opens with that root. A server can withhold a restored vault from the list, which only
+  makes a device create a second one.
 * **Moving a notebook into a vault doesn't remove its past.** What the main account already holds
   stays there, readable by anyone with the stored key, until the account is deleted. Only what's
   created in a vault was always private.

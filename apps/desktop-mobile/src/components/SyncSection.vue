@@ -8,7 +8,6 @@ import Btn from "./ui/Btn.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import PromptDialog from "./PromptDialog.vue";
 import CloudAccountSection from "./CloudAccountSection.vue";
-import VaultSection from "./VaultSection.vue";
 import { useSync } from "../stores/sync";
 import { useUi } from "../stores/ui";
 import { describeStatus, formatAgo, type SyncDevice } from "../platform/sync";
@@ -180,7 +179,7 @@ async function confirmDisconnect() {
         </ul>
       </div>
 
-      <VaultSection v-if="sync.status?.phase !== 'revoked'" />
+      <p v-if="sync.vaults.supported && sync.status?.phase !== 'revoked'" class="text-xs leading-relaxed text-muted">Vaults are on the library screen, above your notebooks.</p>
 
       <div class="flex flex-wrap gap-2">
         <Btn variant="ghost" @click="copyDiagnostics"><Copy :size="16" />Copy diagnostics</Btn>

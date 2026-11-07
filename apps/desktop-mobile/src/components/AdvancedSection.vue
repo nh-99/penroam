@@ -2,12 +2,14 @@
 // Settings → Advanced: which recognizer reads handwriting, and the Penroam handwriting model
 // (download, update, install from a file, remove). The defaults need none of this, which is why
 // it is not under Search. Downloads are carried out by the backend (src-tauri/src/models.rs).
-// On the Linux AppImage it also holds the app-menu entry (DesktopEntryRow).
+// On the Linux AppImage it also holds the app-menu entry (DesktopEntryRow), and once the account
+// has vaults, whether they lock when the app closes (VaultLockRow).
 import { computed, onMounted, ref } from "vue";
 import { Download, PackagePlus, RefreshCw, Trash2, X } from "@lucide/vue";
 import Btn from "./ui/Btn.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import DesktopEntryRow from "./DesktopEntryRow.vue";
+import VaultLockRow from "./VaultLockRow.vue";
 import { useSearch } from "../stores/search";
 import { useUi } from "../stores/ui";
 import { pickFile } from "../platform/files";
@@ -152,6 +154,7 @@ async function removeModel() {
         message="Handwriting recognized by the model drops out of search as pages are re-indexed. Your notes are not affected."
         @close="removingModel = false" @confirm="removeModel" />
     </section>
+    <VaultLockRow />
     <DesktopEntryRow />
   </div>
 </template>

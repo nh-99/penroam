@@ -97,14 +97,23 @@ Sync**. Notebooks are encrypted before they're uploaded, but Penroam keeps a cop
 signing in is enough, which means Penroam could read them. Sync can be paused or disconnected at any
 time, and your notes stay on the device either way.
 
-**Vaults.** For notes only you can read, create a vault in **Settings → Sync**: choose a name and a
-passphrase of at least 12 characters, and save the recovery key, which is shown once. Then choose the
-vault under **Keep in** when you create a notebook, or use **Move to vault…** on an existing one. To
-open a vault on another device, sign in, find it under **Vaults** and enter the passphrase once.
+**Vaults.** For notes only you can read, sign in to sync, then choose **New vault** in the **Vaults** row
+above your notebooks: choose a name and a passphrase of at least 12 characters, and save the recovery
+key, which is shown once. Then choose the vault under **Keep in** when you create a notebook, or use
+**Move to vault…** on an existing one. To open a vault on another device, sign in, choose the vault
+in the **Vaults** row and enter the passphrase once. Choose an open vault there to lock it, change its
+passphrase or **Stop syncing with the cloud**. That erases the vault's copy in your account but keeps
+its notebooks on every device that has them, marked **Not synced**. On any of them, **Restore cloud
+sync** puts the vault back in your account (the other devices join it the same way), and **Remove
+from this device** deletes its notebooks there.
+
+Locking a vault hides its notebooks and encrypts them on that device until you unlock it with the
+passphrase again, even without a connection. To lock every vault whenever Penroam closes, turn on
+**Lock vaults when the app closes** in **Settings → Advanced**; phones often stop apps without closing
+them, so there the vaults lock the next time Penroam starts. While a vault is unlocked, its notebooks
+are stored on the device like any others. Vault notebooks are left out of backups.
 Penroam can't read a vault or reset its passphrase, so if you lose both the passphrase and the
-recovery key, what's in the vault can only be read on devices already holding it. A vault protects
-your notes from Penroam's servers, not from someone using your device: its notebooks are stored on the
-device like any others and don't ask for the passphrase again. When you move a notebook into a vault,
+recovery key, what's in the vault can only be read on devices already holding it. When you move a notebook into a vault,
 what had already synced stays in your account's history, so create sensitive notebooks in the vault
 to begin with. Vault encryption hasn't been independently reviewed yet.
 

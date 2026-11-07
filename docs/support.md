@@ -32,6 +32,15 @@ has the vault keeps working too. Penroam can't reset either one, so without the 
 recovery key and a device that has the vault, nobody can read what's in it. That's how a vault is
 meant to work.
 
+**My vault's notebooks are gone from the library.** The vault is locked on this device. Choose
+**Unlock** next to it in the **Vaults** row and enter the passphrase. If it locks every time Penroam
+starts, **Lock vaults when the app closes** is on in **Settings → Advanced**.
+
+**A vault says "Not synced".** It stopped syncing with the cloud, on this device or another one, and
+its notebooks are only on the devices that have them. Choose it, then **Restore cloud sync** and enter
+the passphrase to sync it again; if another device restored it first, this one joins it. Or choose
+**Remove from this device** to delete its notebooks here.
+
 **A device was lost or stolen.** On another device, open **Settings → Sync** and remove it. It stops
 syncing at once. Sign out of Penroam on the identity provider's site too. What it already downloaded
 stays on it, so also use your device maker's find-and-erase service.

@@ -8,7 +8,7 @@ What each way of getting notes in and out of Penroam promises. Byte formats live
 | | What it is | Editable afterwards | Loses | Encrypted |
 |---|---|---|---|---|
 | **Native export** (`.penroam`) | One notebook or selected pages, live pages only | Yes | Trash, history | No |
-| **Archive backup** (`.penroam-backup`) | Every notebook, trash and search corrections included | Yes | History, the search index | No |
+| **Archive backup** (`.penroam-backup`) | Every notebook outside a vault, trash and search corrections included | Yes | History, the search index, vault notebooks | No |
 | **PDF / print** | Flattened copy for reading | No | Raw samples, editable text | No |
 | **Sync ciphertext** | Encrypted operations on a server | Only through a client with the content key | Nothing | Yes |
 | **Third-party import** | A new notebook made from another format | Yes, as Penroam content | Listed in a report each time | n/a |
@@ -37,6 +37,9 @@ version. Archives with trash are such an addition: an older build reads the live
 Golden fixtures: `tests/fixtures/linux-export.penroam` and the format fixtures must keep importing.
 
 ## `.penroam-backup`
+
+Notebooks in a vault are left out, with their search corrections: a backup isn't encrypted, and the
+vault already keeps them.
 
 ```text
 mimetype                  "application/vnd.penroam.library-backup+zip" (first entry, stored)

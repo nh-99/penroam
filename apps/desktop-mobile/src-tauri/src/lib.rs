@@ -89,6 +89,8 @@ pub fn run() {
                 .or_else(|_| app.path().app_data_dir().map(|d| d.join("library")))?;
             // Beside the library rather than in it: a report is not notebook data.
             diagnostics::install(root.with_file_name("crash-reports"));
+            // a locked vault's leftover plaintext must be gone before the library loads it
+            sync::recover_vaults_before_open(&root);
             let lib = Library::open(&root)?;
             if !lib.recovery.warnings.is_empty() {
                 eprintln!("penroam: recovery: {:?}", lib.recovery);
@@ -104,6 +106,7 @@ pub fn run() {
                 pinch::install(&window)?;
             }
             search::start(app.handle());
+            sync::recover_vaults_after_open(app.handle());
             models::start(app.handle());
             sync::resume_on_launch(app.handle());
             commands::start_history_retention(app.handle());
@@ -184,7 +187,12 @@ pub fn run() {
             sync::sync_vault_create,
             sync::sync_vault_unlock,
             sync::sync_vault_set_passphrase,
-            sync::sync_vault_delete,
+            sync::sync_vault_stop_sync,
+            sync::sync_vault_restore,
+            sync::sync_vault_lock,
+            sync::sync_vault_forget,
+            sync::vault_prefs,
+            sync::vault_set_prefs,
             commands::move_notebook_to_vault,
             sync::sync_remove_device,
             sync::sync_rename_device,
@@ -240,6 +248,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 commands::flush(app);
+                sync::lock_vaults_on_exit(app);
             }
         });
 }

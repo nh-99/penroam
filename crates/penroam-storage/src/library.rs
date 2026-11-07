@@ -459,12 +459,21 @@ impl Library {
             else {
                 continue;
             };
-            self.remove_temp_files(&path);
+            self.load_notebook_dir(&path, id);
+        }
+        Ok(())
+    }
+
+    /// Loads one notebook folder into memory. A notebook that can't be read is reported in
+    /// [`Library::recovery`] and left on disk untouched.
+    fn load_notebook_dir(&mut self, path: &Path, id: Uuid) -> bool {
+        {
+            self.remove_temp_files(path);
             let loaded = fs::read(path.join("notebook.json"))
                 .map_err(StorageError::from)
                 .and_then(|raw| {
-                    if crate::legacy::needed(&path, &raw) {
-                        let (nb, out) = crate::legacy::migrate(&self.root, &path, &raw)?;
+                    if crate::legacy::needed(path, &raw) {
+                        let (nb, out) = crate::legacy::migrate(&self.root, path, &raw)?;
                         self.recovery.migrated_notebooks += 1;
                         self.recovery.replayed_batches += out.replayed;
                         self.recovery.truncated_journals += out.truncated;
@@ -493,16 +502,22 @@ impl Library {
                 Ok(nb) if nb.id == id => {
                     self.collect_orphans(&nb);
                     self.notebooks.insert(id, nb);
+                    true
                 }
-                Ok(_) => self.recovery.warnings.push(format!(
-                    "notebook {id}: id does not match its folder; skipped"
-                )),
-                Err(e) => self.recovery.warnings.push(format!(
-                    "notebook {id} could not be opened and was left untouched: {e}"
-                )),
+                Ok(_) => {
+                    self.recovery.warnings.push(format!(
+                        "notebook {id}: id does not match its folder; skipped"
+                    ));
+                    false
+                }
+                Err(e) => {
+                    self.recovery.warnings.push(format!(
+                        "notebook {id} could not be opened and was left untouched: {e}"
+                    ));
+                    false
+                }
             }
         }
-        Ok(())
     }
 
     /// Re-applies journal transactions after the checkpoint floor.
@@ -2088,6 +2103,80 @@ impl Library {
     /// journal restores the purge and nothing has changed.
     pub fn forget_purge(&mut self, id: Uuid) -> bool {
         self.purged.remove(&id)
+    }
+
+    // -------------------------------------------------------- detach/attach --
+
+    /// Takes notebooks out of the open library without deleting anything, so their folders can
+    /// be moved away (a vault being locked). Afterwards:
+    ///
+    /// * every journaled change of theirs is in their snapshots, and the journal no longer holds
+    ///   any of their transactions ([`Journal::drop_notebooks`]), so nothing of them is left
+    ///   outside `notebooks/<id>/`;
+    /// * the library forgets them: they aren't listed, and nothing writes to their folders.
+    ///
+    /// Anything that reads the journal for these notebooks (a sync engine) must have copied it
+    /// first: what was dropped can't be read again. Ids that aren't open are ignored. On error
+    /// the notebooks stay open; the journal may already be without some of their transactions,
+    /// which is harmless because their snapshots cover them by then.
+    ///
+    /// [`Journal::drop_notebooks`]: crate::journal::Journal::drop_notebooks
+    pub fn detach_notebooks(&mut self, ids: &HashSet<Uuid>) -> Result<()> {
+        let ids: HashSet<Uuid> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.notebooks.contains_key(id) || self.purged.contains(id))
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        // the snapshots first: once a transaction is dropped, the snapshot is all there is
+        for id in &ids {
+            if self.notebooks.contains_key(id) {
+                self.flush_notebook(*id)?;
+                self.save_notebook_snapshot(*id)?;
+            }
+        }
+        // the manifest must record the highest sequence before transactions are dropped, or a
+        // reopened library could hand out sequences that sync engines have already seen
+        self.write_checkpoint()?;
+        if self.manifest.last_seq != self.last_seq {
+            return Err(StorageError::Io(
+                "the checkpoint manifest could not be brought up to date".into(),
+            ));
+        }
+        self.journal.drop_notebooks(&ids)?;
+        self.notebooks.retain(|id, _| !ids.contains(id));
+        self.pages.retain(|(nb, _), _| !ids.contains(nb));
+        self.pending.retain(|(nb, _), _| !ids.contains(nb));
+        self.dirty_notebooks.retain(|nb, _| !ids.contains(nb));
+        self.history_chains.retain(|(nb, _), _| !ids.contains(nb));
+        self.history_structure.retain(|nb, _| !ids.contains(nb));
+        self.recent_batches
+            .retain(|_, (nb, _, _)| !ids.contains(nb));
+        self.purged.retain(|nb| !ids.contains(nb));
+        self.installed.retain(|nb, _| !ids.contains(nb));
+        self.write_checkpoint()
+    }
+
+    /// Opens notebook folders that were put back under `notebooks/` (a vault being unlocked),
+    /// as [`Library::open`] would. Returns the ids that opened; one that can't be read is left
+    /// on disk and reported in [`Library::recovery`]. Ids already open are skipped.
+    ///
+    /// The folders must come from [`Library::detach_notebooks`] or equivalent: the journal holds
+    /// nothing for them, so their snapshots are taken as complete.
+    pub fn attach_notebooks(&mut self, ids: &[Uuid]) -> Vec<Uuid> {
+        let mut out = Vec::new();
+        for id in ids {
+            if self.notebooks.contains_key(id) {
+                continue;
+            }
+            let path = self.nb_dir(*id);
+            if path.join("notebook.json").exists() && self.load_notebook_dir(&path, *id) {
+                out.push(*id);
+            }
+        }
+        out
     }
 
     /// Whether an id is taken (including notebooks purged while their

@@ -90,7 +90,9 @@ use crate::store::{OpMeta, Origin, Parked, SyncState, SyncStore};
 use crate::transport::{SyncTransport, TransportError};
 use crate::vault::{NotebookOwners, Scope};
 
-const DEVICE_SECRET: &str = "sync-device-keys";
+/// Base name of the secret holding a device's sync keys ([`Scope::secret_name`] adds a vault's
+/// prefix).
+pub const DEVICE_SECRET: &str = "sync-device-keys";
 const PULL_PAGE: u32 = 200;
 /// Publish a checkpoint after the operation log grew by this many entries.
 const CHECKPOINT_EVERY: u64 = 500;
@@ -939,6 +941,40 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// This engine's scope.
     pub fn scope(&self) -> &Scope {
         &self.scope
+    }
+
+    /// The name this engine's device keys are stored under in its secret store.
+    pub fn device_secret_name(&self) -> String {
+        self.scope.secret_name(DEVICE_SECRET)
+    }
+
+    /// The secret store this engine keeps its keys in.
+    pub fn secret_store(&self) -> &dyn SecretStore {
+        self.secrets.as_ref()
+    }
+
+    /// Copies this engine's notebooks' journal entries into its operation log now, without
+    /// any network: what [`SyncEngine::prepare`] does first. A vault engine does this before
+    /// the vault is locked, because locking drops those entries from the journal.
+    pub fn ingest_now(&mut self, lib: &mut Library) -> Result<usize> {
+        if !self.store.state.enrolled {
+            return Err(SyncError::NotEnrolled);
+        }
+        self.load_owners()?;
+        self.ingest(lib)
+    }
+
+    /// Picks up after the vault was locked on this device. Its notebooks were out of the library
+    /// meanwhile, so the journal entries made since belong to other notebooks, and other engines
+    /// may have let the library release them: ingestion resumes at `lib_last_seq` instead of
+    /// asking for entries that are gone. Call with the library lock held, before
+    /// [`SyncEngine::prepare`].
+    pub fn resume_after_lock(&mut self, lib_last_seq: u64) -> Result<()> {
+        if lib_last_seq > self.store.state.ingested_lib_seq {
+            self.store.state.ingested_lib_seq = lib_last_seq;
+            self.store.save()?;
+        }
+        Ok(())
     }
 
     /// Whether this engine syncs `notebook`, by the owners read in the current local phase.

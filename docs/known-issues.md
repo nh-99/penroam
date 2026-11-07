@@ -21,9 +21,14 @@ notes. If you find one, please report it: see [support](support.md).
   [threat model](security/threat-model.md).
 * A notebook moved into a vault leaves its earlier versions in your account's history until the
   account is deleted, and that history isn't private. Create sensitive notebooks in the vault.
-* Vault notebooks are stored on the device like any others, and nothing asks for the passphrase after
-  the first time. Backups and exports of them aren't encrypted, and a notebook restored from a backup
-  on a new device is an ordinary notebook again, which sync uploads as one.
+* An unlocked vault's notebooks are stored on the device like any others. Lock the vault to encrypt
+  them there; deleted files can still be recovered from the disk underneath unless the device's own
+  encryption is on. Exports of vault notebooks aren't encrypted, and one imported on another device is
+  an ordinary notebook again, which sync uploads as one.
+* "Lock vaults when the app closes" can't run when a phone stops the app in the background; the
+  vaults then lock the next time Penroam starts.
+* A vault whose passphrase was changed on another device unlocks offline only with the old
+  passphrase or the recovery key, until this device is online again.
 * Erased content stays in your account until the account is deleted, even after it's gone
   from every device. It is never included in exports or backups.
 * Edits made before a notebook's first sync appear in the account's history as a single version.

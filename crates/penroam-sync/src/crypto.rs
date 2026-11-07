@@ -225,6 +225,12 @@ impl RootSecret {
     pub fn vault_name_key(&self) -> [u8; KEY_LEN] {
         hkdf32(&self.0, b"penroam", b"penroam/vault-name/v1")
     }
+
+    /// The key a vault's notebooks are encrypted under on a device while the vault is locked
+    /// there ([`crate::locker`]). Never sent anywhere.
+    pub fn vault_local_key(&self) -> [u8; KEY_LEN] {
+        hkdf32(&self.0, b"penroam", b"penroam/vault-local/v1")
+    }
 }
 
 // ----------------------------------------------------------- device keys --

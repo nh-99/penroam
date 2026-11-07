@@ -42,6 +42,14 @@
 //! Vaults (`penroam_sync::vault`): the worker owns one more engine per vault
 //! unlocked here, and reconciles them after the main one. A vault's session
 //! comes from the main session, so vaults stop with the sign-in.
+//!
+//! Locking a vault on this device (`penroam_sync::locker`) stops its engine and
+//! encrypts its notebooks, sync folder and search index under a key derived from
+//! the vault's root; its notebooks leave the library until it is unlocked again,
+//! which works offline from a cached copy of the passphrase lock. With
+//! "Lock vaults when the app closes" ([`VaultPrefs`]), every vault is locked at
+//! exit and, in case the app was stopped without an exit (common on phones), at
+//! the next launch.
 
 use crate::commands::CmdError;
 use crate::AppState;
@@ -50,6 +58,7 @@ use penroam_core::{Notebook, Page};
 use penroam_storage::ErrorCode;
 use penroam_sync::auth;
 use penroam_sync::crypto::RootSecret;
+use penroam_sync::locker::{self, LockerError};
 use penroam_sync::secrets::KeychainSecretStore;
 use penroam_sync::store::SyncStore;
 use penroam_sync::transport::HttpTransport;
@@ -200,8 +209,20 @@ enum Cmd {
     VaultUnlock(String, Option<String>, Option<String>, Reply<()>),
     /// Vault id, its current passphrase or recovery code, and the new passphrase.
     VaultSetPassphrase(String, Option<String>, Option<String>, String, Reply<()>),
-    /// Erases a vault's cloud copy.
-    VaultDelete(String, Reply<()>),
+    /// Stops syncing a vault with the cloud: erases its cloud copy; its notebooks stay on every
+    /// device that has them.
+    VaultStopSync(String, Reply<()>),
+    /// Puts a vault that isn't synced back into the account: vault id, then its passphrase or
+    /// recovery code.
+    VaultRestore(String, Option<String>, Option<String>, Reply<()>),
+    /// Removes what this device still holds of a vault that isn't synced with the cloud.
+    VaultForget(String, Reply<()>),
+    /// Locks a vault on this device: vault id, then optionally its passphrase or recovery code
+    /// (needed only when this device doesn't hold the vault's local key). Answers false when
+    /// it needs one of them.
+    VaultLock(String, Option<String>, Option<String>, Reply<bool>),
+    /// Locks every vault that can be locked without asking (app exit, launch).
+    LockAll(Reply<()>),
     Diagnostics(Reply<String>),
     /// A new account session was stored: drop the current token and retry.
     Reauth,
@@ -670,7 +691,14 @@ pub struct VaultView {
     vault_id: String,
     /// The name; unknown until the vault was unlocked on this device.
     name: Option<String>,
+    /// Its engine runs here: its notebooks are in the library.
     unlocked: bool,
+    /// Locked on this device: its notebooks are encrypted here, and the passphrase brings them
+    /// back without a connection.
+    locked: bool,
+    /// Not synced with the cloud (it stopped syncing, maybe on another device): its notebooks
+    /// are only on the devices that have them.
+    local: bool,
     /// Why this vault isn't syncing, if it isn't.
     problem: Option<String>,
 }
@@ -731,11 +759,15 @@ fn create_vault(
     let record = main
         .transport_mut()
         .vault_create(&CreateVaultRequest {
-            lock,
+            lock: lock.clone(),
             name: vault::seal_name(&root, name),
         })
         .map_err(|e| e.to_string())?;
     let id = record.vault_id.clone();
+    if let Err(e) = keep_vault_keys(app, id.as_str(), &root, &lock) {
+        let _ = main.transport_mut().vault_delete(&id);
+        return Err(e);
+    }
     let opened = (|| {
         let setup = vault_setup(app, main, id.as_str())?;
         let t = vault_transport(main, &id)?;
@@ -793,6 +825,7 @@ fn unlock_vault(
 ) -> Result<VaultSlot, String> {
     let record = find_vault(main, id)?;
     let root = vault::root_for(&record.lock, key).map_err(|e| e.to_string())?;
+    keep_vault_keys(app, id, &root, &record.lock)?;
     let setup = vault_setup(app, main, id)?;
     let t = vault_transport(main, &record.vault_id)?;
     let store = secrets(app, &library_root(app)).map_err(|e| e.message)?;
@@ -817,17 +850,22 @@ fn vaults_view(
     slots: &mut Vec<VaultSlot>,
 ) -> Result<VaultsView, String> {
     let url = main.store.state.server_url.clone();
-    let supported = HttpTransport::new(&url, String::new())
-        .meta()
-        .map(|m| m.has_capability(capabilities::VAULTS_V1))
-        .map_err(|e| unreachable_message(&e.to_string()))?;
-    let records = if supported {
-        main.transport_mut()
-            .vault_list()
-            .map_err(|e| e.to_string())?
-            .vaults
-    } else {
-        Vec::new()
+    let meta = HttpTransport::new(&url, String::new()).meta();
+    let listed = match meta {
+        Ok(m) if m.has_capability(capabilities::VAULTS_V1) => {
+            main.transport_mut().vault_list().map(|l| Some(l.vaults))
+        }
+        Ok(_) => Ok(None),
+        Err(e) => Err(e),
+    };
+    let (supported, records) = match listed {
+        Ok(Some(r)) => (true, r),
+        Ok(None) => (false, Vec::new()),
+        // Offline: what this device knows, so a locked vault can still be unlocked from it.
+        Err(penroam_sync::TransportError::Network(_)) => {
+            return Ok(offline_vaults_view(app, slots));
+        }
+        Err(e) => return Err(unreachable_message(&e.to_string())),
     };
     if supported {
         let gone: Vec<usize> = slots
@@ -847,26 +885,604 @@ fn vaults_view(
             }
         }
     }
-    let owners = NotebookOwners::load(&library_root(app)).map_err(|e| e.to_string())?;
+    let root = library_root(app);
+    let owners = NotebookOwners::load(&root).map_err(|e| e.to_string())?;
     let vaults = records
         .iter()
         .map(|r| {
             let slot = slots
                 .iter()
                 .find(|s| s.engine.store.state.account_id == r.vault_id.as_str());
+            if let Err(e) = locker::save_cached_lock(&root, r.vault_id.as_str(), &r.lock) {
+                eprintln!("penroam: a vault's lock was not cached: {e}");
+            }
             VaultView {
                 vault_id: r.vault_id.to_string(),
                 name: owners.names.get(r.vault_id.as_str()).cloned(),
                 unlocked: slot.is_some(),
+                locked: locker::is_locked(&root, r.vault_id.as_str()),
+                local: false,
                 problem: slot.and_then(|s| s.engine.status(0).last_error),
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // A vault locked here that the server no longer lists was deleted from the account. Its
+    // notebooks may exist nowhere else, so it stays, and unlocking it brings them back.
+    // A vault the account no longer has (it stopped syncing, here or on another device) that this
+    // device still holds, locked or not. Its notebooks may exist nowhere else, so they stay until
+    // the user removes them or restores cloud sync: the server saying a vault is gone must not be
+    // enough to erase local copies.
+    let mut vaults = vaults;
+    if supported {
+        let present: std::collections::BTreeSet<Uuid> = {
+            let state = app.state::<AppState>();
+            let lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+            lib.notebook_ids().into_iter().collect()
+        };
+        let mut gone: std::collections::BTreeSet<String> = owners
+            .notebooks
+            .iter()
+            .filter(|(nb, _)| present.contains(nb))
+            .map(|(_, v)| v.clone())
+            .collect();
+        gone.extend(locker::locked_vaults(&root));
+        for id in gone {
+            if records.iter().any(|r| r.vault_id.as_str() == id) {
+                continue;
+            }
+            let locked = locker::is_locked(&root, &id);
+            vaults.push(VaultView {
+                name: owners.names.get(&id).cloned(),
+                unlocked: !locked,
+                locked,
+                local: true,
+                problem: Some(
+                    "This vault isn't synced with the cloud. Its notebooks are only on the devices that have them."
+                        .into(),
+                ),
+                vault_id: id,
+            });
+        }
+        // A vault restored to the cloud by another device carries the same passphrase lock as
+        // the unsynced copy here. Listing it separately would offer to unlock a second copy of the
+        // same notebooks; instead the local one says so, and restoring joins it.
+        let restored: Vec<(String, String)> = vaults
+            .iter()
+            .filter(|v| v.local)
+            .filter_map(|v| {
+                let lock = locker::cached_lock(&root, &v.vault_id)?;
+                let r = records.iter().find(|r| r.lock == lock)?;
+                Some((v.vault_id.clone(), r.vault_id.to_string()))
+            })
+            .collect();
+        for (local, remote) in restored {
+            vaults.retain(|v| v.vault_id != remote);
+            if let Some(v) = vaults.iter_mut().find(|v| v.vault_id == local) {
+                v.problem = Some(
+                    "This vault was restored to the cloud on another device. Restore cloud sync here to join it."
+                        .into(),
+                );
+            }
+        }
+    }
     Ok(VaultsView {
         supported,
         vaults,
         notebooks: owners.notebooks,
     })
+}
+
+/// The vaults this device knows of, without the server: those unlocked or locked here, and
+/// those it has names for.
+fn offline_vaults_view(app: &AppHandle, slots: &[VaultSlot]) -> VaultsView {
+    let root = library_root(app);
+    let owners = NotebookOwners::load(&root).unwrap_or_default();
+    let mut ids: std::collections::BTreeSet<String> = owners.names.keys().cloned().collect();
+    ids.extend(locker::locked_vaults(&root));
+    ids.extend(
+        slots
+            .iter()
+            .map(|s| s.engine.store.state.account_id.clone()),
+    );
+    let vaults: Vec<VaultView> = ids
+        .into_iter()
+        .map(|id| {
+            let slot = slots.iter().find(|s| s.engine.store.state.account_id == id);
+            let locked = locker::is_locked(&root, &id);
+            let held = owners.notebooks.values().any(|v| *v == id);
+            VaultView {
+                name: owners.names.get(&id).cloned(),
+                unlocked: slot.is_some() || (!locked && held),
+                locked,
+                local: false,
+                problem: slot.and_then(|s| s.engine.status(0).last_error),
+                vault_id: id,
+            }
+        })
+        .collect();
+    VaultsView {
+        supported: !vaults.is_empty(),
+        vaults,
+        notebooks: owners.notebooks,
+    }
+}
+
+/// Locks a vault that isn't synced with the cloud. Answers false when the passphrase is needed.
+fn lock_unsynced(app: &AppHandle, id: &str, key: Option<locker::LocalKey>) -> Result<bool, String> {
+    let library = library_root(app);
+    let store = secrets(app, &library).map_err(|e| e.message)?;
+    if key.is_none()
+        && locker::local_key(store.as_ref(), id)
+            .ok()
+            .flatten()
+            .is_none()
+    {
+        return Ok(false);
+    }
+    // a wrong root would make the locked copy unopenable: check it against the stored key
+    if let (Some(k), Ok(Some(stored))) = (&key, locker::local_key(store.as_ref(), id)) {
+        if k.as_ref() != stored.as_ref() {
+            return Err("that doesn't open this vault".into());
+        }
+    }
+    let state = app.state::<AppState>();
+    let search_dir = state.search.vault_dir(id);
+    if !state.search.close_vault(id) {
+        state.search.vault_opened(id);
+        return Err("search is busy; try again".into());
+    }
+    let extra: Vec<(String, PathBuf)> = search_dir
+        .into_iter()
+        .map(|d| (SEARCH_LABEL.to_string(), d))
+        .collect();
+    let res = {
+        let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+        locker::lock_local(&mut lib, id, store.as_ref(), extra, key.as_deref())
+    };
+    match res {
+        Ok(()) => {
+            let _ = app.emit("sync://vaults", ());
+            Ok(true)
+        }
+        Err(LockerError::NeedsKey) => {
+            state.search.vault_opened(id);
+            Ok(false)
+        }
+        Err(e) => {
+            if !locker::is_locked(&library, id) {
+                state.search.vault_opened(id);
+            }
+            Err(locker_message(&e))
+        }
+    }
+}
+
+/// Puts a vault that isn't synced back into the account and starts syncing it again. Another
+/// device may have restored it already: a vault whose name opens with the same root is that
+/// vault, and this device joins it. Otherwise it is created again with the same root (so the
+/// recovery key stays valid) and the cached passphrase lock. The server gives it a new id, so
+/// the local assignment, key, lock copy and search index move to that id. The fresh engine
+/// uploads the notebooks; when another device uploads the same ones, the merge keeps one copy.
+fn restore_vault(
+    app: &AppHandle,
+    main: &mut Engine,
+    old: &str,
+    key: &VaultKey<'_>,
+) -> Result<VaultSlot, String> {
+    let library = library_root(app);
+    if locker::is_locked(&library, old) {
+        return Err("unlock this vault first".into());
+    }
+    let root = vault_root(app, main, old, key)?;
+    let store = secrets(app, &library).map_err(|e| e.message)?;
+    if let Ok(Some(stored)) = locker::local_key(store.as_ref(), old) {
+        if stored.as_ref() != locker::key_from_root(&root).as_ref() {
+            return Err(match key {
+                VaultKey::RecoveryCode(_) => "that recovery code isn't this vault's".into(),
+                VaultKey::Passphrase(_) => vault::VaultError::WrongPassphrase.to_string(),
+            });
+        }
+    }
+    let listed = main
+        .transport_mut()
+        .vault_list()
+        .map_err(|e| e.to_string())?
+        .vaults;
+    if listed.iter().any(|r| r.vault_id.as_str() == old) {
+        return Err("this vault is already synced".into());
+    }
+    let owners = NotebookOwners::load(&library).map_err(|e| e.to_string())?;
+    let name = owners
+        .names
+        .get(old)
+        .cloned()
+        .unwrap_or_else(|| "Vault".into());
+    let record = match listed
+        .into_iter()
+        .find(|r| vault::open_name(&root, &r.name).is_ok())
+    {
+        Some(r) => r,
+        None => {
+            let lock = match (locker::cached_lock(&library, old), key) {
+                (Some(l), _) => l,
+                (None, VaultKey::Passphrase(p)) => {
+                    vault::new_lock(&root, p).map_err(|e| e.to_string())?
+                }
+                (None, VaultKey::RecoveryCode(_)) => {
+                    return Err("enter the vault's passphrase to restore it".into())
+                }
+            };
+            main.transport_mut()
+                .vault_create(&CreateVaultRequest {
+                    lock,
+                    name: vault::seal_name(&root, &name),
+                })
+                .map_err(|e| e.to_string())?
+        }
+    };
+    let new = record.vault_id.as_str().to_string();
+    // the search index moves with the vault; reopened under the new id below
+    let state = app.state::<AppState>();
+    let (old_dir, new_dir) = (state.search.vault_dir(old), state.search.vault_dir(&new));
+    state.search.close_vault(old);
+    if let (Some(o), Some(n)) = (old_dir, new_dir) {
+        if o.exists() && !n.exists() {
+            let _ = std::fs::rename(o, n);
+        }
+    }
+    edit_owners(app, |o| {
+        for v in o.notebooks.values_mut() {
+            if v == old {
+                *v = new.clone();
+            }
+        }
+        if let Some(n) = o.names.remove(old) {
+            o.names.insert(new.clone(), n);
+        }
+    })?;
+    keep_vault_keys(app, &new, &root, &record.lock)?;
+    let _ = store.delete(
+        &Scope::vault(old)
+            .map_err(|e| e.to_string())?
+            .secret_name(locker::LOCAL_KEY_SECRET),
+    );
+    let _ = locker::forget_cached_lock(&library, old);
+    let setup = vault_setup(app, main, &new)?;
+    let t = vault_transport(main, &record.vault_id)?;
+    let engine = Engine::open_vault(setup, t, store, &root).map_err(|e| e.to_string())?;
+    state.search.vault_opened(&new);
+    let _ = app.emit("sync://vaults", ());
+    Ok(VaultSlot {
+        engine,
+        have_token: false,
+    })
+}
+
+/// Removes everything this device holds of a vault: its notebooks (deleted for good; the
+/// journal's purge is ignored by the main engine, which never synced them, because their
+/// assignment stays), its locked copy, search index, local key and cached lock, and its name.
+fn remove_vault_locally(app: &AppHandle, id: &str) -> Result<(), String> {
+    let library = library_root(app);
+    let state = app.state::<AppState>();
+    let store = secrets(app, &library).map_err(|e| e.message)?;
+    let search_dir = state.search.vault_dir(id);
+    state.search.close_vault(id);
+    let owners = NotebookOwners::load(&library).map_err(|e| e.to_string())?;
+    let mine: Vec<Uuid> = owners
+        .notebooks
+        .iter()
+        .filter(|(_, v)| v.as_str() == id)
+        .map(|(nb, _)| *nb)
+        .collect();
+    {
+        let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+        for nb in &mine {
+            let Ok(n) = lib.notebook(*nb) else { continue };
+            if n.deleted_at.is_none() {
+                lib.delete_notebook(*nb).map_err(|e| e.to_string())?;
+            }
+            lib.purge_notebook(*nb).map_err(|e| e.to_string())?;
+        }
+    }
+    for nb in &mine {
+        state.search.notebook_changed(*nb);
+    }
+    locker::discard(&library, id).map_err(|e| e.to_string())?;
+    if let Some(d) = search_dir {
+        let _ = std::fs::remove_dir_all(d);
+    }
+    let names = locker::vault_secret_names(
+        id,
+        &Scope::vault(id)
+            .map_err(|e| e.to_string())?
+            .secret_name(penroam_sync::engine::DEVICE_SECRET),
+    )
+    .map_err(|e| e.to_string())?;
+    for n in names {
+        let _ = store.delete(&n);
+    }
+    let _ = locker::forget_cached_lock(&library, id);
+    edit_owners(app, |o| {
+        o.names.remove(id);
+    })?;
+    let _ = app.emit("sync://vaults", ());
+    Ok(())
+}
+
+/// What this device keeps of an unlocked vault besides its sync keys: the local key that
+/// locking encrypts under, and a copy of the passphrase lock for unlocking offline.
+fn keep_vault_keys(
+    app: &AppHandle,
+    id: &str,
+    root: &RootSecret,
+    lock: &penroam_sync_protocol::VaultLock,
+) -> Result<(), String> {
+    let library = library_root(app);
+    let store = secrets(app, &library).map_err(|e| e.message)?;
+    locker::store_local_key(store.as_ref(), id, root).map_err(|e| e.to_string())?;
+    locker::save_cached_lock(&library, id, lock).map_err(|e| e.to_string())
+}
+
+/// A vault's root from what the user typed. A passphrase opens the cached lock first, so this
+/// works offline; if that fails (no copy, or the passphrase was changed on another device) the
+/// server's lock is tried, and cached when it works.
+fn vault_root(
+    app: &AppHandle,
+    main: &mut Engine,
+    id: &str,
+    key: &VaultKey<'_>,
+) -> Result<RootSecret, String> {
+    let library = library_root(app);
+    if let VaultKey::RecoveryCode(c) = key {
+        return RootSecret::parse_recovery_code(c).map_err(|e| e.to_string());
+    }
+    let cached = locker::cached_lock(&library, id);
+    let local = cached
+        .as_ref()
+        .map(|l| vault::root_for(l, key).map_err(|e| e.to_string()));
+    if let Some(Ok(root)) = local {
+        return Ok(root);
+    }
+    match find_vault(main, id) {
+        Ok(record) => {
+            let root = vault::root_for(&record.lock, key).map_err(|e| e.to_string())?;
+            let _ = locker::save_cached_lock(&library, id, &record.lock);
+            Ok(root)
+        }
+        // offline or gone: the cached lock's answer is the one to give
+        Err(e) => match local {
+            Some(Err(local)) => Err(local),
+            _ => Err(e),
+        },
+    }
+}
+
+fn locker_message(e: &LockerError) -> String {
+    match e {
+        LockerError::WrongKey => "that doesn't open this vault".into(),
+        other => other.to_string(),
+    }
+}
+
+/// Locks one vault here. On failure the slot comes back (unless the vault got locked anyway
+/// and only the cleanup failed, which start-up finishes), with whether a passphrase is needed.
+fn lock_slot(
+    app: &AppHandle,
+    slot: VaultSlot,
+    key: Option<locker::LocalKey>,
+) -> Result<(), (String, Option<Box<VaultSlot>>, bool)> {
+    let state = app.state::<AppState>();
+    let id = slot.engine.store.state.account_id.clone();
+    let url = slot.engine.store.state.server_url.clone();
+    let session = slot.engine.scope().secret_name(DEVICE_SESSION);
+    let search_dir = state.search.vault_dir(&id);
+    if !state.search.close_vault(&id) {
+        state.search.vault_opened(&id);
+        return Err((
+            "search is busy; try again".into(),
+            Some(Box::new(slot)),
+            false,
+        ));
+    }
+    let extra: Vec<(String, PathBuf)> = search_dir
+        .into_iter()
+        .map(|d| (SEARCH_LABEL.to_string(), d))
+        .collect();
+    let result = {
+        let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+        locker::lock_vault(&mut lib, slot.engine, extra, key.as_deref())
+    };
+    match result {
+        Ok(()) => {}
+        Err((e, Some(engine))) => {
+            state.search.vault_opened(&id);
+            let needs = matches!(e, LockerError::NeedsKey);
+            let slot = VaultSlot {
+                engine: *engine,
+                have_token: slot.have_token,
+            };
+            return Err((locker_message(&e), Some(Box::new(slot)), needs));
+        }
+        Err((e, None)) => eprintln!("penroam: a vault was locked, but not cleaned up yet: {e}"),
+    }
+    if let Ok(store) = secrets(app, &library_root(app)) {
+        forget_session(store.as_ref(), &session, &url);
+    }
+    let _ = app.emit("sync://vaults", ());
+    Ok(())
+}
+
+/// Unlocks a vault that is locked on this device and starts its engine. Works offline.
+fn unlock_locked(
+    app: &AppHandle,
+    main: &mut Engine,
+    id: &str,
+    key: &VaultKey<'_>,
+) -> Result<Option<VaultSlot>, String> {
+    let library = library_root(app);
+    let root = vault_root(app, main, id, key)?;
+    let lkey = locker::key_from_root(&root);
+    locker::check_key(&library, id, &lkey).map_err(|e| match (e, key) {
+        (LockerError::WrongKey, VaultKey::RecoveryCode(_)) => {
+            "that recovery code isn't this vault's".to_string()
+        }
+        (LockerError::WrongKey, _) => vault::VaultError::WrongPassphrase.to_string(),
+        (e, _) => locker_message(&e),
+    })?;
+    // the secret store reads the library's device id, so it is opened before the lock is taken
+    let store = secrets(app, &library).map_err(|e| e.message)?;
+    let state = app.state::<AppState>();
+    let search_dir = state.search.vault_dir(id);
+    let seq = {
+        let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+        locker::unlock_vault(&mut lib, id, &lkey, store.as_ref(), |label| {
+            (label == SEARCH_LABEL)
+                .then(|| search_dir.clone())
+                .flatten()
+        })
+        .map_err(|e| locker_message(&e))?;
+        lib.last_seq()
+    };
+    let scope = Scope::vault(id).map_err(|e| e.to_string())?;
+    if !scope.dir(&library).join("state.json").exists() {
+        // a vault that isn't synced: its notebooks are back, and nothing syncs them
+        state.search.vault_opened(id);
+        let _ = app.emit("sync://vaults", ());
+        return Ok(None);
+    }
+    let url = main.store.state.server_url.clone();
+    let mut engine = Engine::open_scope(
+        &library,
+        scope,
+        HttpTransport::new(&url, String::new()),
+        secrets(app, &library).map_err(|e| e.message)?,
+    )
+    .map_err(|e| e.to_string())?;
+    engine.resume_after_lock(seq).map_err(|e| e.to_string())?;
+    state.search.vault_opened(id);
+    let _ = app.emit("sync://vaults", ());
+    Ok(Some(VaultSlot {
+        engine,
+        have_token: false,
+    }))
+}
+
+/// Locks every vault that can be locked without asking. One that needs its passphrase (unlocked
+/// before devices kept a local key) stays unlocked.
+fn lock_all(app: &AppHandle, slots: &mut Vec<VaultSlot>) {
+    for slot in std::mem::take(slots) {
+        if let Err((e, back, _)) = lock_slot(app, slot, None) {
+            eprintln!("penroam: a vault was not locked: {e}");
+            slots.extend(back.map(|b| *b));
+        }
+    }
+    // vaults that aren't synced have no engine, but their notebooks are here all the same
+    let library = library_root(app);
+    let owners = NotebookOwners::load(&library).unwrap_or_default();
+    let unsynced: std::collections::BTreeSet<String> = owners
+        .notebooks
+        .values()
+        .filter(|v| !slots.iter().any(|s| s.engine.store.state.account_id == **v))
+        .filter(|v| !locker::is_locked(&library, v))
+        .cloned()
+        .collect();
+    let present: std::collections::BTreeSet<Uuid> = {
+        let state = app.state::<AppState>();
+        let lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+        lib.notebook_ids().into_iter().collect()
+    };
+    for v in unsynced {
+        let holds = owners
+            .notebooks
+            .iter()
+            .any(|(nb, o)| *o == v && present.contains(nb));
+        if holds {
+            match lock_unsynced(app, &v, None) {
+                Ok(true) => {}
+                Ok(false) => eprintln!("penroam: a vault needs its passphrase to lock"),
+                Err(e) => eprintln!("penroam: a vault was not locked: {e}"),
+            }
+        }
+    }
+}
+
+/// Label of a vault's search index in its locked copy.
+const SEARCH_LABEL: &str = "search";
+
+/// Device preferences for vaults (`vaults.json` in the app config folder).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VaultPrefs {
+    /// Lock every vault when the app closes (and at launch, if it was stopped without closing).
+    pub lock_on_exit: bool,
+}
+
+fn prefs_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("vaults.json"))
+}
+
+/// The vault preferences (defaults when unset or unreadable).
+pub fn load_prefs(app: &AppHandle) -> VaultPrefs {
+    prefs_path(app)
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Locks every vault before the app exits, when the preference asks for it. Waits for the
+/// worker, since encrypting can take a moment.
+pub fn lock_vaults_on_exit(app: &AppHandle) {
+    if !load_prefs(app).lock_on_exit {
+        return;
+    }
+    let state = app.state::<AppState>();
+    if state.sync.running() {
+        let _ = ask(&state.sync, Cmd::LockAll);
+    }
+}
+
+/// Finishes interrupted vault locks and unlocks before the library opens: deletes partial
+/// copies, and any plaintext folders of vaults that are locked, so the library never loads a
+/// locked vault's notebooks.
+pub fn recover_vaults_before_open(root: &Path) {
+    struct NoSecrets;
+    impl SecretStore for NoSecrets {
+        fn get(&self, _: &str) -> std::io::Result<Option<String>> {
+            Ok(None)
+        }
+        fn set(&self, _: &str, _: &str) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn delete(&self, _: &str) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn kind(&self) -> &'static str {
+            "none"
+        }
+    }
+    if let Err(e) = locker::recover(root, &NoSecrets, |_| vec![]) {
+        eprintln!("penroam: interrupted vault work was not finished: {e}");
+    }
+}
+
+/// The rest of [`recover_vaults_before_open`], once the app state exists: a locked vault's
+/// secrets and search index.
+pub fn recover_vaults_after_open(app: &AppHandle) {
+    let library = library_root(app);
+    if locker::locked_vaults(&library).is_empty() {
+        return;
+    }
+    let Ok(store) = secrets(app, &library) else {
+        return;
+    };
+    let search = &app.state::<AppState>().search;
+    let dirs = |v: &str| search.vault_dir(v).into_iter().collect();
+    if let Err(e) = locker::recover(&library, store.as_ref(), dirs) {
+        eprintln!("penroam: interrupted vault work was not finished: {e}");
+    }
 }
 
 /// The name this device goes by until the user changes it: its host name, or on Android, where
@@ -960,6 +1576,15 @@ fn emit_status(app: &AppHandle, e: &Engine) {
 /// rejected token triggers a fresh sign-in.
 fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
     let mut slots = open_vault_slots(&app);
+    for s in &slots {
+        app.state::<AppState>()
+            .search
+            .vault_opened(&s.engine.store.state.account_id);
+    }
+    // the app was stopped without closing (a phone does that): lock what it would have
+    if load_prefs(&app).lock_on_exit {
+        lock_all(&app, &mut slots);
+    }
     let mut due: Option<Instant> = Some(Instant::now());
     let mut have_token = false;
     let mut signed_out = false;
@@ -1140,6 +1765,9 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
             Ok(Cmd::VaultCreate(name, passphrase, r)) => {
                 ensure(&mut engine, &mut have_token, &mut signed_out);
                 let res = create_vault(&app, &mut engine, &name, &passphrase).map(|(s, code)| {
+                    app.state::<AppState>()
+                        .search
+                        .vault_opened(&s.engine.store.state.account_id);
                     slots.push(s);
                     code
                 });
@@ -1149,9 +1777,19 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
             }
             Ok(Cmd::VaultUnlock(id, passphrase, recovery, r)) => {
                 ensure(&mut engine, &mut have_token, &mut signed_out);
+                let locked_here = locker::is_locked(&library_root(&app), &id);
                 let res = vault_key(&passphrase, &recovery)
-                    .and_then(|k| unlock_vault(&app, &mut engine, &id, &k))
-                    .map(|s| slots.push(s));
+                    .and_then(|k| {
+                        if locked_here {
+                            unlock_locked(&app, &mut engine, &id, &k)
+                        } else {
+                            unlock_vault(&app, &mut engine, &id, &k).map(|s| {
+                                app.state::<AppState>().search.vault_opened(&id);
+                                Some(s)
+                            })
+                        }
+                    })
+                    .map(|s| slots.extend(s));
                 let _ = r.send(res);
                 due = Some(Instant::now());
                 continue;
@@ -1175,13 +1813,18 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                     let lock = vault::new_lock(&root, &new).map_err(|e| e.to_string())?;
                     engine
                         .transport_mut()
-                        .vault_set_lock(&record.vault_id, &UpdateVaultLockRequest { lock })
-                        .map_err(|e| e.to_string())
+                        .vault_set_lock(
+                            &record.vault_id,
+                            &UpdateVaultLockRequest { lock: lock.clone() },
+                        )
+                        .map_err(|e| e.to_string())?;
+                    let _ = locker::save_cached_lock(&library_root(&app), &id, &lock);
+                    Ok(())
                 })();
                 let _ = r.send(res);
                 continue;
             }
-            Ok(Cmd::VaultDelete(id, r)) => {
+            Ok(Cmd::VaultStopSync(id, r)) => {
                 ensure(&mut engine, &mut have_token, &mut signed_out);
                 let res = id
                     .parse::<AccountId>()
@@ -1193,16 +1836,112 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                             .map_err(|e| e.to_string())
                     })
                     .map(|()| {
+                        // its notebooks stay; only the engine and its sync folder go
                         if let Some(i) = slots
                             .iter()
                             .position(|s| s.engine.store.state.account_id == id)
                         {
                             if let Err(e) = slots.remove(i).engine.disconnect() {
-                                eprintln!("penroam: a deleted vault was not cleaned up: {e}");
+                                eprintln!("penroam: a vault's sync folder was not removed: {e}");
                             }
                         }
+                        let _ = app.emit("sync://vaults", ());
                     });
                 let _ = r.send(res);
+                continue;
+            }
+            Ok(Cmd::VaultRestore(id, passphrase, recovery, r)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let res = vault_key(&passphrase, &recovery).and_then(|k| {
+                    let slot = restore_vault(&app, &mut engine, &id, &k)?;
+                    slots.push(slot);
+                    Ok(())
+                });
+                let _ = r.send(res);
+                due = Some(Instant::now());
+                continue;
+            }
+            Ok(Cmd::VaultForget(id, r)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                // only what the account no longer has: a live vault is deleted, not forgotten
+                let res = match engine.transport_mut().vault_list() {
+                    Ok(l) if l.vaults.iter().any(|v| v.vault_id.as_str() == id) => {
+                        Err("this vault is still in your account".to_string())
+                    }
+                    Ok(_) => {
+                        if let Some(i) = slots
+                            .iter()
+                            .position(|s| s.engine.store.state.account_id == id)
+                        {
+                            let _ = slots.remove(i).engine.disconnect();
+                        }
+                        remove_vault_locally(&app, &id)
+                    }
+                    Err(e) => Err(unreachable_message(&e.to_string())),
+                };
+                let _ = r.send(res);
+                continue;
+            }
+            Ok(Cmd::VaultLock(id, passphrase, recovery, r)) => {
+                let Some(i) = slots
+                    .iter()
+                    .position(|s| s.engine.store.state.account_id == id)
+                else {
+                    let library = library_root(&app);
+                    let res = if locker::is_locked(&library, &id) {
+                        Ok(true)
+                    } else {
+                        // a vault that isn't synced has no engine; its notebooks still lock
+                        let key = match (&passphrase, &recovery) {
+                            (None, None) => Ok(None),
+                            _ => vault_key(&passphrase, &recovery)
+                                .and_then(|k| vault_root(&app, &mut engine, &id, &k))
+                                .map(|root| Some(locker::key_from_root(&root))),
+                        };
+                        key.and_then(|k| lock_unsynced(&app, &id, k))
+                    };
+                    let _ = r.send(res);
+                    continue;
+                };
+                let key = if passphrase.is_some() || recovery.is_some() {
+                    ensure(&mut engine, &mut have_token, &mut signed_out);
+                    let root = vault_key(&passphrase, &recovery)
+                        .and_then(|k| vault_root(&app, &mut engine, &id, &k));
+                    match root {
+                        // a root that isn't this vault's would make the locked copy unopenable
+                        Ok(root) if slots[i].engine.account_key_is(&root) => {
+                            Some(locker::key_from_root(&root))
+                        }
+                        Ok(_) => {
+                            let _ = r.send(Err("that doesn't open this vault".into()));
+                            continue;
+                        }
+                        Err(e) => {
+                            let _ = r.send(Err(e));
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+                let slot = slots.remove(i);
+                let res = match lock_slot(&app, slot, key) {
+                    Ok(()) => Ok(true),
+                    Err((e, back, needs)) => {
+                        slots.extend(back.map(|b| *b));
+                        if needs {
+                            Ok(false)
+                        } else {
+                            Err(e)
+                        }
+                    }
+                };
+                let _ = r.send(res);
+                continue;
+            }
+            Ok(Cmd::LockAll(r)) => {
+                lock_all(&app, &mut slots);
+                let _ = r.send(Ok(()));
                 continue;
             }
             Ok(Cmd::Diagnostics(r)) => {
@@ -1583,10 +2322,60 @@ pub fn sync_vault_set_passphrase(
     })
 }
 
-/// Erases a vault's cloud copy. Its notebooks stay on this device and stop syncing.
+/// Locks a vault on this device: its notebooks leave the library and are encrypted here until
+/// it is unlocked. Answers false when this device needs the passphrase (or recovery code) once,
+/// because it was unlocked before devices kept a local key.
 #[tauri::command(async)]
-pub fn sync_vault_delete(state: State<'_, AppState>, vault_id: String) -> Result<(), CmdError> {
-    ask(&state.sync, |r| Cmd::VaultDelete(vault_id, r))
+pub fn sync_vault_lock(
+    state: State<'_, AppState>,
+    vault_id: String,
+    passphrase: Option<String>,
+    recovery_code: Option<String>,
+) -> Result<bool, CmdError> {
+    ask(&state.sync, |r| {
+        Cmd::VaultLock(vault_id, passphrase, recovery_code, r)
+    })
+}
+
+/// The vault preferences of this device.
+#[tauri::command]
+pub fn vault_prefs(app: AppHandle) -> VaultPrefs {
+    load_prefs(&app)
+}
+
+/// Saves the vault preferences of this device.
+#[tauri::command]
+pub fn vault_set_prefs(app: AppHandle, prefs: VaultPrefs) -> Result<(), CmdError> {
+    let path = prefs_path(&app).ok_or_else(|| err("no app config folder"))?;
+    let bytes = serde_json::to_vec_pretty(&prefs).map_err(|e| err(e.to_string()))?;
+    penroam_storage::fsutil::write_atomic(&path, &bytes).map_err(|e| err(e.to_string()))
+}
+
+/// Removes what this device holds of a vault that was deleted from the account on another
+/// device: its notebooks, or its locked copy.
+#[tauri::command(async)]
+pub fn sync_vault_forget(state: State<'_, AppState>, vault_id: String) -> Result<(), CmdError> {
+    ask(&state.sync, |r| Cmd::VaultForget(vault_id, r))
+}
+
+/// Puts a vault that isn't synced back into the account, with its passphrase or recovery code.
+#[tauri::command(async)]
+pub fn sync_vault_restore(
+    state: State<'_, AppState>,
+    vault_id: String,
+    passphrase: Option<String>,
+    recovery_code: Option<String>,
+) -> Result<(), CmdError> {
+    ask(&state.sync, |r| {
+        Cmd::VaultRestore(vault_id, passphrase, recovery_code, r)
+    })
+}
+
+/// Stops syncing a vault with the cloud: its cloud copy is erased, and its notebooks stay on the
+/// devices that have them, which can restore cloud sync later.
+#[tauri::command(async)]
+pub fn sync_vault_stop_sync(state: State<'_, AppState>, vault_id: String) -> Result<(), CmdError> {
+    ask(&state.sync, |r| Cmd::VaultStopSync(vault_id, r))
 }
 
 /// Whether `vault` is unlocked on this device, so notebooks can go into it. Call with the library

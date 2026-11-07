@@ -36,6 +36,7 @@ use crate::fsutil::{self, append_durable, create_durable};
 use penroam_core::binary::{decode_point_block, encode_point_block};
 use penroam_core::operation::*;
 use penroam_core::*;
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -718,6 +719,72 @@ impl Journal {
         }
         out.sort_by_key(Txn::first_seq);
         Ok(out)
+    }
+
+    /// Rewrites every segment that holds a transaction of one of `notebooks`, without those
+    /// transactions, and returns how many were dropped. Each rewrite is atomic (temp file,
+    /// fsync, rename), so a crash leaves a segment either as it was or without them; both
+    /// replay correctly once the caller made sure the notebooks' snapshots cover them.
+    ///
+    /// Damaged bytes can't be attributed to a notebook, so they are kept as they are (and any
+    /// quarantined copy stays too). Sequence numbers are not reused: the caller keeps its own
+    /// highest sequence, so the gaps left behind are harmless.
+    pub fn drop_notebooks(&mut self, notebooks: &HashSet<Uuid>) -> Result<usize, JournalError> {
+        let mut dropped = 0;
+        let active_idx = self.active.as_ref().map(|_| self.segments.len() - 1);
+        for idx in 0..self.segments.len() {
+            let path = self.segments[idx].path.clone();
+            let bytes = match fs::read(&path) {
+                Ok(b) => b,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            if bytes.len() < HEADER_LEN {
+                continue;
+            }
+            let mut out = bytes[..HEADER_LEN].to_vec();
+            let mut here = 0;
+            let mut last_seq = None;
+            let mut pos = HEADER_LEN;
+            while pos < bytes.len() {
+                match probe(&bytes, pos) {
+                    Probe::Ok(t, next) => {
+                        if notebooks.contains(&t.target.notebook_id()) {
+                            here += 1;
+                        } else {
+                            out.extend_from_slice(&bytes[pos..next]);
+                            last_seq = Some(t.last_seq());
+                        }
+                        pos = next;
+                    }
+                    Probe::Newer(v) => return Err(JournalError::NewerSchema(v)),
+                    Probe::Bad => {
+                        // keep damaged bytes up to the next readable record untouched
+                        let resume = (pos + 1..bytes.len())
+                            .filter(|i| bytes[*i..].starts_with(RECORD_MAGIC))
+                            .find(|i| matches!(probe(&bytes, *i), Probe::Ok(..)))
+                            .unwrap_or(bytes.len());
+                        out.extend_from_slice(&bytes[pos..resume]);
+                        pos = resume;
+                    }
+                }
+            }
+            if here == 0 {
+                continue;
+            }
+            if Some(idx) == active_idx {
+                // the open handle points at the file being replaced
+                self.active = None;
+            }
+            fsutil::write_atomic(&path, &out)?;
+            self.segments[idx].last_seq = last_seq;
+            if Some(idx) == active_idx {
+                let f = OpenOptions::new().read(true).write(true).open(&path)?;
+                self.active = Some((f, out.len() as u64));
+            }
+            dropped += here;
+        }
+        Ok(dropped)
     }
 
     /// Number of segment files.

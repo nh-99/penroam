@@ -506,3 +506,40 @@ fn chain_uses_the_platform_first_and_the_model_as_fallback() {
     ));
     assert!(ChainRecognizer::new(None, None).is_none());
 }
+
+#[test]
+fn a_scrubbed_index_keeps_no_trace_of_a_removed_notebook() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("index.db");
+    let (mut ix, _) = SearchIndex::open(&path, uid(1)).unwrap();
+    let mut keep = page(10);
+    keep.elements.push(text_block(11, "ordinary groceries"));
+    let mut gone = page(20);
+    gone.elements.push(text_block(21, "zanzibarite"));
+    let a = notebook(100, "Keep", &[&keep]);
+    let b = notebook(200, "Diary", &[&gone]);
+    for (nb, p) in [(&a, &keep), (&b, &gone)] {
+        ix.sync_notebook(nb).unwrap();
+        ix.index_page(nb.id, 0, p, None, &|| false).unwrap();
+    }
+    ix.store_pdf("feedface", &["quokkaplasm".into()]).unwrap();
+    assert!(!ix.search("zanzibarite", 10).unwrap().is_empty());
+    ix.remove_notebook(b.id).unwrap();
+    ix.scrub().unwrap();
+    assert!(ix.search("zanzibarite", 10).unwrap().is_empty());
+    assert!(!ix.has_pdf("feedface").unwrap());
+    assert!(!ix.search("groceries", 10).unwrap().is_empty());
+    drop(ix);
+    for suffix in ["", "-wal"] {
+        let mut p = path.as_os_str().to_owned();
+        p.push(suffix);
+        let bytes = std::fs::read(std::path::PathBuf::from(p)).unwrap_or_default();
+        for word in [&b"zanzibarite"[..], b"quokkaplasm", b"Diary"] {
+            assert!(
+                !bytes.windows(word.len()).any(|w| w == word),
+                "{} still in index{suffix}",
+                String::from_utf8_lossy(word)
+            );
+        }
+    }
+}

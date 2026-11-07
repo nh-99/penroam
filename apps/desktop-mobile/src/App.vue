@@ -55,6 +55,12 @@ onMounted(async () => {
     watch(() => sync.status, () => {
       if (sync.downloading.length && !lib.current) void lib.refresh();
     });
+    sync.onVaultsChanged(() => {
+      // a locked vault's notebooks left the library; an unlocked one's came back
+      void lib.refresh().then(() => {
+        if (lib.current && !lib.notebooks.some((n) => n.id === lib.current?.id)) lib.close();
+      });
+    });
     sync.onChanged((c) => {
       // remote changes were merged into the library
       if (!lib.current) void lib.refresh();

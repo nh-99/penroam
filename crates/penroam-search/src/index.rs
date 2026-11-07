@@ -357,6 +357,9 @@ impl SearchIndex {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         // derived data: losing the last transactions in a power cut only means re-indexing
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // deleted rows are overwritten, so text removed from this index (a notebook moved into a
+        // vault, which has its own index) doesn't linger in free pages; see `scrub`
+        conn.pragma_update(None, "secure_delete", "ON")?;
         Ok(())
     }
 
@@ -495,6 +498,36 @@ impl SearchIndex {
             tx.execute(&format!("DELETE FROM {t} WHERE notebook = ?1"), [&s])?;
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Makes text that was removed from the index unrecoverable from its files: drops cached
+    /// PDF text that no remaining entry uses, merges the full-text index so deleted terms leave
+    /// its segments, and truncates the write-ahead log. With `secure_delete` on, freed pages are
+    /// overwritten. Run it after removing notebooks whose text must not stay (one moved into a
+    /// vault, which has its own index); it is slow on a large index, so batch removals first.
+    /// PDF text that is dropped but still needed is extracted again when its page is indexed.
+    pub fn scrub(&mut self) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute_batch(
+            "DELETE FROM pdf_text WHERE NOT EXISTS (
+               SELECT 1 FROM entries e WHERE e.kind = 'pdf'
+                 AND e.source_key LIKE 'pdf:' || pdf_text.asset || ':%');
+             DELETE FROM pdf_assets WHERE NOT EXISTS (
+               SELECT 1 FROM pdf_text t WHERE t.asset = pdf_assets.asset);
+             INSERT INTO entries_fts (entries_fts) VALUES ('optimize');",
+        )?;
+        tx.commit()?;
+        self.checkpoint()
+    }
+
+    /// Flushes the write-ahead log into the main file and empties it, so the index is one
+    /// self-contained file (before it is copied or encrypted).
+    pub fn checkpoint(&self) -> Result<()> {
+        if self.path.is_some() {
+            self.conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        }
         Ok(())
     }
 

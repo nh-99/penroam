@@ -956,3 +956,118 @@ fn legacy_fixture_sums_file_matches_generator_output_names() {
     }
     let _ = std::io::stdout().flush();
 }
+
+/// Two notebooks with journaled edits, sync retention on (so no segment is ever released).
+fn two_notebooks(lib: &mut Library) -> (Uuid, Uuid, Uuid, Uuid) {
+    lib.set_sync_enabled(true).unwrap();
+    let (a, pa) = lib
+        .create_notebook("A", PageDefaults::default(), None)
+        .unwrap();
+    let (b, pb) = lib
+        .create_notebook("B", PageDefaults::default(), None)
+        .unwrap();
+    for (i, (nb, p)) in [(a.id, pa.id), (b.id, pb.id)].into_iter().enumerate() {
+        let id = 200 + 10 * i as u128;
+        lib.apply_page_operations(
+            nb,
+            p,
+            &batch(
+                id,
+                0,
+                OpKind::AddElements {
+                    elements: vec![ink(id, 1), text(id + 2, 2, "secret")],
+                },
+            ),
+        )
+        .unwrap();
+    }
+    lib.rename_notebook(a.id, "A renamed").unwrap();
+    (a.id, pa.id, b.id, pb.id)
+}
+
+fn journal_mentions(root: &Path, nb: Uuid) -> bool {
+    let (_, txns, _) = penroam_storage::journal::Journal::open(&root.join("journal")).unwrap();
+    txns.iter().any(|t| t.target.notebook_id() == nb)
+}
+
+#[test]
+fn detached_notebooks_leave_nothing_in_the_journal_and_come_back_whole() {
+    let d = tmp();
+    let root = d.path().join("lib");
+    let away = d.path().join("away");
+    let mut lib = Library::open(&root).unwrap();
+    let (a, pa, b, pb) = two_notebooks(&mut lib);
+    let seq = lib.last_seq();
+    lib.detach_notebooks(&[a].into_iter().collect()).unwrap();
+    assert!(lib.notebook(a).is_err());
+    assert_eq!(lib.list_notebooks().len(), 1);
+    assert!(lib
+        .operations_after(0)
+        .unwrap()
+        .iter()
+        .all(|o| o.body.notebook_id() != a));
+    drop(lib);
+    assert!(!journal_mentions(&root, a));
+    assert!(journal_mentions(&root, b));
+    fs::rename(root.join("notebooks").join(a.to_string()), &away).unwrap();
+
+    // a restart without the folder: nothing of A, nothing held, B intact, no reused sequence
+    let mut lib = Library::open(&root).unwrap();
+    assert!(
+        lib.recovery.warnings.is_empty(),
+        "{:?}",
+        lib.recovery.warnings
+    );
+    assert!(lib.notebook(a).is_err());
+    assert_eq!(lib.load_page(b, pb).unwrap().elements.len(), 2);
+    assert_eq!(lib.last_seq(), seq);
+    lib.rename_notebook(b, "B2").unwrap();
+    assert!(lib.last_seq() > seq);
+
+    // back again
+    fs::rename(&away, root.join("notebooks").join(a.to_string())).unwrap();
+    assert_eq!(lib.attach_notebooks(&[a, b]), vec![a]);
+    assert_eq!(lib.notebook(a).unwrap().title, "A renamed");
+    assert_eq!(lib.load_page(a, pa).unwrap().elements.len(), 2);
+    lib.rename_notebook(a, "A again").unwrap();
+    lib.crash_for_tests();
+    let mut lib = Library::open(&root).unwrap();
+    assert_eq!(lib.notebook(a).unwrap().title, "A again");
+    assert_eq!(lib.load_page(a, pa).unwrap().elements.len(), 2);
+    assert_eq!(lib.notebook(b).unwrap().title, "B2");
+}
+
+#[test]
+fn a_crash_while_detaching_loses_nothing() {
+    let mut crashes = 0;
+    for k in 0.. {
+        let d = tmp();
+        let root = d.path().join("lib");
+        let mut lib = Library::open(&root).unwrap();
+        let (a, pa, b, pb) = two_notebooks(&mut lib);
+        fault::arm(k);
+        let r = lib.detach_notebooks(&[a].into_iter().collect());
+        let crashed = fault::crashed();
+        fault::disarm();
+        if r.is_ok() && !crashed {
+            break;
+        }
+        crashes += 1;
+        lib.crash_for_tests();
+        // the folder never moved, so a restart must show both notebooks whole
+        let mut lib = Library::open(&root)
+            .unwrap_or_else(|e| panic!("reopen after crash at point {k} ({}): {e}", fault::last()));
+        assert_eq!(lib.recovery.corrupt_journal_records, 0, "point {k}");
+        assert_eq!(lib.notebook(a).unwrap().title, "A renamed", "point {k}");
+        assert_eq!(lib.load_page(a, pa).unwrap().elements.len(), 2, "point {k}");
+        assert_eq!(lib.load_page(b, pb).unwrap().elements.len(), 2, "point {k}");
+        // and detaching again works
+        lib.detach_notebooks(&[a].into_iter().collect()).unwrap();
+        drop(lib);
+        assert!(!journal_mentions(&root, a), "point {k}");
+    }
+    assert!(
+        crashes > 3,
+        "detaching passes several write boundaries ({crashes})"
+    );
+}

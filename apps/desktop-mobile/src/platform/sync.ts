@@ -125,9 +125,20 @@ export interface SyncVault {
   vaultId: string;
   /** Unknown until the vault was unlocked on this device. */
   name: string | null;
+  /** Its notebooks are in the library and it syncs here. */
   unlocked: boolean;
+  /** Locked on this device: its notebooks are encrypted here until it is unlocked. */
+  locked: boolean;
+  /** Not synced with the cloud: its notebooks are only on the devices that have them. */
+  local: boolean;
   /** Why it isn't syncing, if it isn't. */
   problem: string | null;
+}
+
+/** Device preferences for vaults. */
+export interface VaultPrefs {
+  /** Lock every vault when the app closes. */
+  lockOnExit: boolean;
 }
 
 export interface VaultsView {
@@ -260,7 +271,16 @@ export const syncApi = {
   vaultUnlock: (vaultId: string, secret: VaultSecret) => call<void>("sync_vault_unlock", { vaultId, ...secret }),
   vaultSetPassphrase: (vaultId: string, secret: VaultSecret, newPassphrase: string) =>
     call<void>("sync_vault_set_passphrase", { vaultId, ...secret, newPassphrase }),
-  vaultDelete: (vaultId: string) => call<void>("sync_vault_delete", { vaultId }),
+  /** Erases the cloud copy; the notebooks stay on every device that has them. */
+  vaultStopSync: (vaultId: string) => call<void>("sync_vault_stop_sync", { vaultId }),
+  /** Puts a vault that isn't synced back into the account. */
+  vaultRestore: (vaultId: string, secret: VaultSecret) => call<void>("sync_vault_restore", { vaultId, ...secret }),
+  /** Removes what this device holds of a vault that isn't synced. */
+  vaultForget: (vaultId: string) => call<void>("sync_vault_forget", { vaultId }),
+  /** False when this device needs the passphrase or recovery code to lock it, once. */
+  vaultLock: (vaultId: string, secret?: VaultSecret) => call<boolean>("sync_vault_lock", { vaultId, ...secret }),
+  vaultPrefs: () => call<VaultPrefs>("vault_prefs"),
+  vaultSetPrefs: (prefs: VaultPrefs) => call<void>("vault_set_prefs", { prefs }),
   removeDevice: (deviceId: string) => call<void>("sync_remove_device", { deviceId }),
   renameDevice: (deviceId: string, label: string) => call<void>("sync_rename_device", { deviceId, label }),
   erasedNotebooks: () => call<ErasedNotebook[]>("sync_erased_notebooks"),
@@ -287,6 +307,11 @@ export async function onSyncStatus(cb: (s: SyncStatus | null) => void): Promise<
 
 export async function onSyncChanged(cb: (c: SyncChanged) => void): Promise<UnlistenFn> {
   return listen<SyncChanged>("sync://changed", (e) => cb(e.payload));
+}
+
+/** A vault was locked or unlocked here, so notebooks left or came back. */
+export async function onVaultsChanged(cb: () => void): Promise<UnlistenFn> {
+  return listen("sync://vaults", () => cb());
 }
 
 /** What the status line says, per phase (actionable, never claims more than is true). */
