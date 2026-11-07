@@ -42,6 +42,11 @@ pub mod capabilities {
     /// Paid plans bought through an app store (`POST /v1/account/store-purchase` and the store
     /// fields of [`crate::account`], protocol 1.5).
     pub const STORE_PURCHASES_V1: &str = "store-purchases.v1";
+    /// The server keeps a copy of the account's root secret, so that signing in is all a new
+    /// device needs ([`crate::vault`], protocol 1.6).
+    pub const ACCOUNT_KEY_V1: &str = "account-key.v1";
+    /// Passphrase-locked vaults ([`crate::vault`], protocol 1.6).
+    pub const VAULTS_V1: &str = "vaults.v1";
 }
 
 /// `GET /v1/meta` response.

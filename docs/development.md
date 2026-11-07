@@ -169,9 +169,8 @@ cargo run -p penroam-sync-testkit --bin penroam-sync-testserver -- --listen 127.
 pnpm tauri dev
 ```
 
-In the app: **Settings → Sync**. Set up the first device (save the recovery
-code), then on a second profile (another `PENROAM_LIBRARY_DIR`) choose pairing and approve its
-code from the first device, or use the recovery code.
+In the app: **Settings → Sync**. Connect a first device with an account name, then a second profile
+(another `PENROAM_LIBRARY_DIR`) with the same name. Vaults are under **Settings → Sync → Vaults**.
 
 Scripted UI runs that sign in must not reach the developer's real browser or keychain: give the
 app its own XDG data, config and runtime directories, and register a stand-in browser as the
@@ -188,10 +187,8 @@ The CLI keeps its keys in a file inside its profile folder (it is a test tool).
 Scripted clients, one profile directory each (separate processes, own keys):
 
 ```bash
-cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a create http://127.0.0.1:8787 acct-dev
-cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-b pair-begin http://127.0.0.1:8787 acct-dev
-cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a pair-approve <code>
-cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-b pair-poll
+cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a connect http://127.0.0.1:8787 acct-dev
+cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-b connect http://127.0.0.1:8787 acct-dev
 cargo run -p penroam-sync --bin penroam-sync-cli -- /tmp/dev-a sync
 ```
 

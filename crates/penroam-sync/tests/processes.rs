@@ -41,7 +41,7 @@ fn strokes(dump: &str) -> usize {
 }
 
 #[test]
-fn two_processes_pair_and_converge_through_the_http_test_server() {
+fn two_processes_connect_and_converge_through_the_http_test_server() {
     let data = tempfile::tempdir().unwrap();
     let server = Arc::new(InMemoryServer::open_persistent(data.path()).unwrap());
     let mut handle = Some(http::spawn("127.0.0.1:0", server).unwrap());
@@ -50,17 +50,12 @@ fn two_processes_pair_and_converge_through_the_http_test_server() {
     let a = dirs.path().join("device-a");
     let b = dirs.path().join("device-b");
 
-    let code = run(&a, &["create", &base, "acct-proc"]);
-    assert!(code.starts_with("PRK1-"));
+    assert_eq!(run(&a, &["connect", &base, "acct-proc"]), "connected");
     let nb = run(&a, &["new-notebook", "Two processes"]);
     run(&a, &["draw", &nb, "20", "100"]);
     run(&a, &["sync"]);
 
-    let pairing = run(&b, &["pair-begin", &base, "acct-proc"]);
-    assert_eq!(run(&b, &["pair-poll"]), "waiting");
-    let sas_a = run(&a, &["pair-approve", &pairing, "device-b"]);
-    let sas_b = run(&b, &["pair-poll"]);
-    assert_eq!(sas_a, sas_b, "comparison codes match");
+    assert_eq!(run(&b, &["connect", &base, "acct-proc"]), "connected");
     run(&b, &["sync"]);
     assert_eq!(strokes(&run(&b, &["dump"])), 20);
 
@@ -110,9 +105,9 @@ fn two_processes_pair_and_converge_through_the_http_test_server() {
     assert_eq!(strokes(&da), 55);
     assert_eq!(run(&b, &["dump"]), da, "recovered from the checkpoint");
 
-    // a third process joins with the recovery code alone
+    // a third process needs only its sign-in
     let c = dirs.path().join("device-c");
-    run(&c, &["recover", &base, "acct-proc", &code]);
+    run(&c, &["connect", &base, "acct-proc"]);
     run(&c, &["sync"]);
     assert_eq!(run(&c, &["dump"]), da);
     drop(h2);

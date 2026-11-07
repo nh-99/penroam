@@ -87,8 +87,9 @@ export const api = {
   libraryStatus: () => call<RecoveryReport>("library_status"),
   listNotebooks: () => call<NotebookSummary[]>("list_notebooks"),
   getNotebook: (id: string) => call<Notebook>("get_notebook", { id }),
-  createNotebook: (title: string, paper: Paper, template: Template, cover?: string) =>
-    call<NotebookAndPage>("create_notebook", { title, paper, template, cover }),
+  createNotebook: (title: string, paper: Paper, template: Template, cover?: string, vault?: string) =>
+    call<NotebookAndPage>("create_notebook", { title, paper, template, cover, vault }),
+  moveNotebookToVault: (id: string, vault: string) => call<Notebook>("move_notebook_to_vault", { id, vault }),
   renameNotebook: (id: string, title: string) => call<Notebook>("rename_notebook", { id, title }),
   setNotebookCover: (id: string, cover: string) => call<Notebook>("set_notebook_cover", { id, cover }),
   deleteNotebook: (id: string) => call<Notebook>("delete_notebook", { id }),

@@ -61,6 +61,17 @@ pub const ACCOUNT_DELETION: &str = "/v1/account/deletion";
 /// [`crate::account::AccountState`]. Capability `store-purchases.v1` (protocol 1.5).
 pub const ACCOUNT_STORE_PURCHASE: &str = "/v1/account/store-purchase";
 
+/// `GET` / `PUT` (create only) the account's stored root secret
+/// ([`crate::vault::AccountKeyDocument`]). Capability `account-key.v1` (protocol 1.6).
+pub const ACCOUNT_KEY: &str = "/v1/account/key";
+/// `GET` list / `POST` create vaults ([`crate::vault`]). Capability `vaults.v1` (protocol 1.6).
+pub const VAULTS: &str = "/v1/vaults";
+/// `PUT` replace a vault's lock / `DELETE` a vault. Capability `vaults.v1`.
+pub const VAULT: &str = "/v1/vaults/{id}";
+/// `POST` get an account session for a vault ([`crate::auth::SessionTokens`]). Capability
+/// `vaults.v1`.
+pub const VAULT_SESSION: &str = "/v1/vaults/{id}/session";
+
 /// `GET` the signed handwriting model catalog ([`crate::models::SignedCatalog`]).
 /// Unauthenticated. 404 `not_found` until one is published. Capability `models.v1` (protocol
 /// 1.4).
@@ -86,7 +97,7 @@ pub const HEADER_HAS_MORE: &str = "Penroam-Has-More";
 pub const HEADER_PROTOCOL: &str = "Penroam-Protocol";
 
 /// Every route, for documentation/compat tests.
-pub const ALL: [&str; 22] = [
+pub const ALL: [&str; 26] = [
     META,
     DEVICES,
     DEVICE,
@@ -109,6 +120,10 @@ pub const ALL: [&str; 22] = [
     ACCOUNT_BILLING_LINK,
     ACCOUNT_DELETION,
     ACCOUNT_STORE_PURCHASE,
+    ACCOUNT_KEY,
+    VAULTS,
+    VAULT,
+    VAULT_SESSION,
 ];
 
 #[cfg(test)]

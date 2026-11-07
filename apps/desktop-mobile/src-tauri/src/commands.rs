@@ -145,8 +145,8 @@ pub fn create_notebook(
     paper: Option<Paper>,
     template: Option<Template>,
     cover: Option<String>,
+    vault: Option<String>,
 ) -> R<NotebookAndPage> {
-    state.sync.nudge();
     let defaults = PageDefaults {
         paper: paper.unwrap_or(Paper::Letter),
         template: template.unwrap_or_default(),
@@ -154,9 +154,50 @@ pub fn create_notebook(
     if !matches!(defaults.paper, Paper::Letter | Paper::A4) {
         return Err(invalid("new notebooks use Letter or A4 pages"));
     }
-    let (notebook, page) = lib!(state).create_notebook(&title, defaults, cover)?;
+    let (notebook, page) = {
+        // one critical section: the sync worker takes this lock before it looks at the library,
+        // so it can't find a vault's notebook unassigned and upload it to the main account
+        let mut lib = lib!(state);
+        let root = lib.root().to_path_buf();
+        if let Some(v) = &vault {
+            crate::sync::require_open_vault(&root, v)?;
+        }
+        let made = lib.create_notebook(&title, defaults, cover)?;
+        if let Some(v) = &vault {
+            crate::sync::assign_to_vault(&root, made.0.id, v)?;
+        }
+        made
+    };
+    state.sync.nudge();
     state.search.notebook_changed(notebook.id);
     Ok(NotebookAndPage { notebook, page })
+}
+
+/// Moves a notebook into a vault: a copy under a new id goes in, and the original is erased from
+/// this device and the account. The copy starts without the original's version history.
+#[tauri::command(async)]
+pub fn move_notebook_to_vault(state: State<'_, AppState>, id: Uuid, vault: String) -> R<Notebook> {
+    let copy = {
+        let mut lib = lib!(state);
+        let root = lib.root().to_path_buf();
+        crate::sync::require_open_vault(&root, &vault)?;
+        let mut archive = std::io::Cursor::new(Vec::new());
+        lib.export_archive(id, &mut archive, "penroam vault move")?;
+        archive.set_position(0);
+        let report =
+            lib.import_archive_with(archive, penroam_storage::ImportOptions { keep_trash: true })?;
+        let copy = report.notebook;
+        if copy.id == id {
+            return Err(invalid("the notebook could not be copied"));
+        }
+        crate::sync::assign_to_vault(&root, copy.id, &vault)?;
+        lib.purge_notebook(id)?;
+        copy
+    };
+    state.sync.nudge();
+    state.search.notebook_changed(id);
+    state.search.notebook_changed(copy.id);
+    Ok(copy)
 }
 
 /// Renames a notebook.

@@ -15,7 +15,7 @@ Each number is independent. None is derived from another.
 
 | Constant | Value | Describes |
 |---|---|---|
-| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 3 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
+| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 6 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
 | `ENVELOPE_VERSION` | 1 | Opaque remote container: envelope header, canonical bytes, framing |
 | `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 2 (1) | Encrypted semantic operation payload |
 | `FILE_FORMAT_VERSION` | 1 | Local `.prp` page file |
@@ -27,7 +27,7 @@ Each number is independent. None is derived from another.
 The local-format numbers are copied into the protocol crate on purpose, because it must not depend on storage. They are advertised in `contract-manifest.json`:
 
 ```json
-{ "protocol": {"major": 1, "minor": 3}, "envelope_version": 1,
+{ "protocol": {"major": 1, "minor": 6}, "envelope_version": 1,
   "op_schema": {"min": 1, "max": 2},
   "formats": {"file_format": 1, "journal_format": 1, "archive_format": 2, "notebook_schema": 2, "page_schema": 1},
   "git_sha": null }
@@ -44,7 +44,7 @@ The local-format numbers are copied into the protocol crate on purpose, because 
   * `MalformedRange`: an advertised range has min > max.
 
   Every `Incompatible` maps to `upgrade_required`. The client stops syncing, keeps its outbox and local data, and shows an actionable state. It never "tries anyway".
-* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b), `models.v1` (1.4, §12c), `store-purchases.v1` (1.5, §12d). Clients ignore unknown capabilities.
+* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b), `models.v1` (1.4, §12c), `store-purchases.v1` (1.5, §12d), `account-key.v1` and `vaults.v1` (1.6, §12e). Clients ignore unknown capabilities.
 * Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind. 1.3 adds `account.v1` (§12b) and the error code `reauth_required`; older clients never call the new routes and read the new code as `unknown`. 1.4 adds `models.v1` (§12c) and nothing else.
 * Clients must call `Limits::validate()` on advertised limits. They refuse values that are 0 or above the hard maxima.
 * Op schema: servers relay payloads whose `op_schema_version` is newer than they know, because the payload is opaque to them. A client that cannot apply a newer schema calls `EnvelopeHeader::check_op_schema_supported()`. On failure it pauses with `upgrade_required` and keeps the ciphertext. It never drops the operation.
@@ -356,7 +356,9 @@ client side is `penroam_sync::auth`.
 | `POST /v1/auth/device-session` | account or device | `DeviceSessionRequest { device_id, challenge, signature }` | `SessionTokens` (device session) |
 
 `SessionTokens { account_id, device_id?, access_token, expires_in_s, refresh_token }`. Tokens are
-opaque; clients store them in the keychain and never log them.
+opaque; clients store them in the keychain and never log them. Once a client has a device session it
+ends its account session: only an account session can fetch the account key (§12e), and a removed
+device shouldn't be left holding one.
 
 1. **Provider sign-in (client).** Fetch `{issuer}/.well-known/openid-configuration`; its
    `issuer` must equal `AuthConfig.issuer`. Run the authorization-code flow with PKCE `S256`
@@ -549,6 +551,68 @@ know the purchase or it isn't active. A retryable error means the store couldn't
 
 Restoring repeats step 2 with the store's current purchases. It's idempotent.
 
+## 12e. Stored account keys and vaults (`account-key.v1`, `vaults.v1`, protocol 1.6)
+
+**Stored account key.** With `account-key.v1`, signing in is all that adding a device takes. Types
+are in `penroam_sync_protocol::vault`.
+
+| Route | Token | Request | Response |
+|---|---|---|---|
+| `GET /v1/account/key` | account | — | `AccountKeyDocument { key }`, or 404 `not_found` |
+| `PUT /v1/account/key` | account | `AccountKeyDocument { key }` | 204; 409 `conflict` if one is stored |
+
+`key` is the base64url root secret of §14. To connect, a client fetches it. If there is none and the
+key log is empty, it generates a root secret, stores it, and only then appends genesis, so a crash in
+between leaves a key the next attempt reuses and two first devices settle on the one stored first.
+If the key log isn't empty but no key is stored, only the recovery code can add a device, and doing so
+stores the key. The client then enrolls itself with `addDevice`, signed by the account key.
+
+The server can therefore read an account's ordinary notebooks. It should seal the key at rest, and
+must refuse these routes for a device session, which is what a stolen device holds, and for a vault
+session.
+
+**Vaults.** A vault holds notebooks whose keys the server never receives. On the wire it's a hidden
+second account of the same user: its own operation log, key log, blobs and checkpoints, under all the
+rules of §13 to §15a. Only the account differs, so nothing in the envelope changes.
+
+| Route | Token | Request | Response |
+|---|---|---|---|
+| `GET /v1/vaults` | account or device | — | `VaultListResponse { vaults }` |
+| `POST /v1/vaults` | account or device | `CreateVaultRequest { lock, name }` | `VaultRecord` |
+| `PUT /v1/vaults/{id}` | account or device | `UpdateVaultLockRequest { lock }` | 204 |
+| `DELETE /v1/vaults/{id}` | account or device | — | 204 |
+| `POST /v1/vaults/{id}/session` | account or device | `{}` | `SessionTokens` (account session on the vault) |
+
+These tokens are the owner's; a session scoped to a vault gets 403 `forbidden`, as it does on
+`/v1/account/*`. A vault of someone else is 404 `not_found`. `{id}` is `VaultRecord.vault_id`, which is
+also the vault's account id.
+
+* **Lock.** `VaultLock { kdf, memory_kib, iterations, parallelism, salt, wrapped_root }` wraps the
+  vault's 32-byte root secret: the passphrase, NFC-normalized, goes through Argon2id (version 19, 32
+  bytes out; new locks use 64 MiB, 3 iterations, 1 lane and a 16-byte salt), and the result seals the
+  secret as in §13 with associated data `"penroam/vault-lock/v1"`. Clients refuse any `kdf` but
+  `argon2id` and the parameters `VaultLock::validate()` refuses, before doing any work: the lock comes
+  from the server. Passphrases have at least 12 characters.
+* **Name.** `name` is opaque to the server: `seal(HKDF(root, info = "penroam/vault-name/v1"))` of the
+  UTF-8 name, associated data `"penroam/vault-name/v1"`.
+* **Opening.** A client opens the lock, or takes the root from the vault's recovery code (the same
+  `PRK1-` format), asks for a vault session, then verifies the vault's **whole key log** against the
+  root's account key and appends `addDevice`. A swapped lock fails there. If the key log is empty, the
+  creating device never finished, and this device writes genesis. A client then gets a device session
+  on the vault as in §12a.
+* **Device ids.** A device uses its main account device id in each vault. When a device is removed
+  from the owning account, the server must revoke the same id in every vault of that account, because
+  the remover may not have them unlocked. A client that has one unlocked also removes the device from
+  its key log, which rotates that vault's key.
+* **Storage** counts towards the owner's allowance, and `read_only_reason` applies to vaults too.
+  Erasing an account erases its vaults.
+* **Which notebooks.** A client keeps its own record of which notebooks belong to which vault, and
+  must record a notebook there before the main account's engine can see it, since that engine uploads
+  every notebook it isn't told to leave alone. A notebook moves into a vault as a copy under a new id,
+  and the original is purged; the purged original's operations remain in the main account.
+
+The development test server lists both capabilities in its extended mode. Fixtures: none yet.
+
 ## 13. Payloads, encryption and signatures (client rules)
 
 These rules are implemented in `penroam-sync` (`crypto.rs`, `engine.rs`). **Not independently
@@ -603,20 +667,19 @@ active member or the account key, and carries the device id and a label of at mo
 that is not blank. Older clients do not know this kind and reject the log, so they stop syncing
 until updated; no local data is affected.
 
-* The **recovery code** encodes a 32-byte root secret (`PRK1-` + Crockford base32 with a
-  2-byte checksum). It derives the account signing key and the recovery X25519 key. Devices do
-  not store it.
+* The **root secret** (32 bytes) derives the account signing key and the recovery X25519 key. As
+  a **recovery code** it's `PRK1-` + Crockford base32 with a 2-byte checksum. Devices do not store
+  it. An account's is on the server (§12e); a vault's reaches the server only inside its lock.
 * Key wrapping: X25519 ephemeral-static, HKDF-SHA256 (salt = ephemeral ‖ recipient public
   keys, info = `"penroam/wrap/v1" ‖ context`), XChaCha20-Poly1305 with the context as
   associated data; context = `"penroam/epoch-grant/v1/<epoch>/<recipient>"`.
 * Clients verify the whole chain, pin `(account key, length, head hash)` and reject a log that
   rewrites a verified prefix. The server can withhold new entries but cannot inject a device
   or change history.
-* **Pairing.** The new device registers its keys and shows a pairing code: the first 8 hex
-  digits of its id and its 64-bit key fingerprint. A trusted device finds the registration
-  whose keys match that fingerprint, appends `addDevice`, and both devices show a 6-digit
-  comparison code derived from the account key and the new device's fingerprint. Matching
-  codes rule out key substitution in both directions.
+* **Adding a device.** A device that holds the root secret registers its keys and appends
+  `addDevice`, signed by the account key, with every epoch key wrapped to itself. It gets the root
+  from the server (an account) or from a passphrase lock or recovery code (a vault), and verifies the
+  whole log against that root first.
 
 ## 15. Blobs
 

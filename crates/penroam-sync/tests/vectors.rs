@@ -72,7 +72,6 @@ fn compute() -> serde_json::Value {
         "device_signing_public_b64": base64url::encode(&dev.sign_pk()),
         "device_dh_public_b64": base64url::encode(&dev.dh_pk()),
         "device_fingerprint": dev.fingerprint(),
-        "comparison_code": crypto::short_auth_string(&root.account_signing_key().verifying_key().to_bytes(), &dev.fingerprint()),
         "payload_hex": hex::encode(&payload),
         "header": h,
         "aad_hex": hex::encode(&canonical_aad_bytes(&h)),

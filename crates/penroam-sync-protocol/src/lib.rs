@@ -16,6 +16,7 @@
 //!   ([`dto`], [`routes`]),
 //! * sign-in and session DTOs for servers with real accounts ([`auth`]),
 //! * account plan, storage allowance and billing-link DTOs ([`account`]),
+//! * the stored account key and passphrase-locked vaults ([`vault`]),
 //! * the signed handwriting model catalog ([`models`]),
 //! * keeping credentials out of logs: HTTP-library log targets to cap and a
 //!   line scrubber ([`redact`]),
@@ -45,6 +46,7 @@ pub mod limits;
 pub mod models;
 pub mod redact;
 pub mod routes;
+pub mod vault;
 pub mod version;
 
 pub use account::{
@@ -68,4 +70,8 @@ pub use error::{ErrorBody, ErrorCode, RetryPolicy};
 pub use framing::{FrameError, FrameItem};
 pub use ids::{AccountId, BlobId, DeviceId, IdError, NotebookRoutingId, OpId};
 pub use limits::Limits;
+pub use vault::{
+    AccountKeyDocument, CreateVaultRequest, UpdateVaultLockRequest, VaultListResponse, VaultLock,
+    VaultRecord,
+};
 pub use version::{negotiate, Incompatible, ProtocolRange, ProtocolVersion};

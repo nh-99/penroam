@@ -7,6 +7,7 @@
 //! sync/quarantine/<op>.json envelopes that failed authentication (never applied)
 //! sync/blobs/<sha256>    downloaded assets waiting to be installed
 //! sync/secrets/          file secret store (fallback when no OS keychain is used)
+//! sync/vaults/<id>/      the same layout again for each vault unlocked on this device
 //! ```
 //!
 //! The operation log is append-only: `u32 len ‖ u32 crc32 ‖ payload` records
@@ -462,9 +463,9 @@ impl SyncStore {
         Self::dir_for(library_root).join("state.json").exists()
     }
 
-    /// Creates the sync folder with an initial state (setup).
-    pub fn create(library_root: &Path, state: SyncState) -> io::Result<Self> {
-        let dir = Self::dir_for(library_root);
+    /// Creates a sync folder at `dir` with an initial state (setup).
+    pub fn create(dir: &Path, state: SyncState) -> io::Result<Self> {
+        let dir = dir.to_path_buf();
         for sub in ["pending", "quarantine", "blobs", "secrets"] {
             fs::create_dir_all(dir.join(sub))?;
         }
@@ -477,9 +478,14 @@ impl SyncStore {
         Ok(Self { dir, state, oplog })
     }
 
-    /// Opens an existing setup; refuses state written by a newer version.
+    /// Opens the account's sync folder in a library.
     pub fn open(library_root: &Path) -> io::Result<Self> {
-        let dir = Self::dir_for(library_root);
+        Self::open_at(&Self::dir_for(library_root))
+    }
+
+    /// Opens the sync folder at `dir`; refuses state written by a newer version.
+    pub fn open_at(dir: &Path) -> io::Result<Self> {
+        let dir = dir.to_path_buf();
         let raw = fs::read(dir.join("state.json"))?;
         let state: SyncState = serde_json::from_slice(&raw)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;

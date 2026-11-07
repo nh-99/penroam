@@ -19,7 +19,12 @@ notes. If you find one, please report it: see [support](support.md).
 
 * Encryption hasn't been independently reviewed. See the
   [threat model](security/threat-model.md).
-* Erased content stays in your encrypted account until the account is deleted, even after it's gone
+* A notebook moved into a vault leaves its earlier versions in your account's history until the
+  account is deleted, and that history isn't private. Create sensitive notebooks in the vault.
+* Vault notebooks are stored on the device like any others, and nothing asks for the passphrase after
+  the first time. Backups and exports of them aren't encrypted, and a notebook restored from a backup
+  on a new device is an ordinary notebook again, which sync uploads as one.
+* Erased content stays in your account until the account is deleted, even after it's gone
   from every device. It is never included in exports or backups.
 * Edits made before a notebook's first sync appear in the account's history as a single version.
 * A removed device keeps what it already downloaded. An edit it uploaded just before removal, which

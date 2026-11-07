@@ -132,8 +132,8 @@ fn run(seed: u64) {
         .create_notebook("start", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let b = Client::paired(&s, &acct, "b", &mut a);
-    let c = Client::paired(&s, &acct, "c", &mut a);
+    let b = Client::joined(&s, &acct, "b");
+    let c = Client::joined(&s, &acct, "c");
     let mut clients = vec![a, b, c];
     for c in clients.iter_mut() {
         c.sync().unwrap();

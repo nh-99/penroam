@@ -14,7 +14,7 @@ use crate::error::ErrorCode;
 pub const PROTOCOL_MAJOR: u16 = 1;
 /// Sync protocol minor version. Minors within a major are additive; new
 /// behaviour is gated by capabilities, never assumed from the minor number.
-pub const PROTOCOL_MINOR: u16 = 5;
+pub const PROTOCOL_MINOR: u16 = 6;
 /// Version of the opaque remote container (the envelope header + framing).
 pub const ENVELOPE_VERSION: u16 = 1;
 
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn server_requires_newer_minor() {
-        let err = negotiate(ProtocolRange::CLIENT, &meta((1, 6), (1, 7))).unwrap_err();
+        let err = negotiate(ProtocolRange::CLIENT, &meta((1, 7), (1, 8))).unwrap_err();
         assert!(matches!(err, Incompatible::ClientTooOld { .. }));
     }
 

@@ -1,14 +1,11 @@
 // Sync UI state. Nothing here runs unless the backend
-// reports sync as available; nothing polls unless a device is waiting for
-// pairing approval.
+// reports sync as available.
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { hasHost } from "../platform/ipc";
 import { useSettings } from "./settings";
-import { canBuy, cloudNotice, describeRestore, describeStorePurchase, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ErasedNotebook, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus } from "../platform/sync";
-
-export type SetupStep = "none" | "recovery" | "pairing" | "compare";
+import { canBuy, cloudNotice, describeRestore, describeStorePurchase, onSyncChanged, onSyncStatus, syncApi, type AccountView, type ErasedNotebook, type ServerInfo, type SyncChanged, type SyncDevice, type SyncStatus, type VaultSecret, type VaultsView } from "../platform/sync";
 
 /** Penroam Cloud; the backend's value replaces this once known. */
 export const PENROAM_CLOUD_URL = "https://sync.penroam.ink";
@@ -30,10 +27,13 @@ export const useSync = defineStore("sync", () => {
   const cloudNotebooks = computed(() => erased.value.filter((n) => !n.inTrash));
   /** Deleted, with no copy on this device: the trash can still restore them. */
   const cloudTrash = computed(() => erased.value.filter((n) => n.inTrash));
-  const step = ref<SetupStep>("none");
-  const recoveryCode = ref<string | null>(null);
-  const pairingCode = ref<string | null>(null);
-  const comparison = ref<string | null>(null);
+  /** The account's keys aren't on the server: its recovery code is needed, once. */
+  const needsRecoveryCode = ref(false);
+  const vaults = ref<VaultsView>({ supported: false, vaults: [], notebooks: {} });
+  /** A new vault's recovery code, until the user confirms saving it. Shown only this once. */
+  const vaultRecoveryCode = ref<string | null>(null);
+  /** Vaults that notebooks can go into on this device. */
+  const openVaults = computed(() => vaults.value.vaults.filter((v) => v.unlocked));
   const busy = ref(false);
   /** A browser sign-in is in progress. */
   const signingIn = ref(false);
@@ -57,10 +57,7 @@ export const useSync = defineStore("sync", () => {
   });
   const changeListeners = new Set<(c: SyncChanged) => void>();
   let unlisten: UnlistenFn[] = [];
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
   let started = false;
-
-  const awaiting = computed(() => status.value?.phase === "awaitingApproval");
 
   async function init() {
     if (started || !hasHost()) return;
@@ -87,18 +84,18 @@ export const useSync = defineStore("sync", () => {
           devices.value = [];
           erased.value = [];
           downloading.value = [];
+          vaults.value = { supported: false, vaults: [], notebooks: {} };
         } else if (s.phase !== "syncing") void refreshCloudNotebooks();
-        updatePolling();
       }),
     );
     unlisten.push(await onSyncChanged((c) => changeListeners.forEach((l) => l(c))));
     // coming back from the browser (checkout, billing portal): show the new plan
     window.addEventListener("focus", onFocus);
-    updatePolling();
     // plan and storage for the banner (one request; servers without account.v1 answer null)
     if (configured.value) void reconcileStore();
     if (configured.value) void refreshAccount();
     if (configured.value) void refreshCloudNotebooks();
+    if (configured.value) void refreshVaults();
   }
 
   function onFocus() {
@@ -206,15 +203,6 @@ export const useSync = defineStore("sync", () => {
     return () => changeListeners.delete(cb);
   }
 
-  function updatePolling() {
-    const want = configured.value && step.value === "pairing";
-    if (want && !pollTimer) pollTimer = setInterval(() => void pollPairing(), 3000);
-    if (!want && pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
-  }
-
   async function run<T>(f: () => Promise<T>): Promise<T | null> {
     busy.value = true;
     error.value = null;
@@ -235,11 +223,17 @@ export const useSync = defineStore("sync", () => {
       configured.value = info.configured;
       status.value = info.status;
     }
-    if (configured.value && step.value === "none") {
+    if (configured.value) {
       devices.value = (await syncApi.devices().catch(() => null)) ?? devices.value;
       await refreshCloudNotebooks();
       await refreshAccount();
+      await refreshVaults();
     }
+  }
+
+  async function refreshVaults() {
+    const v = await syncApi.vaults().catch(() => null);
+    if (v) vaults.value = v;
   }
 
   /** Checks a server address (setup form step 1). */
@@ -261,6 +255,8 @@ export const useSync = defineStore("sync", () => {
       const account = await run(() => syncApi.signIn(url));
       if (account && server.value?.url === url) server.value = { ...server.value, signedInAccount: account };
       if (account && configured.value) await refresh();
+      // signing in is all a device needs
+      else if (account) await connect(url, "");
       return account;
     } finally {
       signingIn.value = false;
@@ -272,73 +268,39 @@ export const useSync = defineStore("sync", () => {
     if (ok !== null && server.value?.url === url) server.value = { ...server.value, signedInAccount: null };
   }
 
-  async function setupFirst(serverUrl: string, account: string, label: string) {
-    const r = await run(() => syncApi.setupFirst(serverUrl, account, label));
-    if (r?.recoveryCode) {
-      configured.value = true;
-      recoveryCode.value = r.recoveryCode;
-      step.value = "recovery";
-    }
+  /** Connects this device to the signed-in account. Pass a code when `needsRecoveryCode` is set. */
+  async function connect(serverUrl: string, account: string, recoveryCode?: string) {
+    const r = await run(() => syncApi.connect(serverUrl, account, recoveryCode));
+    if (!r) return;
+    needsRecoveryCode.value = r.needsRecoveryCode;
+    if (r.needsRecoveryCode) return;
+    configured.value = true;
+    await refresh();
   }
 
-  async function setupPair(serverUrl: string, account: string, label: string) {
-    const r = await run(() => syncApi.setupPair(serverUrl, account, label));
-    if (r?.pairingCode) {
-      configured.value = true;
-      pairingCode.value = r.pairingCode;
-      step.value = "pairing";
-      updatePolling();
-    }
+  /** Runs a vault step, and shows what changed. True when it worked. */
+  async function vaultStep(f: () => Promise<unknown>) {
+    const ok = (await run(async () => {
+      await f();
+      return true;
+    })) === true;
+    if (ok) await refreshVaults();
+    return ok;
   }
 
-  async function setupRecovery(serverUrl: string, account: string, label: string, code: string) {
-    const ok = await run(() => syncApi.setupRecovery(serverUrl, account, label, code));
-    if (ok !== null) {
-      configured.value = true;
-      step.value = "none";
-      await refresh();
-    }
+  const createVault = (name: string, passphrase: string) =>
+    vaultStep(async () => {
+      vaultRecoveryCode.value = await syncApi.vaultCreate(name, passphrase);
+    });
+  const unlockVault = (id: string, secret: VaultSecret) => vaultStep(() => syncApi.vaultUnlock(id, secret));
+  const setVaultPassphrase = (id: string, secret: VaultSecret, next: string) => vaultStep(() => syncApi.vaultSetPassphrase(id, secret, next));
+  const deleteVault = (id: string) => vaultStep(() => syncApi.vaultDelete(id));
+
+  /** The user saved the recovery code: it's gone from the app for good. */
+  function finishVaultRecovery() {
+    vaultRecoveryCode.value = null;
   }
 
-  async function pollPairing() {
-    if (step.value !== "pairing") return;
-    try {
-      const sas = await syncApi.pollPairing();
-      if (sas) {
-        comparison.value = sas;
-        step.value = "compare";
-        updatePolling();
-      }
-    } catch (e) {
-      error.value = (e as Error).message;
-    }
-  }
-
-  /** The user compared the codes on both screens. */
-  async function confirmComparison(match: boolean) {
-    if (match) {
-      step.value = "none";
-      comparison.value = null;
-      pairingCode.value = null;
-      await refresh();
-      return;
-    }
-    await run(() => syncApi.disconnect());
-    configured.value = false;
-    step.value = "none";
-    comparison.value = null;
-    pairingCode.value = null;
-    error.value =
-      "The codes did not match, so this device was disconnected without receiving any keys. Someone may be interfering with the connection; try again on a network you trust.";
-  }
-
-  function finishRecovery() {
-    recoveryCode.value = null;
-    step.value = "none";
-    void refresh();
-  }
-
-  const approve = (code: string, label: string) => run(() => syncApi.approveDevice(code, label));
   const remove = async (id: string) => {
     await run(() => syncApi.removeDevice(id));
     await refresh();
@@ -374,6 +336,8 @@ export const useSync = defineStore("sync", () => {
       server.value = null;
       account.value = null;
       upgradeOpen.value = false;
+      needsRecoveryCode.value = false;
+      vaults.value = { supported: false, vaults: [], notebooks: {} };
     }
   };
   const diagnostics = () => run(() => syncApi.diagnostics());
@@ -382,8 +346,6 @@ export const useSync = defineStore("sync", () => {
     unlisten.forEach((u) => u());
     unlisten = [];
     window.removeEventListener("focus", onFocus);
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = null;
     started = false;
   }
 
@@ -399,10 +361,10 @@ export const useSync = defineStore("sync", () => {
     downloading,
     cloudNotebooks,
     cloudTrash,
-    step,
-    recoveryCode,
-    pairingCode,
-    comparison,
+    needsRecoveryCode,
+    vaults,
+    openVaults,
+    vaultRecoveryCode,
     busy,
     signingIn,
     server,
@@ -421,7 +383,6 @@ export const useSync = defineStore("sync", () => {
     openBilling,
     requestDeletion,
     cancelDeletion,
-    awaiting,
     init,
     refresh,
     onChanged,
@@ -429,13 +390,13 @@ export const useSync = defineStore("sync", () => {
     changeServer,
     signIn,
     signOut,
-    setupFirst,
-    setupPair,
-    setupRecovery,
-    pollPairing,
-    confirmComparison,
-    finishRecovery,
-    approve,
+    connect,
+    refreshVaults,
+    createVault,
+    unlockVault,
+    setVaultPassphrase,
+    deleteVault,
+    finishVaultRecovery,
     remove,
     rename,
     download,

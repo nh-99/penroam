@@ -6,9 +6,12 @@ import TemplatePicker from "./TemplatePicker.vue";
 import type { Paper } from "../generated/Paper";
 import type { TemplateKind } from "../generated/TemplateKind";
 import { useSettings } from "../stores/settings";
+import { useSync } from "../stores/sync";
 
-const emit = defineEmits<{ close: []; create: [title: string, paper: Paper, template: TemplateKind] }>();
+const emit = defineEmits<{ close: []; create: [title: string, paper: Paper, template: TemplateKind, vault?: string] }>();
 const settings = useSettings();
+const sync = useSync();
+const vault = ref("");
 const title = ref("");
 const paper = ref<Paper>(settings.s.paper === "a4" ? "a4" : "letter");
 const template = ref<TemplateKind>(settings.s.template);
@@ -17,7 +20,7 @@ function submit() {
   const t = title.value.trim() || "Untitled notebook";
   settings.s.paper = paper.value;
   settings.s.template = template.value;
-  emit("create", t, paper.value, template.value);
+  emit("create", t, paper.value, template.value, vault.value || undefined);
 }
 </script>
 
@@ -42,6 +45,13 @@ function submit() {
         <legend class="mb-1.5 text-sm font-medium">Paper</legend>
         <TemplatePicker v-model="template" />
       </fieldset>
+      <label v-if="sync.openVaults.length" class="block">
+        <span class="mb-1.5 block text-sm font-medium">Keep in</span>
+        <select v-model="vault" class="h-11 w-full rounded-xl border border-line bg-surface px-3 text-base outline-none focus:border-brand epaper:border-2">
+          <option value="">My notebooks</option>
+          <option v-for="v in sync.openVaults" :key="v.vaultId" :value="v.vaultId">{{ v.name ?? "Vault" }}</option>
+        </select>
+      </label>
       <div class="flex justify-end gap-2 pt-1">
         <Btn @click="emit('close')">Cancel</Btn>
         <Btn variant="primary" type="submit">Create notebook</Btn>

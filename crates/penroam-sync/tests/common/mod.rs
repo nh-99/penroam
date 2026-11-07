@@ -44,6 +44,8 @@ fn transport(
 fn setup(root: &Path, account: &AccountId, label: &str) -> Setup {
     Setup {
         library_root: root.to_path_buf(),
+        scope: penroam_sync::vault::Scope::Account,
+        device_id: None,
         server_url: "in-process".into(),
         account_id: account.as_str().into(),
         label: label.into(),
@@ -70,6 +72,16 @@ impl Client {
             secrets(&root),
         )
         .unwrap();
+        // what `SyncEngine::connect` does on a first device, except that the code stays available
+        let secret = penroam_sync::crypto::RootSecret::parse_recovery_code(&code).unwrap();
+        server
+            .account_key_put(
+                account,
+                &penroam_sync_protocol::AccountKeyDocument {
+                    key: penroam_sync_protocol::base64url::encode(&secret.to_bytes()),
+                },
+            )
+            .unwrap();
         (
             Client {
                 lib,
@@ -83,54 +95,28 @@ impl Client {
         )
     }
 
-    /// New device approved by `trusted` through the pairing flow.
-    pub fn paired(
-        server: &Arc<InMemoryServer>,
-        account: &AccountId,
-        label: &str,
-        trusted: &mut Client,
-    ) -> Client {
+    /// New device: signing in is all it takes.
+    pub fn joined(server: &Arc<InMemoryServer>, account: &AccountId, label: &str) -> Client {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
-        let lib = Library::open(&root).unwrap();
-        let (mut engine, code) = Engine::begin_pairing(
-            setup(&root, account, label),
-            transport(server, account, "pending"),
-            secrets(&root),
-        )
-        .unwrap();
-        assert_eq!(engine.poll_enrollment().unwrap(), None, "not approved yet");
-        let sas_trusted = trusted.engine.approve_device(&code, label).unwrap();
-        let sas_new = engine.poll_enrollment().unwrap().expect("approved");
-        assert_eq!(sas_trusted, sas_new, "both screens show the same code");
-        Client {
-            lib,
-            engine,
-            root,
-            server: server.clone(),
-            account: account.clone(),
-            _dir: Some(dir),
-        }
+        Self::join_existing(server, account, label, root, Some(dir))
     }
 
-    /// Pairs an existing library folder (for example after a disconnect).
-    pub fn pair_existing(
+    /// Connects an existing library folder (for example after a disconnect).
+    pub fn join_existing(
         server: &Arc<InMemoryServer>,
         account: &AccountId,
         label: &str,
         root: PathBuf,
         dir: Option<tempfile::TempDir>,
-        trusted: &mut Client,
     ) -> Client {
         let lib = Library::open(&root).unwrap();
-        let (mut engine, code) = Engine::begin_pairing(
+        let engine = Engine::connect(
             setup(&root, account, label),
             transport(server, account, "pending"),
             secrets(&root),
         )
         .unwrap();
-        trusted.engine.approve_device(&code, label).unwrap();
-        engine.poll_enrollment().unwrap().expect("approved");
         Client {
             lib,
             engine,

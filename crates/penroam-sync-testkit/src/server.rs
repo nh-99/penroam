@@ -20,8 +20,9 @@ use penroam_sync_protocol::{
     DeviceRegistrationResponse, EnvelopeHeader, ErrorBody, ErrorCode, KeyLogAppendRequest,
     KeyLogAppendResponse, KeyLogEntry, KeyLogPage, Limits, OpAck, OpId, PlanState, ProtocolRange,
     PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse, ServerMeta, StorageState,
-    UsageResponse,
+    UpdateVaultLockRequest, UsageResponse, VaultListResponse, VaultRecord,
 };
+use penroam_sync_protocol::{AccountKeyDocument, CreateVaultRequest};
 
 use crate::cursor::{self, CursorError, CursorPayload, STREAM_OPS};
 
@@ -121,6 +122,15 @@ struct Account {
     /// Latest checkpoint record (content is an opaque blob).
     #[serde(default)]
     checkpoint: Option<CheckpointRecord>,
+    /// Stored root secret (`account-key.v1`). Vault accounts never have one.
+    #[serde(default)]
+    root_key: Option<String>,
+    /// The account's vaults (`vaults.v1`).
+    #[serde(default)]
+    vaults: Vec<VaultRecord>,
+    /// Set on a vault's own account: the account that owns the vault.
+    #[serde(default)]
+    vault_of: Option<AccountId>,
 }
 
 impl Account {
@@ -475,6 +485,8 @@ impl InMemoryServer {
                     c.push(capabilities::BLOBS_V1.into());
                     c.push(capabilities::CHECKPOINTS_V1.into());
                     c.push(capabilities::ACCOUNT_V1.into());
+                    c.push(capabilities::ACCOUNT_KEY_V1.into());
+                    c.push(capabilities::VAULTS_V1.into());
                 }
                 c
             },
@@ -1045,6 +1057,149 @@ impl InMemoryServer {
             acct.keylog.push(req.data.clone());
             Ok(KeyLogAppendResponse { index: req.index })
         })
+    }
+
+    /// `GET /v1/account/key`. A vault account is refused: its root secret must never be here.
+    pub fn account_key_get(&self, account: &AccountId) -> Result<AccountKeyDocument, RequestError> {
+        self.request(account, None, false, |acct, err| {
+            if acct.vault_of.is_some() {
+                return Err(err(
+                    ErrorCode::Forbidden,
+                    "vaults have no stored key".into(),
+                ));
+            }
+            acct.root_key
+                .clone()
+                .map(|key| AccountKeyDocument { key })
+                .ok_or_else(|| err(ErrorCode::NotFound, "no stored key".into()))
+        })
+    }
+
+    /// `PUT /v1/account/key`: stores the key once. A second store answers `conflict`, so two
+    /// first devices settle on whichever got here first.
+    pub fn account_key_put(
+        &self,
+        account: &AccountId,
+        doc: &AccountKeyDocument,
+    ) -> Result<(), RequestError> {
+        self.request(account, None, true, |acct, err| {
+            if acct.vault_of.is_some() {
+                return Err(err(
+                    ErrorCode::Forbidden,
+                    "vaults have no stored key".into(),
+                ));
+            }
+            if acct.root_key.is_some() {
+                return Err(err(ErrorCode::Conflict, "a key is already stored".into()));
+            }
+            acct.root_key = Some(doc.key.clone());
+            Ok(())
+        })
+    }
+
+    /// `GET /v1/vaults`.
+    pub fn vault_list(&self, account: &AccountId) -> Result<VaultListResponse, RequestError> {
+        self.request(account, None, false, |acct, err| {
+            if acct.vault_of.is_some() {
+                return Err(err(ErrorCode::Forbidden, "not from inside a vault".into()));
+            }
+            Ok(VaultListResponse {
+                vaults: acct.vaults.clone(),
+            })
+        })
+    }
+
+    /// `POST /v1/vaults`: creates a vault and its hidden account.
+    pub fn vault_create(
+        &self,
+        account: &AccountId,
+        req: &CreateVaultRequest,
+    ) -> Result<VaultRecord, RequestError> {
+        let api = |code, m: &str| RequestError::Api(ErrorBody::new(code, m, "test"));
+        let mut s = self.lock();
+        let owner = s
+            .accounts
+            .get(account)
+            .ok_or_else(|| api(ErrorCode::NotFound, "unknown account"))?;
+        if owner.vault_of.is_some() {
+            return Err(api(ErrorCode::Forbidden, "not from inside a vault"));
+        }
+        let quota_bytes = owner.quota_bytes;
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let vault_id: AccountId = format!("v-{id}")
+            .parse()
+            .expect("hex digits with a prefix are a valid id");
+        let record = VaultRecord {
+            vault_id: vault_id.clone(),
+            lock: req.lock.clone(),
+            name: req.name.clone(),
+            created_at_unix_s: 0,
+        };
+        s.accounts.insert(
+            vault_id,
+            Account {
+                vault_of: Some(account.clone()),
+                quota_bytes,
+                ..Account::default()
+            },
+        );
+        s.accounts
+            .get_mut(account)
+            .expect("checked above")
+            .vaults
+            .push(record.clone());
+        self.save_admin(&s);
+        Ok(record)
+    }
+
+    /// `PUT /v1/vaults/{id}`: replaces a vault's lock.
+    pub fn vault_set_lock(
+        &self,
+        account: &AccountId,
+        vault: &AccountId,
+        req: &UpdateVaultLockRequest,
+    ) -> Result<(), RequestError> {
+        self.request(account, None, true, |acct, err| {
+            let v = acct
+                .vaults
+                .iter_mut()
+                .find(|v| &v.vault_id == vault)
+                .ok_or_else(|| err(ErrorCode::NotFound, "unknown vault".into()))?;
+            v.lock = req.lock.clone();
+            Ok(())
+        })
+    }
+
+    /// `DELETE /v1/vaults/{id}`: erases a vault's cloud copy.
+    pub fn vault_delete(&self, account: &AccountId, vault: &AccountId) -> Result<(), RequestError> {
+        let mut s = self.lock();
+        let owner = s.accounts.get_mut(account).ok_or_else(|| {
+            RequestError::Api(ErrorBody::new(
+                ErrorCode::NotFound,
+                "unknown account",
+                "test",
+            ))
+        })?;
+        let before = owner.vaults.len();
+        owner.vaults.retain(|v| &v.vault_id != vault);
+        if owner.vaults.len() == before {
+            return Err(RequestError::Api(ErrorBody::new(
+                ErrorCode::NotFound,
+                "unknown vault",
+                "test",
+            )));
+        }
+        s.accounts.remove(vault);
+        self.save_admin(&s);
+        Ok(())
+    }
+
+    /// Checks that `vault` belongs to `account`, for `POST /v1/vaults/{id}/session`.
+    pub fn vault_owned_by(&self, account: &AccountId, vault: &AccountId) -> bool {
+        self.lock()
+            .accounts
+            .get(account)
+            .is_some_and(|a| a.vaults.iter().any(|v| &v.vault_id == vault))
     }
 
     /// `PUT /v1/blobs/{id}`: store an immutable encrypted blob.

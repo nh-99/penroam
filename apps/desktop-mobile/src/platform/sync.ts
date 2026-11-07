@@ -6,7 +6,6 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { CommandError, hasHost } from "./ipc";
 
 export type SyncPhase =
-  | "awaitingApproval"
   | "idle"
   | "syncing"
   | "offline"
@@ -116,10 +115,31 @@ export interface ServerInfo {
   signedInAccount: string | null;
 }
 
-export interface SetupResult {
-  recoveryCode: string | null;
-  pairingCode: string | null;
+export interface ConnectResult {
+  /** The account's keys aren't on the server: connect again with its recovery code, once. */
+  needsRecoveryCode: boolean;
 }
+
+/** One vault of the account. */
+export interface SyncVault {
+  vaultId: string;
+  /** Unknown until the vault was unlocked on this device. */
+  name: string | null;
+  unlocked: boolean;
+  /** Why it isn't syncing, if it isn't. */
+  problem: string | null;
+}
+
+export interface VaultsView {
+  /** This server has vaults. */
+  supported: boolean;
+  vaults: SyncVault[];
+  /** Notebook id to vault id, for every notebook kept out of the main account. */
+  notebooks: Record<string, string>;
+}
+
+/** Shortest passphrase a vault accepts (`MIN_PASSPHRASE_CHARS` in the sync crate). */
+export const MIN_PASSPHRASE_CHARS = 12;
 
 /** A paid plan offered by the server (desktop builds only; mobile builds never get offers). */
 export interface PlanOffer {
@@ -222,6 +242,9 @@ export function describeRestore(r: StoreSettled): string {
   return r.applied > 0 ? "Your purchases are restored." : "There are no purchases to restore.";
 }
 
+/** What opens a vault: one or the other. */
+export type VaultSecret = { passphrase: string } | { recoveryCode: string };
+
 export const syncApi = {
   info: () => call<SyncInfo>("sync_info"),
   serverInfo: (serverUrl: string) => call<ServerInfo>("sync_server_info", { serverUrl }),
@@ -231,12 +254,13 @@ export const syncApi = {
   /** Opens the system browser; resolves with the account id after the user signed in. */
   signIn: (serverUrl: string) => call<string>("sync_sign_in", { serverUrl }),
   signOut: (serverUrl: string) => call<void>("sync_sign_out", { serverUrl }),
-  setupFirst: (serverUrl: string, account: string, label: string) => call<SetupResult>("sync_setup_first", { serverUrl, account, label }),
-  setupPair: (serverUrl: string, account: string, label: string) => call<SetupResult>("sync_setup_pair", { serverUrl, account, label }),
-  setupRecovery: (serverUrl: string, account: string, label: string, code: string) =>
-    call<void>("sync_setup_recovery", { serverUrl, account, label, code }),
-  pollPairing: () => call<string | null>("sync_poll_pairing"),
-  approveDevice: (code: string, label: string) => call<string>("sync_approve_device", { code, label }),
+  connect: (serverUrl: string, account: string, recoveryCode?: string) => call<ConnectResult>("sync_connect", { serverUrl, account, recoveryCode }),
+  vaults: () => call<VaultsView>("sync_vaults"),
+  vaultCreate: (name: string, passphrase: string) => call<string>("sync_vault_create", { name, passphrase }),
+  vaultUnlock: (vaultId: string, secret: VaultSecret) => call<void>("sync_vault_unlock", { vaultId, ...secret }),
+  vaultSetPassphrase: (vaultId: string, secret: VaultSecret, newPassphrase: string) =>
+    call<void>("sync_vault_set_passphrase", { vaultId, ...secret, newPassphrase }),
+  vaultDelete: (vaultId: string) => call<void>("sync_vault_delete", { vaultId }),
   removeDevice: (deviceId: string) => call<void>("sync_remove_device", { deviceId }),
   renameDevice: (deviceId: string, label: string) => call<void>("sync_rename_device", { deviceId, label }),
   erasedNotebooks: () => call<ErasedNotebook[]>("sync_erased_notebooks"),
@@ -269,8 +293,6 @@ export async function onSyncChanged(cb: (c: SyncChanged) => void): Promise<Unlis
 export function describeStatus(s: SyncStatus | null): { tone: "ok" | "busy" | "muted" | "warn" | "danger"; text: string } {
   if (!s) return { tone: "muted", text: "Sync is not set up" };
   switch (s.phase) {
-    case "awaitingApproval":
-      return { tone: "busy", text: "Waiting for approval from a trusted device" };
     case "paused":
       return { tone: "muted", text: s.queued ? `Paused · ${s.queued} change(s) queued on this device` : "Paused" };
     case "offline":

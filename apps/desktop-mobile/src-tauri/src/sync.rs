@@ -10,9 +10,9 @@
 //!   the operating system hands to the app ([`deliver_sign_in_link`]), and
 //!   only if the server offers a mobile redirect. The account session's
 //!   refresh token is kept in the OS keychain next to the device keys; the
-//!   worker trades it for a device session once this device is a key-log
-//!   member, and keeps that one in the keychain too. Refresh tokens rotate on
-//!   every use. When the sign-in ends (refresh refused) the status becomes
+//!   worker trades it for a device session and then ends the account session:
+//!   an account session can fetch the account key, and a removed device must
+//!   not be left holding one. Refresh tokens rotate on every use. When the sign-in ends (refresh refused) the status becomes
 //!   `needsReauth` and the settings offer "Sign in again"; queued changes stay.
 //! * The development test server: its session stub, with a typed account name.
 //!
@@ -29,11 +29,19 @@
 //!   every [`IDLE_INTERVAL`] or at the backoff deadline after a failure.
 //! * After each reconcile it emits `sync://status` and, when merged changes
 //!   were installed, `sync://changed` so the editor can reload pages.
-//! * Commands that need the engine (devices, conflicts, approvals, …) are
+//! * Commands that need the engine (devices, conflicts, vaults, …) are
 //!   sent to the worker with a reply channel, so the engine is only ever used
 //!   from one thread.
 //! * `sync_disconnect` stops the worker and removes keys and sync metadata;
 //!   notebooks are untouched.
+//!
+//! Adding a device takes a sign-in and nothing else ([`sync_connect`]). The
+//! device names itself from its host name ([`device_label`]); the name can be
+//! changed afterwards in the settings.
+//!
+//! Vaults (`penroam_sync::vault`): the worker owns one more engine per vault
+//! unlocked here, and reconciles them after the main one. A vault's session
+//! comes from the main session, so vaults stop with the sign-in.
 
 use crate::commands::CmdError;
 use crate::AppState;
@@ -41,9 +49,11 @@ use penroam_core::replica::{Conflict, ConflictTarget};
 use penroam_core::{Notebook, Page};
 use penroam_storage::ErrorCode;
 use penroam_sync::auth;
+use penroam_sync::crypto::RootSecret;
 use penroam_sync::secrets::KeychainSecretStore;
 use penroam_sync::store::SyncStore;
 use penroam_sync::transport::HttpTransport;
+use penroam_sync::vault::{self, NotebookOwners, Scope, VaultKey};
 use penroam_sync::SyncTransport as _;
 use penroam_sync::{
     DeviceView, ErasedNotebook, FileSecretStore, SecretStore, Setup, SyncEngine, SyncError,
@@ -52,10 +62,12 @@ use penroam_sync::{
 use penroam_sync_protocol::account::{actions, plan_managers, stores};
 use penroam_sync_protocol::dto::capabilities;
 use penroam_sync_protocol::{
-    AccountState, BillingLinkRequest, ErrorCode as WireCode, SessionTokens, StorePurchaseRequest,
+    AccountId, AccountState, BillingLinkRequest, CreateVaultRequest, ErrorCode as WireCode,
+    SessionTokens, StorePurchaseRequest, UpdateVaultLockRequest, VaultRecord,
 };
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -172,7 +184,6 @@ enum Cmd {
     Pause(bool),
     Status(Reply<SyncStatus>),
     Devices(Reply<Vec<DeviceView>>),
-    Approve(String, String, Reply<String>),
     Remove(String, Reply<()>),
     /// Device id and new label.
     Rename(String, String, Reply<()>),
@@ -181,7 +192,16 @@ enum Cmd {
     RestoreErased(Uuid, Reply<()>),
     Conflicts(Uuid, Reply<Vec<Conflict>>),
     Resolve(Uuid, ConflictTarget, Uuid, Reply<()>),
-    PollPairing(Reply<Option<String>>),
+    /// The account's vaults and which notebooks belong to them.
+    Vaults(Reply<VaultsView>),
+    /// Name and passphrase. Answers the new vault's recovery code.
+    VaultCreate(String, String, Reply<String>),
+    /// Vault id, then its passphrase or recovery code.
+    VaultUnlock(String, Option<String>, Option<String>, Reply<()>),
+    /// Vault id, its current passphrase or recovery code, and the new passphrase.
+    VaultSetPassphrase(String, Option<String>, Option<String>, String, Reply<()>),
+    /// Erases a vault's cloud copy.
+    VaultDelete(String, Reply<()>),
     Diagnostics(Reply<String>),
     /// A new account session was stored: drop the current token and retry.
     Reauth,
@@ -493,9 +513,10 @@ fn account_access(
 }
 
 /// The token the worker uses. `auth.v1`: the stored device session if it still
-/// refreshes, else a new device session signed with this device's key (only
-/// possible once it is a key-log member), else the account session (enough for
-/// pairing). Test server: its stub.
+/// refreshes, else a new device session signed with this device's key. Getting
+/// one ends the account session, which from then on would only be something to
+/// steal: it can fetch the account key, and a removed device keeps no way back
+/// without a new sign-in. Test server: its stub.
 fn worker_token(app: &AppHandle, engine: &mut Engine) -> Result<String, TokenError> {
     let (url, account, device) = {
         let st = &engine.store.state;
@@ -535,9 +556,355 @@ fn worker_token(app: &AppHandle, engine: &mut Engine) -> Result<String, TokenErr
     match engine.device_session(&url, &acct.access_token) {
         Ok(t) => {
             save_session(store.as_ref(), DEVICE_SESSION, &url, &t).map_err(TokenError::Other)?;
+            let _ = auth::logout(&url, &acct.access_token);
+            let _ = store.delete(ACCOUNT_SESSION);
             Ok(t.access_token)
         }
         Err(_) => Ok(acct.access_token),
+    }
+}
+
+/// One vault unlocked on this device.
+struct VaultSlot {
+    engine: Engine,
+    have_token: bool,
+}
+
+/// The vault's id, as the protocol type.
+fn vault_account(engine: &Engine) -> Result<AccountId, String> {
+    engine
+        .store
+        .state
+        .account_id
+        .parse()
+        .map_err(|_| "bad vault id".to_string())
+}
+
+/// A device session for a vault: the stored one if it refreshes, else a new one, by way of an
+/// account session the main session asks for. `main` must hold a token.
+fn vault_token(app: &AppHandle, main: &mut Engine, vault: &mut Engine) -> Result<String, String> {
+    let (url, device) = {
+        let st = &vault.store.state;
+        (st.server_url.clone(), st.device_id.clone())
+    };
+    let id = vault_account(vault)?;
+    if !uses_sign_in(&url)? {
+        return test_token(&url, id.as_str(), Some(&device));
+    }
+    let root = library_root(app);
+    let store = secrets(app, &root).map_err(|e| e.message)?;
+    let name = vault.scope().secret_name(DEVICE_SESSION);
+    if let Some(d) = load_session(store.as_ref(), &name, &url) {
+        match auth::refresh(&url, &d.refresh_token) {
+            Ok(t) => {
+                save_session(store.as_ref(), &name, &url, &t)?;
+                return Ok(t.access_token);
+            }
+            Err(auth::AuthError::Transport(penroam_sync::TransportError::Network(e))) => {
+                return Err(e)
+            }
+            Err(_) => {
+                let _ = store.delete(&name);
+            }
+        }
+    }
+    let account = main
+        .transport_mut()
+        .vault_session(&id)
+        .map_err(|e| e.to_string())?;
+    let t = vault
+        .device_session(&url, &account.access_token)
+        .map_err(|e| e.to_string())?;
+    let _ = auth::logout(&url, &account.access_token);
+    save_session(store.as_ref(), &name, &url, &t)?;
+    Ok(t.access_token)
+}
+
+/// Engines of the vaults unlocked on this device. One that can't open is left out for this run:
+/// its notebooks then just don't sync, and they can't reach the main account either.
+fn open_vault_slots(app: &AppHandle) -> Vec<VaultSlot> {
+    let root = library_root(app);
+    let mut out = Vec::new();
+    for id in vault::local_vaults(&root) {
+        let Ok(scope) = Scope::vault(&id) else {
+            continue;
+        };
+        let opened = SyncStore::open_at(&scope.dir(&root))
+            .map_err(|e| e.to_string())
+            .and_then(|s| {
+                let store = secrets(app, &root).map_err(|e| e.message)?;
+                Engine::open_scope(
+                    &root,
+                    scope.clone(),
+                    HttpTransport::new(&s.state.server_url, String::new()),
+                    store,
+                )
+                .map_err(|e| e.to_string())
+            });
+        match opened {
+            Ok(engine) => out.push(VaultSlot {
+                engine,
+                have_token: false,
+            }),
+            Err(e) => eprintln!("penroam: a vault was not started: {e}"),
+        }
+    }
+    out
+}
+
+/// The account's vaults, as the settings show them.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultsView {
+    /// Whether this server has vaults (`vaults.v1`).
+    supported: bool,
+    vaults: Vec<VaultView>,
+    /// Notebook → vault id, for every notebook kept out of the main account.
+    notebooks: BTreeMap<Uuid, String>,
+}
+
+/// One vault.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultView {
+    vault_id: String,
+    /// The name; unknown until the vault was unlocked on this device.
+    name: Option<String>,
+    unlocked: bool,
+    /// Why this vault isn't syncing, if it isn't.
+    problem: Option<String>,
+}
+
+/// Runs `f` under the library lock with the owners file loaded, and saves what it changed.
+fn edit_owners(app: &AppHandle, f: impl FnOnce(&mut NotebookOwners)) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+    let root = lib.root().to_path_buf();
+    let mut owners = NotebookOwners::load(&root).map_err(|e| e.to_string())?;
+    f(&mut owners);
+    owners.save(&root).map_err(|e| e.to_string())
+}
+
+fn vault_setup(app: &AppHandle, main: &Engine, id: &str) -> Result<Setup, String> {
+    let st = &main.store.state;
+    Ok(Setup {
+        library_root: library_root(app),
+        scope: Scope::vault(id).map_err(|e| e.to_string())?,
+        device_id: Some(st.device_id.clone()),
+        server_url: st.server_url.clone(),
+        account_id: id.to_string(),
+        label: st.label.clone(),
+    })
+}
+
+/// A transport for a vault's own account, from a session the main session asks for.
+fn vault_transport(main: &mut Engine, id: &AccountId) -> Result<HttpTransport, String> {
+    let t = main
+        .transport_mut()
+        .vault_session(id)
+        .map_err(|e| e.to_string())?;
+    Ok(HttpTransport::new(
+        &main.store.state.server_url,
+        t.access_token,
+    ))
+}
+
+fn checked_vault_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 100 {
+        return Err("give the vault a name of at most 100 characters".into());
+    }
+    Ok(name)
+}
+
+/// Creates a vault and its engine. A vault whose setup fails is removed from the server again, or
+/// it would exist without the user ever having seen its recovery code.
+fn create_vault(
+    app: &AppHandle,
+    main: &mut Engine,
+    name: &str,
+    passphrase: &str,
+) -> Result<(VaultSlot, String), String> {
+    let name = checked_vault_name(name)?;
+    let root = RootSecret::generate().map_err(|e| e.to_string())?;
+    let lock = vault::new_lock(&root, passphrase).map_err(|e| e.to_string())?;
+    let record = main
+        .transport_mut()
+        .vault_create(&CreateVaultRequest {
+            lock,
+            name: vault::seal_name(&root, name),
+        })
+        .map_err(|e| e.to_string())?;
+    let id = record.vault_id.clone();
+    let opened = (|| {
+        let setup = vault_setup(app, main, id.as_str())?;
+        let t = vault_transport(main, &id)?;
+        let store = secrets(app, &library_root(app)).map_err(|e| e.message)?;
+        Engine::open_vault(setup, t, store, &root).map_err(|e| e.to_string())
+    })();
+    match opened {
+        Ok(engine) => {
+            edit_owners(app, |o| {
+                o.names.insert(id.to_string(), name.to_string());
+            })?;
+            Ok((
+                VaultSlot {
+                    engine,
+                    have_token: false,
+                },
+                root.recovery_code(),
+            ))
+        }
+        Err(e) => {
+            let _ = main.transport_mut().vault_delete(&id);
+            Err(e)
+        }
+    }
+}
+
+fn vault_key<'a>(
+    passphrase: &'a Option<String>,
+    recovery: &'a Option<String>,
+) -> Result<VaultKey<'a>, String> {
+    match (passphrase, recovery) {
+        (Some(p), None) => Ok(VaultKey::Passphrase(p)),
+        (None, Some(c)) => Ok(VaultKey::RecoveryCode(c)),
+        _ => Err("enter the vault's passphrase or recovery code".into()),
+    }
+}
+
+fn find_vault(main: &mut Engine, id: &str) -> Result<VaultRecord, String> {
+    main.transport_mut()
+        .vault_list()
+        .map_err(|e| e.to_string())?
+        .vaults
+        .into_iter()
+        .find(|v| v.vault_id.as_str() == id)
+        .ok_or_else(|| "that vault no longer exists".to_string())
+}
+
+/// Opens a vault on this device. The key log proves the root is right before anything is
+/// trusted; only then is its name read.
+fn unlock_vault(
+    app: &AppHandle,
+    main: &mut Engine,
+    id: &str,
+    key: &VaultKey<'_>,
+) -> Result<VaultSlot, String> {
+    let record = find_vault(main, id)?;
+    let root = vault::root_for(&record.lock, key).map_err(|e| e.to_string())?;
+    let setup = vault_setup(app, main, id)?;
+    let t = vault_transport(main, &record.vault_id)?;
+    let store = secrets(app, &library_root(app)).map_err(|e| e.message)?;
+    let engine = Engine::open_vault(setup, t, store, &root).map_err(|e| e.to_string())?;
+    if let Ok(name) = vault::open_name(&root, &record.name) {
+        edit_owners(app, |o| {
+            o.names.insert(id.to_string(), name);
+        })?;
+    }
+    Ok(VaultSlot {
+        engine,
+        have_token: false,
+    })
+}
+
+/// The server's vaults, with what this device knows about each. A vault with an engine here that
+/// the server no longer lists was deleted elsewhere: its engine stops, and its notebooks stay on
+/// this device, unsynced (they remain assigned, so the main account can't pick them up).
+fn vaults_view(
+    app: &AppHandle,
+    main: &mut Engine,
+    slots: &mut Vec<VaultSlot>,
+) -> Result<VaultsView, String> {
+    let url = main.store.state.server_url.clone();
+    let supported = HttpTransport::new(&url, String::new())
+        .meta()
+        .map(|m| m.has_capability(capabilities::VAULTS_V1))
+        .map_err(|e| unreachable_message(&e.to_string()))?;
+    let records = if supported {
+        main.transport_mut()
+            .vault_list()
+            .map_err(|e| e.to_string())?
+            .vaults
+    } else {
+        Vec::new()
+    };
+    if supported {
+        let gone: Vec<usize> = slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| {
+                !records
+                    .iter()
+                    .any(|r| r.vault_id.as_str() == s.engine.store.state.account_id)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        for i in gone.into_iter().rev() {
+            let s = slots.remove(i);
+            if let Err(e) = s.engine.disconnect() {
+                eprintln!("penroam: a deleted vault was not cleaned up: {e}");
+            }
+        }
+    }
+    let owners = NotebookOwners::load(&library_root(app)).map_err(|e| e.to_string())?;
+    let vaults = records
+        .iter()
+        .map(|r| {
+            let slot = slots
+                .iter()
+                .find(|s| s.engine.store.state.account_id == r.vault_id.as_str());
+            VaultView {
+                vault_id: r.vault_id.to_string(),
+                name: owners.names.get(r.vault_id.as_str()).cloned(),
+                unlocked: slot.is_some(),
+                problem: slot.and_then(|s| s.engine.status(0).last_error),
+            }
+        })
+        .collect();
+    Ok(VaultsView {
+        supported,
+        vaults,
+        notebooks: owners.notebooks,
+    })
+}
+
+/// The name this device goes by until the user changes it: its host name, or on Android, where
+/// that is usually `localhost`, its model.
+pub fn device_label() -> String {
+    #[cfg(target_os = "android")]
+    let raw = std::process::Command::new("getprop")
+        .arg("ro.product.model")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    #[cfg(not(target_os = "android"))]
+    let raw = gethostname::gethostname().to_string_lossy().into_owned();
+    label_from_host(&raw).unwrap_or_else(|| fallback_label().to_string())
+}
+
+/// A usable label from a host name, without a `.local` or other domain suffix.
+fn label_from_host(raw: &str) -> Option<String> {
+    let name = raw.trim();
+    let name = name.split('.').next().unwrap_or(name).trim();
+    if name.is_empty() || name.eq_ignore_ascii_case("localhost") {
+        return None;
+    }
+    Some(name.chars().take(64).collect())
+}
+
+fn fallback_label() -> &'static str {
+    if cfg!(target_os = "android") {
+        "Android device"
+    } else if cfg!(target_os = "ios") {
+        "iPad"
+    } else if cfg!(target_os = "macos") {
+        "Mac"
+    } else if cfg!(target_os = "windows") {
+        "Windows PC"
+    } else {
+        "Linux computer"
     }
 }
 
@@ -545,13 +912,17 @@ fn worker_token(app: &AppHandle, engine: &mut Engine) -> Result<String, TokenErr
 /// the keychain.
 fn forget_sessions(store: &dyn SecretStore, url: &str) {
     for name in [DEVICE_SESSION, ACCOUNT_SESSION] {
-        if let Some(s) = load_session(store, name, url) {
-            if let Ok(t) = auth::refresh(url, &s.refresh_token) {
-                let _ = auth::logout(url, &t.access_token);
-            }
-        }
-        let _ = store.delete(name);
+        forget_session(store, name, url);
     }
+}
+
+fn forget_session(store: &dyn SecretStore, name: &str, url: &str) {
+    if let Some(s) = load_session(store, name, url) {
+        if let Ok(t) = auth::refresh(url, &s.refresh_token) {
+            let _ = auth::logout(url, &t.access_token);
+        }
+    }
+    let _ = store.delete(name);
 }
 
 /// Gets a session token from the development test server's sign-in stub:
@@ -588,6 +959,7 @@ fn emit_status(app: &AppHandle, e: &Engine) {
 /// the next attempt is scheduled from the engine's backoff policy, and a
 /// rejected token triggers a fresh sign-in.
 fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
+    let mut slots = open_vault_slots(&app);
     let mut due: Option<Instant> = Some(Instant::now());
     let mut have_token = false;
     let mut signed_out = false;
@@ -657,20 +1029,31 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 let _ = r.send(Ok(engine.devices()));
                 continue;
             }
-            Ok(Cmd::Approve(code, label, r)) => {
-                ensure(&mut engine, &mut have_token, &mut signed_out);
-                let mut res = engine.approve_device(&code, &label);
-                if res.as_ref().is_err_and(unauth) {
-                    have_token = false;
-                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
-                        res = engine.approve_device(&code, &label);
-                    }
-                }
-                let _ = r.send(res.map_err(|e| e.to_string()));
-                continue;
-            }
             Ok(Cmd::Remove(id, r)) => {
                 ensure(&mut engine, &mut have_token, &mut signed_out);
+                // Each vault first: the device's vault memberships use its main device id, and
+                // removing it from a vault rotates that vault's key too. A vault not open here
+                // is left to the server, which revokes the same id there.
+                for s in &mut slots {
+                    if !s
+                        .engine
+                        .devices()
+                        .iter()
+                        .any(|d| d.device_id == id && d.active)
+                    {
+                        continue;
+                    }
+                    match vault_token(&app, &mut engine, &mut s.engine) {
+                        Ok(t) => {
+                            s.engine.transport_mut().set_token(t);
+                            s.have_token = true;
+                            if let Err(e) = s.engine.remove_device(&id) {
+                                eprintln!("penroam: removal from a vault failed: {e}");
+                            }
+                        }
+                        Err(e) => eprintln!("penroam: removal from a vault failed: {e}"),
+                    }
+                }
                 let mut res = engine.remove_device(&id);
                 if res.as_ref().is_err_and(unauth) {
                     have_token = false;
@@ -697,7 +1080,13 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 let res = {
                     let state = app.state::<AppState>();
                     let lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
-                    engine.erased_notebooks(&lib)
+                    let mut all = engine.erased_notebooks(&lib);
+                    for s in &mut slots {
+                        if let (Ok(a), Ok(more)) = (&mut all, s.engine.erased_notebooks(&lib)) {
+                            a.extend(more);
+                        }
+                    }
+                    all
                 };
                 let _ = r.send(res.map_err(|e| e.to_string()));
                 continue;
@@ -706,58 +1095,114 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 let res = {
                     let state = app.state::<AppState>();
                     let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
-                    engine.restore_erased(&mut lib, nb)
+                    engine_for(&app, nb, &mut engine, &mut slots).restore_erased(&mut lib, nb)
                 };
                 let _ = r.send(res.map_err(|e| e.to_string()));
                 due = Some(Instant::now());
                 continue;
             }
             Ok(Cmd::PageVersions(nb, page, r)) => {
-                let _ = r.send(engine.page_versions(nb, page).map_err(|e| e.to_string()));
+                let e = engine_for(&app, nb, &mut engine, &mut slots);
+                let _ = r.send(e.page_versions(nb, page).map_err(|e| e.to_string()));
                 continue;
             }
             Ok(Cmd::PageAt(nb, page, position, r)) => {
-                let _ = r.send(
-                    engine
-                        .page_at(nb, page, position)
-                        .map_err(|e| e.to_string()),
-                );
+                let e = engine_for(&app, nb, &mut engine, &mut slots);
+                let _ = r.send(e.page_at(nb, page, position).map_err(|e| e.to_string()));
                 continue;
             }
             Ok(Cmd::NotebookAt(nb, at, r)) => {
-                let _ = r.send(engine.notebook_at(nb, at).map_err(|e| e.to_string()));
+                let e = engine_for(&app, nb, &mut engine, &mut slots);
+                let _ = r.send(e.notebook_at(nb, at).map_err(|e| e.to_string()));
                 continue;
             }
             Ok(Cmd::Conflicts(nb, r)) => {
-                let _ = r.send(engine.conflicts(nb).map_err(|e| e.to_string()));
+                let e = engine_for(&app, nb, &mut engine, &mut slots);
+                let _ = r.send(e.conflicts(nb).map_err(|e| e.to_string()));
                 continue;
             }
             Ok(Cmd::Resolve(nb, target, choose, r)) => {
                 let res = {
                     let state = app.state::<AppState>();
                     let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
-                    engine.resolve_conflict(&mut lib, nb, &target, choose)
+                    engine_for(&app, nb, &mut engine, &mut slots)
+                        .resolve_conflict(&mut lib, nb, &target, choose)
                 };
                 let _ = r.send(res.map_err(|e| e.to_string()));
                 due = Some(Instant::now());
                 continue;
             }
-            Ok(Cmd::PollPairing(r)) => {
+            Ok(Cmd::Vaults(r)) => {
                 ensure(&mut engine, &mut have_token, &mut signed_out);
-                let mut res = engine.poll_enrollment();
-                if res.as_ref().is_err_and(unauth) {
-                    have_token = false;
-                    if ensure(&mut engine, &mut have_token, &mut signed_out) {
-                        res = engine.poll_enrollment();
-                    }
-                }
-                let res = res.map_err(|e| e.to_string());
-                if matches!(res, Ok(Some(_))) {
-                    have_token = false; // a device session is possible now
-                    due = Some(Instant::now());
-                }
+                let _ = r.send(vaults_view(&app, &mut engine, &mut slots));
+                continue;
+            }
+            Ok(Cmd::VaultCreate(name, passphrase, r)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let res = create_vault(&app, &mut engine, &name, &passphrase).map(|(s, code)| {
+                    slots.push(s);
+                    code
+                });
                 let _ = r.send(res);
-                emit_status(&app, &engine);
+                due = Some(Instant::now());
+                continue;
+            }
+            Ok(Cmd::VaultUnlock(id, passphrase, recovery, r)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let res = vault_key(&passphrase, &recovery)
+                    .and_then(|k| unlock_vault(&app, &mut engine, &id, &k))
+                    .map(|s| slots.push(s));
+                let _ = r.send(res);
+                due = Some(Instant::now());
+                continue;
+            }
+            Ok(Cmd::VaultSetPassphrase(id, passphrase, recovery, new, r)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let res = (|| {
+                    let key = vault_key(&passphrase, &recovery)?;
+                    let record = find_vault(&mut engine, &id)?;
+                    let root = vault::root_for(&record.lock, &key).map_err(|e| e.to_string())?;
+                    // a mistyped recovery code must not lock the vault for good
+                    if !matches!(key, VaultKey::Passphrase(_)) {
+                        let slot = slots
+                            .iter()
+                            .find(|s| s.engine.store.state.account_id == id)
+                            .ok_or("unlock this vault here first")?;
+                        if !slot.engine.account_key_is(&root) {
+                            return Err("that recovery code isn't this vault's".to_string());
+                        }
+                    }
+                    let lock = vault::new_lock(&root, &new).map_err(|e| e.to_string())?;
+                    engine
+                        .transport_mut()
+                        .vault_set_lock(&record.vault_id, &UpdateVaultLockRequest { lock })
+                        .map_err(|e| e.to_string())
+                })();
+                let _ = r.send(res);
+                continue;
+            }
+            Ok(Cmd::VaultDelete(id, r)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let res = id
+                    .parse::<AccountId>()
+                    .map_err(|_| "bad vault id".to_string())
+                    .and_then(|a| {
+                        engine
+                            .transport_mut()
+                            .vault_delete(&a)
+                            .map_err(|e| e.to_string())
+                    })
+                    .map(|()| {
+                        if let Some(i) = slots
+                            .iter()
+                            .position(|s| s.engine.store.state.account_id == id)
+                        {
+                            if let Err(e) = slots.remove(i).engine.disconnect() {
+                                eprintln!("penroam: a deleted vault was not cleaned up: {e}");
+                            }
+                        }
+                    });
+                let _ = r.send(res);
                 continue;
             }
             Ok(Cmd::Diagnostics(r)) => {
@@ -836,15 +1281,28 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 have_token = false;
                 signed_out = false;
                 engine.attempt = 0;
+                for s in &mut slots {
+                    s.have_token = false;
+                }
                 due = Some(Instant::now());
                 continue;
             }
             Ok(Cmd::Disconnect(r)) => {
                 let root = library_root(&app);
                 if let Ok(store) = secrets(&app, &root) {
-                    forget_sessions(store.as_ref(), &engine.store.state.server_url);
+                    let url = engine.store.state.server_url.clone();
+                    for s in &slots {
+                        let name = s.engine.scope().secret_name(DEVICE_SESSION);
+                        forget_session(store.as_ref(), &name, &url);
+                    }
+                    forget_sessions(store.as_ref(), &url);
                 }
-                let _ = r.send(engine.disconnect(&root).map_err(|e| e.to_string()));
+                for s in slots.drain(..) {
+                    if let Err(e) = s.engine.disconnect() {
+                        eprintln!("penroam: a vault was not cleaned up: {e}");
+                    }
+                }
+                let _ = r.send(engine.disconnect().map_err(|e| e.to_string()));
                 app.state::<AppState>().sync.set(None);
                 let _ = app.emit("sync://status", serde_json::Value::Null);
                 return;
@@ -853,11 +1311,6 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
             Err(RecvTimeoutError::Timeout) => {}
         }
         // reconcile
-        if !engine.store.state.enrolled {
-            due = Some(Instant::now() + Duration::from_secs(5));
-            emit_status(&app, &engine);
-            continue;
-        }
         if !ensure(&mut engine, &mut have_token, &mut signed_out) && !signed_out {
             due = Some(Instant::now() + Duration::from_secs(30));
             emit_status(&app, &engine);
@@ -865,30 +1318,32 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
         }
         let state = app.state::<AppState>();
         let result = engine.reconcile(&state.lib);
+        // Vaults after the main stream, whatever became of it. Each failure stays with its vault
+        // (shown in the settings), and the next pass retries it.
+        if result.is_ok() {
+            for s in &mut slots {
+                if !s.have_token {
+                    match vault_token(&app, &mut engine, &mut s.engine) {
+                        Ok(t) => {
+                            s.engine.transport_mut().set_token(t);
+                            s.have_token = true;
+                        }
+                        Err(e) => {
+                            eprintln!("penroam: no session for a vault: {e}");
+                            continue;
+                        }
+                    }
+                }
+                match s.engine.reconcile(&state.lib) {
+                    Ok(report) => announce(&app, &report),
+                    Err(e) if unauth(&e) => s.have_token = false,
+                    Err(_) => {}
+                }
+            }
+        }
         match &result {
             Ok(report) => {
-                // remote changes: re-index only the pages that were reinstalled
-                let changed: Vec<Uuid> = report
-                    .installed_notebooks
-                    .iter()
-                    .chain(&report.erased_notebooks)
-                    .copied()
-                    .collect();
-                for nb in &changed {
-                    state.search.notebook_changed(*nb);
-                }
-                for (nb, page) in &report.installed_pages {
-                    state.search.page_changed(*nb, *page);
-                }
-                if !changed.is_empty() {
-                    let _ = app.emit(
-                        "sync://changed",
-                        Changed {
-                            notebook_ids: changed,
-                            pages: report.installed_pages.clone(),
-                        },
-                    );
-                }
+                announce(&app, report);
                 due = None; // idle until a nudge or the interval
             }
             Err(e) => {
@@ -907,6 +1362,54 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
         }
         emit_status(&app, &engine);
     }
+}
+
+/// Re-indexes what a reconcile changed, and tells the editor.
+fn announce(app: &AppHandle, report: &penroam_sync::ReconcileReport) {
+    let state = app.state::<AppState>();
+    // remote changes: re-index only the pages that were reinstalled
+    let changed: Vec<Uuid> = report
+        .installed_notebooks
+        .iter()
+        .chain(&report.erased_notebooks)
+        .copied()
+        .collect();
+    for nb in &changed {
+        state.search.notebook_changed(*nb);
+    }
+    for (nb, page) in &report.installed_pages {
+        state.search.page_changed(*nb, *page);
+    }
+    if !changed.is_empty() {
+        let _ = app.emit(
+            "sync://changed",
+            Changed {
+                notebook_ids: changed,
+                pages: report.installed_pages.clone(),
+            },
+        );
+    }
+}
+
+/// The engine that syncs a notebook.
+fn engine_for<'a>(
+    app: &AppHandle,
+    nb: Uuid,
+    main: &'a mut Engine,
+    slots: &'a mut [VaultSlot],
+) -> &'a mut Engine {
+    let root = library_root(app);
+    if let Ok(owners) = NotebookOwners::load(&root) {
+        if let Some(id) = owners.owner(&nb) {
+            if let Some(s) = slots
+                .iter_mut()
+                .find(|s| s.engine.store.state.account_id == id)
+            {
+                return &mut s.engine;
+            }
+        }
+    }
+    main
 }
 
 /// Registers the worker's channel in [`AppState`] and spawns the thread.
@@ -988,110 +1491,120 @@ fn guard(state: &State<'_, AppState>) -> Result<(), CmdError> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-/// Codes to show after a setup step (the recovery code is shown only once).
-pub struct SetupResult {
+/// How connecting went.
+pub struct ConnectResult {
+    /// The account's keys aren't on the server (it predates sign-in-only sync): connect again
+    /// with its recovery code, once.
+    needs_recovery_code: bool,
+}
+
+/// Connects this device to the signed-in account. That's all it takes, on the first device and
+/// on every later one. `recovery_code` is for accounts that need it ([`ConnectResult`]).
+#[tauri::command(async)]
+pub fn sync_connect(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_url: String,
+    account: String,
     recovery_code: Option<String>,
-    pairing_code: Option<String>,
-}
-
-/// First device of an account: creates the account keys and returns the
-/// recovery code.
-#[tauri::command(async)]
-pub fn sync_setup_first(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    server_url: String,
-    account: String,
-    label: String,
-) -> Result<SetupResult, CmdError> {
+) -> Result<ConnectResult, CmdError> {
     guard(&state)?;
     let url = check_url(&server_url)?;
     let root = library_root(&app);
     let store = secrets(&app, &root)?;
     let (token, account) = account_access(store.as_ref(), &url, &account)?;
     let t = HttpTransport::new(&url, token);
-    let (engine, code) = Engine::create_account(
-        Setup {
-            library_root: root.clone(),
-            server_url: url,
-            account_id: account,
-            label,
-        },
-        t,
-        store,
-    )
-    .map_err(sync_err)?;
-    start(&app, engine);
-    Ok(SetupResult {
-        recovery_code: Some(code),
-        pairing_code: None,
-    })
+    let setup = Setup {
+        library_root: root.clone(),
+        scope: Scope::Account,
+        device_id: None,
+        server_url: url,
+        account_id: account,
+        label: device_label(),
+    };
+    let engine = match recovery_code {
+        Some(code) => Engine::enroll_with_recovery(setup, t, store, &code),
+        None => Engine::connect(setup, t, store),
+    };
+    match engine {
+        Ok(e) => {
+            start(&app, e);
+            Ok(ConnectResult {
+                needs_recovery_code: false,
+            })
+        }
+        Err(SyncError::NeedsRecoveryCode) => Ok(ConnectResult {
+            needs_recovery_code: true,
+        }),
+        Err(e) => Err(sync_err(e)),
+    }
 }
 
-/// New device, pairing: registers this device and returns its pairing code
-/// for a trusted device to approve.
+/// The account's vaults and which notebooks belong to them.
 #[tauri::command(async)]
-pub fn sync_setup_pair(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    server_url: String,
-    account: String,
-    label: String,
-) -> Result<SetupResult, CmdError> {
-    guard(&state)?;
-    let url = check_url(&server_url)?;
-    let root = library_root(&app);
-    let store = secrets(&app, &root)?;
-    let (token, account) = account_access(store.as_ref(), &url, &account)?;
-    let t = HttpTransport::new(&url, token);
-    let (engine, code) = Engine::begin_pairing(
-        Setup {
-            library_root: root.clone(),
-            server_url: url,
-            account_id: account,
-            label,
-        },
-        t,
-        store,
-    )
-    .map_err(sync_err)?;
-    start(&app, engine);
-    Ok(SetupResult {
-        recovery_code: None,
-        pairing_code: Some(code),
-    })
+pub fn sync_vaults(state: State<'_, AppState>) -> Result<VaultsView, CmdError> {
+    ask(&state.sync, Cmd::Vaults)
 }
 
-/// New device, enrolled with the recovery code (no other device needed).
+/// Creates a vault; returns its recovery code, which is shown once.
 #[tauri::command(async)]
-pub fn sync_setup_recovery(
-    app: AppHandle,
+pub fn sync_vault_create(
     state: State<'_, AppState>,
-    server_url: String,
-    account: String,
-    label: String,
-    code: String,
+    name: String,
+    passphrase: String,
+) -> Result<String, CmdError> {
+    ask(&state.sync, |r| Cmd::VaultCreate(name, passphrase, r))
+}
+
+/// Unlocks a vault on this device with its passphrase or its recovery code. Once is enough.
+#[tauri::command(async)]
+pub fn sync_vault_unlock(
+    state: State<'_, AppState>,
+    vault_id: String,
+    passphrase: Option<String>,
+    recovery_code: Option<String>,
 ) -> Result<(), CmdError> {
-    guard(&state)?;
-    let url = check_url(&server_url)?;
-    let root = library_root(&app);
-    let store = secrets(&app, &root)?;
-    let (token, account) = account_access(store.as_ref(), &url, &account)?;
-    let t = HttpTransport::new(&url, token);
-    let engine = Engine::enroll_with_recovery(
-        Setup {
-            library_root: root.clone(),
-            server_url: url,
-            account_id: account,
-            label,
-        },
-        t,
-        store,
-        &code,
-    )
-    .map_err(sync_err)?;
-    start(&app, engine);
-    Ok(())
+    ask(&state.sync, |r| {
+        Cmd::VaultUnlock(vault_id, passphrase, recovery_code, r)
+    })
+}
+
+/// Sets a vault's passphrase, proving knowledge of the old one or the recovery code.
+#[tauri::command(async)]
+pub fn sync_vault_set_passphrase(
+    state: State<'_, AppState>,
+    vault_id: String,
+    passphrase: Option<String>,
+    recovery_code: Option<String>,
+    new_passphrase: String,
+) -> Result<(), CmdError> {
+    ask(&state.sync, |r| {
+        Cmd::VaultSetPassphrase(vault_id, passphrase, recovery_code, new_passphrase, r)
+    })
+}
+
+/// Erases a vault's cloud copy. Its notebooks stay on this device and stop syncing.
+#[tauri::command(async)]
+pub fn sync_vault_delete(state: State<'_, AppState>, vault_id: String) -> Result<(), CmdError> {
+    ask(&state.sync, |r| Cmd::VaultDelete(vault_id, r))
+}
+
+/// Whether `vault` is unlocked on this device, so notebooks can go into it. Call with the library
+/// lock held, the lock assignments are made under.
+pub fn require_open_vault(root: &Path, vault: &str) -> Result<(), CmdError> {
+    if vault::local_vaults(root).iter().any(|v| v == vault) {
+        Ok(())
+    } else {
+        Err(err("unlock this vault on this device first"))
+    }
+}
+
+/// Assigns a notebook to a vault. Call with the library lock held, in the same critical section
+/// that created the notebook: once unlocked, the main engine would upload it.
+pub fn assign_to_vault(root: &Path, notebook: Uuid, vault: &str) -> Result<(), CmdError> {
+    let mut owners = NotebookOwners::load(root).map_err(|e| err(e.to_string()))?;
+    owners.notebooks.insert(notebook, vault.to_string());
+    owners.save(root).map_err(|e| err(e.to_string()))
 }
 
 #[derive(Serialize)]
@@ -1178,22 +1691,6 @@ pub fn sync_sign_out(
     let store = secrets(&app, &root)?;
     forget_sessions(store.as_ref(), &url);
     Ok(())
-}
-
-/// While pairing: the comparison code once a trusted device approved us.
-#[tauri::command(async)]
-pub fn sync_poll_pairing(state: State<'_, AppState>) -> Result<Option<String>, CmdError> {
-    ask(&state.sync, Cmd::PollPairing)
-}
-
-/// Trusted device: approves the device showing `code`; returns the comparison code.
-#[tauri::command(async)]
-pub fn sync_approve_device(
-    state: State<'_, AppState>,
-    code: String,
-    label: String,
-) -> Result<String, CmdError> {
-    ask(&state.sync, |r| Cmd::Approve(code, label, r))
 }
 
 /// Removes a device (new key epoch, server revocation).
@@ -1287,6 +1784,11 @@ pub fn sync_disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             }
             if let Ok(store) = secrets(&app, &root) {
                 let _ = store.delete(DEVICE_SECRET);
+                for id in vault::local_vaults(&root) {
+                    let scope = Scope::Vault(id);
+                    let _ = store.delete(&scope.secret_name(DEVICE_SECRET));
+                    let _ = store.delete(&scope.secret_name(DEVICE_SESSION));
+                }
                 let url = SyncStore::open(&root)
                     .map(|s| s.state.server_url)
                     .unwrap_or_default();
@@ -1297,6 +1799,29 @@ pub fn sync_disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(),
             let _ = app.emit("sync://status", serde_json::Value::Null);
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::label_from_host;
+
+    #[test]
+    fn a_device_is_named_after_its_host_without_the_domain() {
+        assert_eq!(
+            label_from_host("noah-laptop\n").as_deref(),
+            Some("noah-laptop")
+        );
+        assert_eq!(
+            label_from_host("Noahs-iPad.local").as_deref(),
+            Some("Noahs-iPad")
+        );
+    }
+
+    #[test]
+    fn a_host_name_that_says_nothing_is_not_used() {
+        assert_eq!(label_from_host("localhost"), None);
+        assert_eq!(label_from_host(" "), None);
     }
 }
 

@@ -1,9 +1,9 @@
-//! Offline-first, end-to-end encrypted sync client for Penroam.
+//! Offline-first, encrypted sync client for Penroam.
 //!
 //! The client sits next to a `penroam_storage::Library`: local edits keep
 //! being saved by the library exactly as without sync, and the engine copies
 //! them into its own operation log, encrypts and signs them, exchanges them
-//! with a server that only stores ciphertext, merges remote operations with
+//! with a server that stores ciphertext, merges remote operations with
 //! `penroam_core::replica::Replica`, and installs the merged result back into
 //! the library.
 //!
@@ -14,6 +14,7 @@
 //! * [`transport`]: protocol calls over HTTP or in-process.
 //! * [`engine`]: the reconcile loop (prepare → exchange → apply).
 //! * [`models`]: the signed handwriting model catalog and model downloads.
+//! * [`vault`]: passphrase-locked vaults, and which notebooks belong to them.
 //! * `auth` (feature `http`): OpenID Connect sign-in with PKCE in the system
 //!   browser and device sessions, for servers that advertise `auth.v1`.
 //!
@@ -23,6 +24,10 @@
 //!
 //! The wire format and client rules are in `docs/protocol/sync-protocol-v1.md`;
 //! the design is summarised in `docs/architecture/overview.md`.
+//!
+//! Ordinary notebooks are not private from the server, which keeps a copy of the
+//! account's root secret so that signing in is enough. Notebooks in a [`vault`]
+//! are: their root secret reaches the server only inside a passphrase lock.
 //!
 //! **Security status:** the cryptographic design has not been independently
 //! reviewed (`security_review_pending`). See `docs/security/threat-model.md`.
@@ -39,6 +44,7 @@ pub mod models;
 pub mod secrets;
 pub mod store;
 pub mod transport;
+pub mod vault;
 
 pub use engine::{
     DeviceView, ErasedNotebook, Phase, ReconcileReport, Setup, SyncEngine, SyncError, SyncStatus,

@@ -74,8 +74,8 @@ use penroam_sync_protocol::framing::{encode_batch, FrameItem};
 use penroam_sync_protocol::version::{negotiate, ProtocolRange, ENVELOPE_VERSION};
 use penroam_sync_protocol::{
     base64url, canonical_aad_bytes, canonical_checkpoint_bytes, canonical_signing_bytes,
-    verify_ciphertext, AckRequest, AckResult, BlobId, CheckpointRecord, Cursor, DeviceId,
-    DeviceRegistrationRequest, EnvelopeHeader, ErrorCode, KeyLogAppendRequest, Limits,
+    verify_ciphertext, AccountKeyDocument, AckRequest, AckResult, BlobId, CheckpointRecord, Cursor,
+    DeviceId, DeviceRegistrationRequest, EnvelopeHeader, ErrorCode, KeyLogAppendRequest, Limits,
     NotebookRoutingId, OpId, OpRef, PullOpsRequest, RetryPolicy,
 };
 use serde::Serialize;
@@ -88,6 +88,7 @@ use crate::keylog::{
 use crate::secrets::SecretStore;
 use crate::store::{OpMeta, Origin, Parked, SyncState, SyncStore};
 use crate::transport::{SyncTransport, TransportError};
+use crate::vault::{NotebookOwners, Scope};
 
 const DEVICE_SECRET: &str = "sync-device-keys";
 const PULL_PAGE: u32 = 200;
@@ -119,13 +120,20 @@ pub enum SyncError {
     #[error(transparent)]
     Crypto(#[from] CryptoError),
     /// Account setup was attempted on an account whose key log is not empty.
-    #[error("this account already has encryption keys; add this device by pairing or with the recovery code")]
+    #[error("this account already has encryption keys")]
     AccountHasKeys,
-    /// Pairing or recovery was attempted on an account with no key log yet.
-    #[error("this account has no encryption keys yet; set it up on your first device")]
+    /// Recovery was attempted on an account with no key log yet.
+    #[error("this account has no encryption keys yet")]
     AccountHasNoKeys,
-    /// This device has no epoch keys yet (pairing not approved).
-    #[error("this device is waiting for approval from a trusted device")]
+    /// The account has keys but the server holds no copy of them: it was set up by an older
+    /// version. Only its recovery code can add a device.
+    #[error("this account needs its recovery code once")]
+    NeedsRecoveryCode,
+    /// A vault operation failed.
+    #[error(transparent)]
+    Vault(#[from] crate::vault::VaultError),
+    /// This device has no epoch keys.
+    #[error("this device is not set up for sync")]
     NotEnrolled,
     /// This device is no longer an active member; nothing more is synced.
     #[error("this device was removed from the account; local notes are kept")]
@@ -156,8 +164,6 @@ pub type Result<T> = std::result::Result<T, SyncError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
-    /// Set up by pairing; waiting for a trusted device to approve it.
-    AwaitingApproval,
     /// Nothing in progress; the last reconcile succeeded.
     Idle,
     /// A reconcile is running.
@@ -273,6 +279,11 @@ pub struct DeviceView {
 pub struct Setup {
     /// Root of the library to sync (the sync folder is created inside it).
     pub library_root: PathBuf,
+    /// The account's notebooks, or one vault's.
+    pub scope: Scope,
+    /// Device id to use instead of a new one. A vault passes the device's id in the main account,
+    /// so that removing the device there can reach the vault too (protocol §12e).
+    pub device_id: Option<String>,
     /// Server base URL (stored for display and reconnects).
     pub server_url: String,
     /// Account id on that server.
@@ -307,13 +318,18 @@ pub struct ReconcileReport {
 /// The sync engine for one library and one sync device. Single writer: run
 /// one reconcile at a time (the app does so from one worker thread).
 ///
-/// Create it with [`SyncEngine::create_account`] (first device),
-/// [`SyncEngine::begin_pairing`] / [`SyncEngine::enroll_with_recovery`]
-/// (additional devices) or [`SyncEngine::open`] (existing setup), then call
-/// [`SyncEngine::reconcile`] repeatedly.
+/// Create it with [`SyncEngine::connect`] (an account, on any device),
+/// [`SyncEngine::open_vault`] (a vault) or [`SyncEngine::open`] (an existing
+/// setup), then call [`SyncEngine::reconcile`] repeatedly.
 pub struct SyncEngine<T: SyncTransport> {
     /// Durable sync state and operation log.
     pub store: SyncStore,
+    /// Root of the library this engine syncs.
+    library_root: PathBuf,
+    /// Which notebooks this engine syncs.
+    scope: Scope,
+    /// Notebook owners, reloaded under the library lock in every local phase.
+    owners: NotebookOwners,
     transport: T,
     secrets: Box<dyn SecretStore>,
     keys: DeviceKeys,
@@ -381,9 +397,15 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// so a crash right after setup never leaves a registered device whose
     /// private keys are lost.
     fn new_device(setup: &Setup, secrets: &dyn SecretStore) -> Result<DeviceKeys> {
-        let keys = DeviceKeys::generate(Uuid::new_v4().hyphenated().to_string())?;
-        secrets.set(DEVICE_SECRET, &keys.to_secret_string())?;
-        let _ = setup;
+        let id = setup
+            .device_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().hyphenated().to_string());
+        let keys = DeviceKeys::generate(id)?;
+        secrets.set(
+            &setup.scope.secret_name(DEVICE_SECRET),
+            &keys.to_secret_string(),
+        )?;
         Ok(keys)
     }
 
@@ -404,19 +426,19 @@ impl<T: SyncTransport> SyncEngine<T> {
 
     /// Builds the engine from its parts (common tail of every constructor).
     fn assemble(
+        library_root: PathBuf,
+        scope: Scope,
         store: SyncStore,
         transport: T,
         secrets: Box<dyn SecretStore>,
         keys: DeviceKeys,
     ) -> Self {
         let my_uuid = parse_uuid(&keys.device_id).unwrap_or_default();
-        let phase = if store.state.enrolled {
-            Phase::Idle
-        } else {
-            Phase::AwaitingApproval
-        };
         Self {
             store,
+            library_root,
+            scope,
+            owners: NotebookOwners::default(),
             transport,
             secrets,
             keys,
@@ -431,7 +453,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             pending_ids: None,
             pull_done: false,
             ack_due: None,
-            phase,
+            phase: Phase::Idle,
             last_error: None,
             conflicts: HashMap::new(),
             attempt: 0,
@@ -439,25 +461,88 @@ impl<T: SyncTransport> SyncEngine<T> {
         }
     }
 
-    /// First device of an account: creates the account keys. Returns the
-    /// engine and the recovery code, which must be shown to the user once and
-    /// is not stored anywhere.
-    pub fn create_account(
-        setup: Setup,
-        mut transport: T,
-        secrets: Box<dyn SecretStore>,
-    ) -> Result<(Self, String)> {
-        if SyncStore::exists(&setup.library_root) {
+    /// Connects a device to a signed-in account, which is all that adding a device takes: the
+    /// first device creates the keys and stores the root secret on the server, and later devices
+    /// fetch it. Fails with [`SyncError::NeedsRecoveryCode`] for an account that has keys but no
+    /// stored copy; [`SyncEngine::enroll_with_recovery`] then stores one.
+    pub fn connect(setup: Setup, mut transport: T, secrets: Box<dyn SecretStore>) -> Result<Self> {
+        Self::require_new(&setup)?;
+        if let Some(doc) = transport.account_key_get()? {
+            let root = Self::root_from_doc(&doc)?;
+            if transport.keylog_get(0)?.next_index == 0 {
+                return Self::create_with_root(setup, transport, secrets, &root);
+            }
+            return Self::enroll_with_root(setup, transport, secrets, &root);
+        }
+        if transport.keylog_get(0)?.next_index != 0 {
+            return Err(SyncError::NeedsRecoveryCode);
+        }
+        let root = RootSecret::generate()?;
+        let doc = AccountKeyDocument {
+            key: base64url::encode(&root.to_bytes()),
+        };
+        // Stored before the key log exists: a crash in between leaves a key the next attempt
+        // reuses, and two first devices settle on the one the server took.
+        match transport.account_key_put(&doc) {
+            Ok(()) => Self::create_with_root(setup, transport, secrets, &root),
+            Err(e) if e.code() == Some(ErrorCode::Conflict) => {
+                let doc = transport.account_key_get()?.ok_or(e)?;
+                let root = Self::root_from_doc(&doc)?;
+                if transport.keylog_get(0)?.next_index == 0 {
+                    Self::create_with_root(setup, transport, secrets, &root)
+                } else {
+                    Self::enroll_with_root(setup, transport, secrets, &root)
+                }
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn root_from_doc(doc: &AccountKeyDocument) -> Result<RootSecret> {
+        Ok(RootSecret::from_bytes(crypto::decode32(&doc.key)?))
+    }
+
+    /// Refuses to set up over an existing sync folder.
+    fn require_new(setup: &Setup) -> Result<()> {
+        if setup
+            .scope
+            .dir(&setup.library_root)
+            .join("state.json")
+            .exists()
+        {
             return Err(SyncError::Invalid(
                 "sync is already set up for this library".into(),
             ));
         }
+        Ok(())
+    }
+
+    /// Starts a new key log with a fresh root secret. Returns the engine and the recovery code,
+    /// which is not stored anywhere. Tools and tests use it; the app calls
+    /// [`SyncEngine::connect`] for an account and [`SyncEngine::create_with_root`] for a vault.
+    pub fn create_account(
+        setup: Setup,
+        transport: T,
+        secrets: Box<dyn SecretStore>,
+    ) -> Result<(Self, String)> {
+        let root = RootSecret::generate()?;
+        let e = Self::create_with_root(setup, transport, secrets, &root)?;
+        Ok((e, root.recovery_code()))
+    }
+
+    /// First device of an account or vault: starts the key log from `root`.
+    pub fn create_with_root(
+        setup: Setup,
+        mut transport: T,
+        secrets: Box<dyn SecretStore>,
+        root: &RootSecret,
+    ) -> Result<Self> {
+        Self::require_new(&setup)?;
         if transport.keylog_get(0)?.next_index != 0 {
             return Err(SyncError::AccountHasKeys);
         }
         let keys = Self::new_device(&setup, secrets.as_ref())?;
         Self::register(&mut transport, &keys, &setup.label)?;
-        let root = RootSecret::generate()?;
         let rec_pk = x25519_dalek::PublicKey::from(&root.recovery_dh()).to_bytes();
         let k1 = EpochKey::generate()?;
         let entry = keylog::make_entry(
@@ -485,11 +570,18 @@ impl<T: SyncTransport> SyncEngine<T> {
             &setup.label,
         );
         state.enrolled = true;
-        let store = SyncStore::create(&setup.library_root, state)?;
-        let mut e = Self::assemble(store, transport, secrets, keys);
+        let store = SyncStore::create(&setup.scope.dir(&setup.library_root), state)?;
+        let mut e = Self::assemble(
+            setup.library_root,
+            setup.scope,
+            store,
+            transport,
+            secrets,
+            keys,
+        );
         e.refresh_keylog()?;
-        e.event("account created; this device is the first member");
-        Ok((e, root.recovery_code()))
+        e.event("key log created; this device is the first member");
+        Ok(e)
     }
 
     /// Appends a signed key-log entry at `index` (fails with `conflict` if the
@@ -502,19 +594,68 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
-    /// Adds this device with the recovery code (no other device needed).
+    /// Adds this device to an account with its recovery code, and stores the root secret on the
+    /// server so later devices need only sign in. For accounts set up before sign-in-only sync.
+    /// Refuses a vault: its root must never reach the server outside its lock.
     pub fn enroll_with_recovery(
         setup: Setup,
         mut transport: T,
         secrets: Box<dyn SecretStore>,
         code: &str,
     ) -> Result<Self> {
-        if SyncStore::exists(&setup.library_root) {
+        if setup.scope != Scope::Account {
             return Err(SyncError::Invalid(
-                "sync is already set up for this library".into(),
+                "a vault's recovery code unlocks it through the vault".into(),
             ));
         }
+        Self::require_new(&setup)?;
         let root = RootSecret::parse_recovery_code(code)?;
+        let acct = root.account_signing_key().verifying_key().to_bytes();
+        let raw = Self::fetch_keylog(&mut transport, Vec::new())?;
+        if raw.is_empty() {
+            return Err(SyncError::AccountHasNoKeys);
+        }
+        // checked first, so a wrong code can't store a key for this account
+        keylog::verify_log(&raw, Some(&acct), None)?;
+        let doc = AccountKeyDocument {
+            key: base64url::encode(&root.to_bytes()),
+        };
+        match transport.account_key_put(&doc) {
+            Ok(()) => {}
+            Err(e) if e.code() == Some(ErrorCode::Conflict) => {}
+            Err(e) => return Err(e.into()),
+        }
+        Self::enroll_with_root(setup, transport, secrets, &root)
+    }
+
+    /// Starts a vault on this device from its root secret: joins its key log, or starts one if
+    /// the device that created the vault never got that far.
+    pub fn open_vault(
+        setup: Setup,
+        mut transport: T,
+        secrets: Box<dyn SecretStore>,
+        root: &RootSecret,
+    ) -> Result<Self> {
+        if !matches!(setup.scope, Scope::Vault(_)) {
+            return Err(SyncError::Invalid("not a vault".into()));
+        }
+        if transport.keylog_get(0)?.next_index == 0 {
+            Self::create_with_root(setup, transport, secrets, root)
+        } else {
+            Self::enroll_with_root(setup, transport, secrets, root)
+        }
+    }
+
+    /// Adds this device to an account or vault whose root secret it holds. The whole key log must
+    /// verify against that root, so a server can't pass off another key log, and a lock the
+    /// server swapped doesn't get as far as a new device.
+    pub fn enroll_with_root(
+        setup: Setup,
+        mut transport: T,
+        secrets: Box<dyn SecretStore>,
+        root: &RootSecret,
+    ) -> Result<Self> {
+        Self::require_new(&setup)?;
         let acct = root.account_signing_key().verifying_key().to_bytes();
         let raw = Self::fetch_keylog(&mut transport, Vec::new())?;
         if raw.is_empty() {
@@ -551,50 +692,40 @@ impl<T: SyncTransport> SyncEngine<T> {
             len: m.len,
             head: m.head.clone(),
         });
-        let store = SyncStore::create(&setup.library_root, state)?;
-        let mut e = Self::assemble(store, transport, secrets, keys);
+        let store = SyncStore::create(&setup.scope.dir(&setup.library_root), state)?;
+        let mut e = Self::assemble(
+            setup.library_root,
+            setup.scope,
+            store,
+            transport,
+            secrets,
+            keys,
+        );
         e.refresh_keylog()?;
-        e.event("device added with the recovery code");
+        e.event("device added to the key log");
         Ok(e)
     }
 
-    /// New device, pairing flow step 1: registers keys and returns the code
-    /// to show on this screen. A trusted device approves it with
-    /// [`SyncEngine::approve_device`]; then [`SyncEngine::poll_enrollment`].
-    pub fn begin_pairing(
-        setup: Setup,
-        mut transport: T,
-        secrets: Box<dyn SecretStore>,
-    ) -> Result<(Self, String)> {
-        if SyncStore::exists(&setup.library_root) {
-            return Err(SyncError::Invalid(
-                "sync is already set up for this library".into(),
-            ));
-        }
-        if transport.keylog_get(0)?.next_index == 0 {
-            return Err(SyncError::AccountHasNoKeys);
-        }
-        let keys = Self::new_device(&setup, secrets.as_ref())?;
-        Self::register(&mut transport, &keys, &setup.label)?;
-        let state = SyncState::new(
-            &setup.server_url,
-            &setup.account_id,
-            &keys.device_id,
-            &setup.label,
-        );
-        let store = SyncStore::create(&setup.library_root, state)?;
-        let code = pairing_code(&keys.device_id, &keys.fingerprint());
-        let mut e = Self::assemble(store, transport, secrets, keys);
-        e.event("pairing started; waiting for approval");
-        Ok((e, code))
+    /// Opens the account's existing sync setup.
+    pub fn open(library_root: &Path, transport: T, secrets: Box<dyn SecretStore>) -> Result<Self> {
+        Self::open_scope(library_root, Scope::Account, transport, secrets)
     }
 
-    /// Opens an existing sync setup.
-    pub fn open(library_root: &Path, transport: T, secrets: Box<dyn SecretStore>) -> Result<Self> {
-        let mut store = SyncStore::open(library_root)?;
-        let raw = secrets.get(DEVICE_SECRET)?.ok_or_else(|| {
-            SyncError::Invalid("this device's sync keys are missing from the secret store".into())
-        })?;
+    /// Opens the existing sync setup of an account or vault.
+    pub fn open_scope(
+        library_root: &Path,
+        scope: Scope,
+        transport: T,
+        secrets: Box<dyn SecretStore>,
+    ) -> Result<Self> {
+        let mut store = SyncStore::open_at(&scope.dir(library_root))?;
+        let raw = secrets
+            .get(&scope.secret_name(DEVICE_SECRET))?
+            .ok_or_else(|| {
+                SyncError::Invalid(
+                    "this device's sync keys are missing from the secret store".into(),
+                )
+            })?;
         let keys = DeviceKeys::from_secret_string(&raw)?;
         if keys.device_id != store.state.device_id {
             return Err(SyncError::Invalid(
@@ -620,112 +751,13 @@ impl<T: SyncTransport> SyncEngine<T> {
         if let Some(d) = &store.oplog.damaged {
             return Err(SyncError::Integrity(format!("sync operation log: {d}")));
         }
-        Ok(Self::assemble(store, transport, secrets, keys))
-    }
-
-    /// New device, pairing flow step 3: checks whether a trusted device has
-    /// certified this device. Returns the short authentication string to
-    /// compare with the approving screen once enrolled.
-    pub fn poll_enrollment(&mut self) -> Result<Option<String>> {
-        self.refresh_keylog()?;
-        let m = self.membership.as_ref().expect("refreshed");
-        let Some(me) = m.devices.get(&self.keys.device_id) else {
-            return Ok(None);
-        };
-        if me.cert.sign_pk()? != self.keys.sign_pk() || me.cert.dh_pk()? != self.keys.dh_pk() {
-            return Err(SyncError::Integrity(
-                "the key log certifies different keys for this device id".into(),
-            ));
-        }
-        if !me.active {
-            return Err(SyncError::Revoked);
-        }
-        let sas = crypto::short_auth_string(&m.account_pk, &self.keys.fingerprint());
-        if !self.store.state.enrolled {
-            self.store.state.enrolled = true;
-            self.store.save()?;
-            self.phase = Phase::Idle;
-            self.event("this device was approved");
-        }
-        Ok(Some(sas))
-    }
-
-    /// Trusted device: approves a device that shows `code`. The registered
-    /// keys must match the code's fingerprint (so the server cannot swap
-    /// keys). Returns the short authentication string both screens show.
-    pub fn approve_device(&mut self, code: &str, label: &str) -> Result<String> {
-        self.require_member()?;
-        let (prefix, fp) = parse_pairing_code(code)
-            .ok_or_else(|| SyncError::Invalid("that pairing code is not valid".into()))?;
-        let listed = self.transport.list_devices()?;
-        let mut found = None;
-        for d in listed.devices.iter().filter(|d| !d.revoked) {
-            if !d
-                .device_id
-                .as_str()
-                .replace('-', "")
-                .to_uppercase()
-                .starts_with(&prefix)
-            {
-                continue;
-            }
-            let (Ok(s), Ok(x)) = (
-                crypto::decode32(&d.signing_public_key),
-                crypto::decode32(&d.encryption_public_key),
-            ) else {
-                continue;
-            };
-            if crypto::fingerprint(&s, &x) == fp {
-                found = Some((d.device_id.as_str().to_string(), s, x));
-            }
-        }
-        let (id, s, x) = found.ok_or_else(|| {
-            SyncError::Invalid(
-                "no waiting device matches that code (keys differ or it is not registered)".into(),
-            )
-        })?;
-        for attempt in 0..3 {
-            self.refresh_keylog()?;
-            let m = self.membership.clone().expect("refreshed");
-            if m.devices.contains_key(&id) {
-                break;
-            }
-            let mut grants = Vec::new();
-            for (epoch, k) in &self.epoch_keys {
-                grants.push(keylog::grant(*epoch, k, &id, &x)?);
-            }
-            let cert = DeviceCert {
-                device_id: id.clone(),
-                sign_pk: base64url::encode(&s),
-                dh_pk: base64url::encode(&x),
-                label: label.to_string(),
-            };
-            let entry = keylog::make_entry(
-                m.len,
-                &m.head,
-                EntryKind::AddDevice {
-                    device: cert,
-                    grants,
-                },
-                &self.keys.device_id.clone(),
-                &self.keys.signing,
-            );
-            match Self::append_entry(&mut self.transport, m.len, &entry) {
-                Ok(()) => break,
-                Err(SyncError::Transport(TransportError::Api(b)))
-                    if b.code == ErrorCode::Conflict && attempt < 2 =>
-                {
-                    continue
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        self.refresh_keylog()?;
-        let account_pk = self.membership.as_ref().expect("refreshed").account_pk;
-        self.event("approved a new device");
-        Ok(crypto::short_auth_string(
-            &account_pk,
-            &crypto::fingerprint(&s, &x),
+        Ok(Self::assemble(
+            library_root.to_path_buf(),
+            scope,
+            store,
+            transport,
+            secrets,
+            keys,
         ))
     }
 
@@ -889,9 +921,64 @@ impl<T: SyncTransport> SyncEngine<T> {
 
     /// Forgets the sync setup on this device (keys and sync metadata). The
     /// library and its notes are untouched.
-    pub fn disconnect(self, library_root: &Path) -> Result<()> {
-        self.secrets.delete(DEVICE_SECRET)?;
-        std::fs::remove_dir_all(SyncStore::dir_for(library_root))?;
+    pub fn disconnect(self) -> Result<()> {
+        self.secrets
+            .delete(&self.scope.secret_name(DEVICE_SECRET))?;
+        std::fs::remove_dir_all(self.scope.dir(&self.library_root))?;
+        Ok(())
+    }
+
+    /// Whether `root` is the root secret this key log was started from. Lets a caller check a
+    /// recovery code before acting on it.
+    pub fn account_key_is(&self, root: &RootSecret) -> bool {
+        self.membership
+            .as_ref()
+            .is_some_and(|m| m.account_pk == root.account_signing_key().verifying_key().to_bytes())
+    }
+
+    /// This engine's scope.
+    pub fn scope(&self) -> &Scope {
+        &self.scope
+    }
+
+    /// Whether this engine syncs `notebook`, by the owners read in the current local phase.
+    fn in_scope(&self, notebook: &Uuid) -> bool {
+        self.scope.contains(self.owners.owner(notebook))
+    }
+
+    /// Rereads the notebook owners. Local phases call this with the library lock held, the lock
+    /// that assignments are made under, so a notebook can't reach the wrong engine.
+    fn load_owners(&mut self) -> Result<()> {
+        self.owners = NotebookOwners::load(&self.library_root)?;
+        Ok(())
+    }
+
+    /// Lets the library release journal entries every engine here has copied. Each engine only
+    /// sees its own notebooks, so one engine's position says nothing about another's.
+    fn release_journal(&self, lib: &mut Library) -> Result<()> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Position {
+            ingested_lib_seq: u64,
+        }
+        let mut floor = self.store.state.ingested_lib_seq;
+        let mut dirs = vec![Scope::Account.dir(&self.library_root)];
+        for id in crate::vault::local_vaults(&self.library_root) {
+            dirs.push(Scope::Vault(id).dir(&self.library_root));
+        }
+        for d in dirs
+            .iter()
+            .filter(|d| **d != self.scope.dir(&self.library_root))
+        {
+            // an engine with no state yet holds nothing back
+            let Ok(raw) = std::fs::read(d.join("state.json")) else {
+                continue;
+            };
+            let p: Position = serde_json::from_slice(&raw)
+                .map_err(|e| SyncError::Integrity(format!("sync state: {e}")))?;
+            floor = floor.min(p.ingested_lib_seq);
+        }
+        lib.mark_uploaded(floor)?;
         Ok(())
     }
 
@@ -1164,19 +1251,23 @@ impl<T: SyncTransport> SyncEngine<T> {
         // A permanent delete only ever meant "erased on this device". Connecting
         // starts over with what the account holds, so an old one doesn't apply:
         // the notebooks would arrive, and be quietly dropped.
-        for id in lib.purged_notebooks() {
-            lib.forget_purge(id);
+        if self.scope == Scope::Account {
+            for id in lib.purged_notebooks() {
+                lib.forget_purge(id);
+            }
         }
         let mut n = 0;
         let at_seq = lib.last_seq();
         for nb_id in lib.notebook_ids() {
-            n += self.seed_notebook(lib, nb_id)?;
+            if self.in_scope(&nb_id) {
+                n += self.seed_notebook(lib, nb_id)?;
+            }
         }
         self.store.state.seeded = true;
         self.store.state.ingested_lib_seq = at_seq;
         self.store.save()?;
         lib.set_sync_enabled(true)?;
-        lib.mark_uploaded(at_seq)?;
+        self.release_journal(lib)?;
         self.event(format!("seeded {n} operations from existing notebooks"));
         Ok(n)
     }
@@ -1192,6 +1283,9 @@ impl<T: SyncTransport> SyncEngine<T> {
         let mut last = from;
         for op in ops {
             last = op.local_sequence;
+            if !self.in_scope(&op.body.notebook_id()) {
+                continue;
+            }
             if let DocumentOperation::NotebookPurged { notebook_id } = op.body {
                 // never synced, so there is nothing to delete; or this is the
                 // install of another device's purge, which must not echo
@@ -1207,7 +1301,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         // before the library may release its journal entries
         self.store.state.ingested_lib_seq = last;
         self.store.save()?;
-        lib.mark_uploaded(last)?;
+        self.release_journal(lib)?;
         Ok(n)
     }
 
@@ -1216,6 +1310,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         if !self.store.state.enrolled {
             return Err(SyncError::NotEnrolled);
         }
+        self.load_owners()?;
         let mut n = 0;
         if !self.store.state.seeded {
             n += self.seed(lib)?;
@@ -1227,7 +1322,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         // through the journal instead, and remote notebooks are in the log.
         let mut seeded_any = false;
         for nb_id in lib.notebook_ids() {
-            if self.store.oplog.indexes_for(&nb_id).is_empty() {
+            if self.in_scope(&nb_id) && self.store.oplog.indexes_for(&nb_id).is_empty() {
                 let k = self.seed_notebook(lib, nb_id)?;
                 self.event(format!(
                     "seeded {k} operations for a notebook added without history"
@@ -1242,6 +1337,9 @@ impl<T: SyncTransport> SyncEngine<T> {
         // Assets the library references but does not hold (a download that
         // failed earlier, possibly before a restart): fetch them next exchange.
         for nb_id in lib.notebook_ids() {
+            if !self.in_scope(&nb_id) {
+                continue;
+            }
             for a in lib.notebook(nb_id)?.assets.clone() {
                 if !lib.has_asset(nb_id, &a.sha256) {
                     self.missing_blobs.insert((nb_id, a.sha256));
@@ -2384,10 +2482,26 @@ impl<T: SyncTransport> SyncEngine<T> {
 
     /// Phase 3 (library locked): installs merged notebooks.
     pub fn apply(&mut self, lib: &mut Library, report: &mut ReconcileReport) -> Result<()> {
+        self.load_owners()?;
         report.ingested += self.ingest(lib)?;
         // ingest first: local edits made during the exchange must be part of
         // the merged state we install, or the install would hide them
         let dirty: Vec<Uuid> = self.store.state.dirty.iter().copied().collect();
+        // A vault's notebooks are claimed before they enter the library, or the main engine
+        // would upload a notebook arriving from a vault under the account's key.
+        if let Scope::Vault(id) = &self.scope {
+            let new: Vec<Uuid> = dirty
+                .iter()
+                .filter(|nb| self.owners.owner(nb).is_none())
+                .copied()
+                .collect();
+            if !new.is_empty() {
+                for nb in new {
+                    self.owners.notebooks.insert(nb, id.clone());
+                }
+                self.owners.save(&self.library_root)?;
+            }
+        }
         for nb in dirty {
             // The account decides, not this library's purges: those fade with
             // the journal, and a restore elsewhere has to overrule them.
@@ -2549,7 +2663,6 @@ impl<T: SyncTransport> SyncEngine<T> {
                     },
                     SyncError::Transport(TransportError::ResponseLost) => Phase::Backoff,
                     SyncError::Revoked => Phase::Revoked,
-                    SyncError::NotEnrolled => Phase::AwaitingApproval,
                     SyncError::UpgradeRequired(_) => Phase::NeedsUpgrade,
                     SyncError::Integrity(_) | SyncError::KeyLog(_) => Phase::IntegrityAlert,
                     _ => Phase::Error,
@@ -2740,33 +2853,6 @@ fn short_error(e: &SyncError) -> String {
     }
 }
 
-/// `XXXXXXXX-XXXX-XXXX-XXXX-XXXX`: the first 8 hex digits of the device id
-/// followed by the 64-bit key fingerprint.
-pub fn pairing_code(device_id: &str, fingerprint: &str) -> String {
-    let id: String = device_id
-        .replace('-', "")
-        .to_uppercase()
-        .chars()
-        .take(8)
-        .collect();
-    format!("{id}-{fingerprint}")
-}
-
-/// Parses a pairing code typed by a person (case, dashes and spaces ignored)
-/// into the device-id prefix and the formatted fingerprint.
-pub fn parse_pairing_code(code: &str) -> Option<(String, String)> {
-    let c: String = code
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .collect::<String>()
-        .to_uppercase();
-    if c.len() != 24 {
-        return None;
-    }
-    let fp = format!("{}-{}-{}-{}", &c[8..12], &c[12..16], &c[16..20], &c[20..24]);
-    Some((c[..8].to_string(), fp))
-}
-
 /// Deterministic id for chunk `i` of a split operation, so re-ingesting the
 /// same journal operation always yields the same chunk ids.
 fn derived_id(id: Uuid, i: usize) -> Uuid {
@@ -2868,22 +2954,4 @@ fn parse_checkpoint(b: &[u8]) -> Option<Vec<(OpMeta, Vec<u8>)>> {
         out.push((meta, rec));
     }
     (i == b.len()).then_some(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pairing_code_round_trip() {
-        let code = pairing_code(
-            "3f2a9c1e-0000-4000-8000-000000000000",
-            "ABCD-EF01-2345-6789",
-        );
-        assert_eq!(code, "3F2A9C1E-ABCD-EF01-2345-6789");
-        let (p, fp) = parse_pairing_code(&code.to_lowercase()).unwrap();
-        assert_eq!(p, "3F2A9C1E");
-        assert_eq!(fp, "ABCD-EF01-2345-6789");
-        assert!(parse_pairing_code("nope").is_none());
-    }
 }

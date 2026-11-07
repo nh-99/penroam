@@ -16,10 +16,11 @@
 use penroam_sync_protocol::framing::decode_json_batch;
 use penroam_sync_protocol::framing::FrameItem;
 use penroam_sync_protocol::{
-    AckRequest, BlobId, BlobPutResponse, CheckpointRecord, DeviceId, DeviceListResponse,
-    DeviceRegistrationRequest, DeviceRegistrationResponse, ErrorBody, ErrorCode,
-    KeyLogAppendRequest, KeyLogAppendResponse, KeyLogPage, Limits, PullOpsRequest, PullOpsResponse,
-    PulledOp, PushOpsResponse, ServerMeta,
+    AccountId, AccountKeyDocument, AckRequest, BlobId, BlobPutResponse, CheckpointRecord,
+    CreateVaultRequest, DeviceId, DeviceListResponse, DeviceRegistrationRequest,
+    DeviceRegistrationResponse, ErrorBody, ErrorCode, KeyLogAppendRequest, KeyLogAppendResponse,
+    KeyLogPage, Limits, PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse, ServerMeta,
+    SessionTokens, UpdateVaultLockRequest, VaultListResponse, VaultRecord,
 };
 
 /// A transport failure, classified for the retry policy.
@@ -89,8 +90,8 @@ pub trait SyncTransport: Send {
         &mut self,
         req: &DeviceRegistrationRequest,
     ) -> TResult<DeviceRegistrationResponse>;
-    /// `GET /v1/devices`: what the server has registered. Untrusted: used only
-    /// to find a pairing device's keys, which are then checked against its code.
+    /// `GET /v1/devices`: what the server has registered. Untrusted: membership comes from the
+    /// key log.
     fn list_devices(&mut self) -> TResult<DeviceListResponse>;
     /// `DELETE /v1/devices/{id}`: the server stops accepting that device's writes.
     fn revoke_device(&mut self, id: &DeviceId) -> TResult<()>;
@@ -118,6 +119,21 @@ pub trait SyncTransport: Send {
     fn checkpoint_put(&mut self, rec: &CheckpointRecord) -> TResult<()>;
     /// `GET /v1/checkpoints/latest`; `None` when the account has none yet.
     fn checkpoint_latest(&mut self) -> TResult<Option<CheckpointRecord>>;
+    /// `GET /v1/account/key`: the stored root secret; `None` when nothing is stored. Vault
+    /// accounts always fail with `forbidden`.
+    fn account_key_get(&mut self) -> TResult<Option<AccountKeyDocument>>;
+    /// `PUT /v1/account/key`: stores the root secret once; `conflict` if one is already stored.
+    fn account_key_put(&mut self, doc: &AccountKeyDocument) -> TResult<()>;
+    /// `GET /v1/vaults`: the account's vaults. Their contents are not trusted until a lock opens.
+    fn vault_list(&mut self) -> TResult<VaultListResponse>;
+    /// `POST /v1/vaults`: creates a vault and its hidden account.
+    fn vault_create(&mut self, req: &CreateVaultRequest) -> TResult<VaultRecord>;
+    /// `PUT /v1/vaults/{id}`: replaces a vault's passphrase lock.
+    fn vault_set_lock(&mut self, id: &AccountId, req: &UpdateVaultLockRequest) -> TResult<()>;
+    /// `DELETE /v1/vaults/{id}`: erases a vault's cloud copy.
+    fn vault_delete(&mut self, id: &AccountId) -> TResult<()>;
+    /// `POST /v1/vaults/{id}/session`: an account session for the vault's own account.
+    fn vault_session(&mut self, id: &AccountId) -> TResult<SessionTokens>;
 }
 
 /// Pairs a pull control document with its frame and rejects a frame whose
@@ -295,6 +311,50 @@ mod in_process {
                 Err(RequestError::Api(b)) if b.code == ErrorCode::NotFound => Ok(None),
                 Err(e) => Err(map(e)),
             }
+        }
+        fn account_key_get(&mut self) -> TResult<Option<AccountKeyDocument>> {
+            self.up()?;
+            match self.server.account_key_get(&self.account) {
+                Ok(d) => Ok(Some(d)),
+                Err(RequestError::Api(b)) if b.code == ErrorCode::NotFound => Ok(None),
+                Err(e) => Err(map(e)),
+            }
+        }
+        fn account_key_put(&mut self, doc: &AccountKeyDocument) -> TResult<()> {
+            self.up()?;
+            self.server.account_key_put(&self.account, doc).map_err(map)
+        }
+        fn vault_list(&mut self) -> TResult<VaultListResponse> {
+            self.up()?;
+            self.server.vault_list(&self.account).map_err(map)
+        }
+        fn vault_create(&mut self, req: &CreateVaultRequest) -> TResult<VaultRecord> {
+            self.up()?;
+            self.server.vault_create(&self.account, req).map_err(map)
+        }
+        fn vault_set_lock(&mut self, id: &AccountId, req: &UpdateVaultLockRequest) -> TResult<()> {
+            self.up()?;
+            self.server
+                .vault_set_lock(&self.account, id, req)
+                .map_err(map)
+        }
+        fn vault_delete(&mut self, id: &AccountId) -> TResult<()> {
+            self.up()?;
+            self.server.vault_delete(&self.account, id).map_err(map)
+        }
+        fn vault_session(&mut self, id: &AccountId) -> TResult<SessionTokens> {
+            self.up()?;
+            if !self.server.vault_owned_by(&self.account, id) {
+                return Err(TransportError::Protocol("unknown vault".into()));
+            }
+            // the in-process server has no tokens: a caller switches `account` to the vault
+            Ok(SessionTokens {
+                account_id: id.clone(),
+                device_id: None,
+                access_token: String::new(),
+                expires_in_s: 3600,
+                refresh_token: String::new(),
+            })
         }
     }
 }
@@ -647,6 +707,58 @@ mod http {
                 Err(e) => Err(e),
             }
         }
+        fn account_key_get(&mut self) -> TResult<Option<AccountKeyDocument>> {
+            match self.get_json(routes::ACCOUNT_KEY) {
+                Ok(d) => Ok(Some(d)),
+                Err(TransportError::Api(b)) if b.code == ErrorCode::NotFound => Ok(None),
+                Err(e) => Err(e),
+            }
+        }
+        fn account_key_put(&mut self, doc: &AccountKeyDocument) -> TResult<()> {
+            let r = self
+                .agent
+                .put(self.url(routes::ACCOUNT_KEY))
+                .header("Authorization", self.auth())
+                .send_json(doc)
+                .map_err(net)?;
+            Self::finish(r, JSON_LIMIT).map(|_| ())
+        }
+        fn vault_list(&mut self) -> TResult<VaultListResponse> {
+            self.get_json(routes::VAULTS)
+        }
+        fn vault_create(&mut self, req: &CreateVaultRequest) -> TResult<VaultRecord> {
+            self.post_json(routes::VAULTS, req)?
+                .ok_or_else(|| TransportError::Protocol("empty vault response".into()))
+        }
+        fn vault_set_lock(&mut self, id: &AccountId, req: &UpdateVaultLockRequest) -> TResult<()> {
+            let r = self
+                .agent
+                .put(self.url(&vault_path(id)))
+                .header("Authorization", self.auth())
+                .send_json(req)
+                .map_err(net)?;
+            Self::finish(r, JSON_LIMIT).map(|_| ())
+        }
+        fn vault_delete(&mut self, id: &AccountId) -> TResult<()> {
+            let r = self
+                .agent
+                .delete(self.url(&vault_path(id)))
+                .header("Authorization", self.auth())
+                .call()
+                .map_err(net)?;
+            Self::finish(r, JSON_LIMIT).map(|_| ())
+        }
+        fn vault_session(&mut self, id: &AccountId) -> TResult<SessionTokens> {
+            self.post_json(
+                &format!("{}/session", vault_path(id)),
+                &serde_json::json!({}),
+            )?
+            .ok_or_else(|| TransportError::Protocol("empty session response".into()))
+        }
+    }
+
+    fn vault_path(id: &AccountId) -> String {
+        routes::VAULT.replace("{id}", id.as_str())
     }
 }
 

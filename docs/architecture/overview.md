@@ -79,7 +79,7 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   reads small `notebook.json` files. The search index (§5) is a separate, disposable SQLite
   file derived from them, never a source of truth.
 * **Permanent delete.** With sync on, a purge is an operation like any other, so it is queued
-  offline and every device erases its copy. Its operations stay in the account, encrypted, which
+  offline and every device erases its copy. Its operations stay in the account, which
   is what makes it recoverable: a `notebookRestored` from any device brings it back everywhere.
   `Replica::is_purged` decides what a device does, not the library's purge list, which only lasts
   as long as the journal retains it. Notebooks the account holds that aren't on this device are
@@ -125,6 +125,18 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   the browser. The plugin only talks to the store. The server looks every purchase up with the store
   itself, and the app finishes a store transaction only after the server has answered, so a crash
   or an outage can't lose a purchase.
+* **Accounts and vaults.** Connecting needs only a sign-in: the first device stores the account's
+  root secret on the server (`account-key.v1`), and later devices fetch it and add themselves to the
+  key log, so the server could read ordinary notebooks. A vault (`penroam_sync::vault`) holds
+  notebooks it couldn't: on the wire it's a hidden second account, and its root secret reaches the
+  server only wrapped with a passphrase. The app runs one more `SyncEngine` per vault unlocked on the
+  device, with its data under `<library>/sync/vaults/<id>/`. Keeping vaults as separate accounts
+  means a locked vault can't stall ordinary sync, whose causal delivery spans the whole account, and
+  a main-account checkpoint can't contain vault content. Each engine's `Scope` limits it to its own
+  notebooks, by `<library>/vault-notebooks.json`. That file is written under the library lock in the
+  same critical section that creates a notebook, because the main engine uploads whatever isn't
+  assigned elsewhere; it sits outside `sync/` so that disconnecting can't release vault notebooks to
+  the main account. The library releases a journal entry only when every engine has copied it.
 * **Sync engine.** `penroam-sync` keeps its own state under
   `<library>/sync/`: an append-only operation log of every synced operation (local and remote),
   parked and quarantined envelopes, and the verified key log pin. One reconcile has three phases

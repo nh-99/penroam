@@ -16,7 +16,7 @@ fn server() -> Arc<InMemoryServer> {
 }
 
 #[test]
-fn pairing_then_existing_notebooks_reach_the_new_device() {
+fn signing_in_brings_existing_notebooks_to_the_new_device() {
     let s = server();
     let acct = account(&s, "acct-1");
     let (mut a, _code) = Client::first(&s, &acct, "laptop");
@@ -31,7 +31,7 @@ fn pairing_then_existing_notebooks_reach_the_new_device() {
         (0..5).map(|i| stroke(i, 1.0, "#111111")).collect(),
     );
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "tablet", &mut a);
+    let mut b = Client::joined(&s, &acct, "tablet");
     b.sync().unwrap();
     assert_eq!(view(&mut a.lib), view(&mut b.lib));
     assert_eq!(ink_count(&mut b.lib, nb.id), 5);
@@ -51,7 +51,7 @@ fn offline_strokes_on_both_devices_converge_to_the_union() {
         .create_notebook("Shared", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     a.offline(true);
     b.offline(true);
@@ -84,7 +84,7 @@ fn concurrent_text_edits_keep_both_versions_until_resolved() {
         .unwrap();
     add(&mut a.lib, nb.id, p.id, vec![text(42, "original")]);
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     edit(
         &mut a.lib,
@@ -145,7 +145,7 @@ fn page_deleted_on_one_device_while_edited_on_the_other_keeps_the_edits() {
         .unwrap();
     a.lib.create_page(nb.id, None, None, None).unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     a.lib.delete_page(nb.id, p.id).unwrap();
     add(
@@ -189,7 +189,7 @@ fn lost_push_response_is_retried_without_duplicates() {
     assert_eq!(a.status().queued, 1, "not shown as uploaded");
     a.sync().unwrap();
     assert_eq!(s.op_count(&acct), p0 + 1, "the retry was a duplicate");
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     settle(&mut [&mut a, &mut b]);
     assert_eq!(ink_count(&mut b.lib, nb.id), 1, "applied once");
     assert!(a.status().up_to_date);
@@ -205,7 +205,7 @@ fn crash_after_pull_before_apply_and_lost_cursor_redelivery_are_safe() {
         .create_notebook("Crash", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     add(
         &mut a.lib,
@@ -250,7 +250,7 @@ fn large_asset_upload_interrupted_then_retried() {
         .create_notebook("Scans", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     let big: Vec<u8> = (0..25 * 1024 * 1024u32)
         .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
@@ -287,7 +287,7 @@ fn removed_device_cannot_write_and_keeps_local_notes() {
         .create_notebook("Team", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     let b_id = b.engine.device_id().to_string();
     a.engine.remove_device(&b_id).unwrap();
@@ -334,6 +334,8 @@ fn recovery_code_restores_access_on_a_new_device() {
     let r = penroam_sync::SyncEngine::enroll_with_recovery(
         penroam_sync::Setup {
             library_root: dir.path().to_path_buf(),
+            scope: penroam_sync::vault::Scope::Account,
+            device_id: None,
             server_url: "x".into(),
             account_id: acct.as_str().into(),
             label: "x".into(),
@@ -346,7 +348,7 @@ fn recovery_code_restores_access_on_a_new_device() {
 }
 
 #[test]
-fn server_registered_device_without_approval_gets_nothing() {
+fn server_registered_device_without_a_key_log_entry_gets_nothing() {
     let s = server();
     let acct = account(&s, "acct-10");
     let (mut a, _) = Client::first(&s, &acct, "a");
@@ -354,24 +356,6 @@ fn server_registered_device_without_approval_gets_nothing() {
         .create_notebook("Private", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    // two devices register during pairing: the real one and an injected one
-    let dir = tempfile::tempdir().unwrap();
-    let t = penroam_sync::transport::InProcessTransport::new(
-        s.clone(),
-        acct.clone(),
-        penroam_sync_protocol::DeviceId::new("x").unwrap(),
-    );
-    let (mut real, code) = penroam_sync::SyncEngine::begin_pairing(
-        penroam_sync::Setup {
-            library_root: dir.path().to_path_buf(),
-            server_url: "x".into(),
-            account_id: acct.as_str().into(),
-            label: "real".into(),
-        },
-        t,
-        Box::new(penroam_sync::FileSecretStore::new(dir.path().join("s"))),
-    )
-    .unwrap();
     let evil =
         penroam_sync::crypto::DeviceKeys::generate(uuid::Uuid::new_v4().to_string()).unwrap();
     s.register_device_keys(
@@ -384,14 +368,9 @@ fn server_registered_device_without_approval_gets_nothing() {
         },
     )
     .unwrap();
-    // a code naming the injected device's id but the real fingerprint is refused
-    let forged = penroam_sync::engine::pairing_code(&evil.device_id, &code[9..]);
-    assert!(a.engine.approve_device(&forged, "evil").is_err());
-    // the real code approves exactly the real device
-    a.engine.approve_device(&code, "real").unwrap();
-    assert!(real.poll_enrollment().unwrap().is_some());
+    a.sync().unwrap();
     let devices = a.engine.devices();
-    assert_eq!(devices.len(), 2);
+    assert_eq!(devices.len(), 1);
     assert!(devices.iter().all(|d| d.device_id != evil.device_id));
 }
 
@@ -406,7 +385,7 @@ fn tampered_envelopes_are_quarantined_and_never_applied() {
         .create_notebook("Signed", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     let before = view(&mut b.lib);
     // A's real keys sign an envelope whose ciphertext was not produced with the content key
@@ -468,7 +447,7 @@ fn newer_operation_schema_pauses_without_losing_anything() {
         .create_notebook("Future", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     let keys = penroam_sync::crypto::DeviceKeys::from_secret_string(
         &std::fs::read_to_string(a.root.join("sync-secrets/sync-device-keys.secret")).unwrap(),
@@ -518,7 +497,7 @@ fn long_offline_client_after_compaction_keeps_unsent_work() {
         .create_notebook("Old", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     b.engine.store.state.cursor = None; // as if B never pulled
     b.engine.store.save().unwrap();
@@ -550,7 +529,7 @@ fn rename_conflict_and_notebook_created_on_both_sides() {
         .create_notebook("Name", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     a.lib.rename_notebook(nb.id, "Name A").unwrap();
     b.lib.rename_notebook(nb.id, "Name B").unwrap();
@@ -575,7 +554,7 @@ fn notebook_imported_from_an_archive_after_setup_is_uploaded() {
     let acct = account(&s, "acct-15");
     let (mut a, _) = Client::first(&s, &acct, "a");
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     // a notebook made elsewhere, exported, then imported into A (no journal ops)
     let other = tempfile::tempdir().unwrap();
@@ -611,8 +590,8 @@ fn retry_after_an_epoch_change_is_still_a_duplicate() {
         .create_notebook("Epochs", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
-    let c = Client::paired(&s, &acct, "c", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
+    let c = Client::joined(&s, &acct, "c");
     b.sync().unwrap();
     add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
     a.engine.prepare(&mut a.lib).unwrap();
@@ -642,7 +621,7 @@ fn asset_download_that_failed_is_retried_after_a_restart() {
         .create_notebook("Scans", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     let asset = a
         .lib
@@ -666,7 +645,7 @@ fn same_archive_imported_on_two_devices_converges_without_conflicts() {
     let acct = account(&s, "acct-18");
     let (mut a, _) = Client::first(&s, &acct, "a");
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     let other = tempfile::tempdir().unwrap();
     let mut lib = penroam_storage::Library::open(other.path()).unwrap();
@@ -709,10 +688,10 @@ fn removed_device_can_rejoin_with_its_old_copy() {
         .unwrap();
     add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     a.engine.remove_device(b.engine.device_id()).unwrap();
-    // B keeps writing locally, then disconnects and pairs again as a new device
+    // B keeps writing locally, then disconnects and connects again as a new device
     add(&mut b.lib, nb.id, p.id, vec![stroke(2, 2.0, "#b91c1c")]);
     let Client {
         lib,
@@ -722,9 +701,9 @@ fn removed_device_can_rejoin_with_its_old_copy() {
         account,
         _dir,
     } = b;
-    engine.disconnect(&root).unwrap();
+    engine.disconnect().unwrap();
     drop(lib);
-    let mut b = common::Client::pair_existing(&server, &account, "b-again", root, _dir, &mut a);
+    let mut b = common::Client::join_existing(&server, &account, "b-again", root, _dir);
     settle(&mut [&mut a, &mut b]);
     assert_eq!(view(&mut a.lib), view(&mut b.lib));
     assert_eq!(
@@ -748,8 +727,8 @@ fn writes_from_a_removed_device_are_refused_even_if_the_server_delivers_them() {
         .create_notebook("Team", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
-    let mut c = Client::paired(&s, &acct, "c", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
+    let mut c = Client::joined(&s, &acct, "c");
     b.sync().unwrap();
     c.sync().unwrap();
     // C goes offline; B writes before its removal (must still reach C later)
@@ -813,7 +792,7 @@ fn long_offline_device_recovers_from_a_checkpoint_after_compaction() {
         .create_notebook("Old", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
     b.sync().unwrap();
     // B is away for a long time and keeps writing
     b.offline(true);
@@ -857,8 +836,8 @@ fn checkpoint_from_a_removed_device_is_not_trusted() {
         .create_notebook("Team", PageDefaults::default(), None)
         .unwrap();
     a.sync().unwrap();
-    let mut b = Client::paired(&s, &acct, "b", &mut a);
-    let mut c = Client::paired(&s, &acct, "c", &mut a);
+    let mut b = Client::joined(&s, &acct, "b");
+    let mut c = Client::joined(&s, &acct, "c");
     b.sync().unwrap();
     c.sync().unwrap();
     c.offline(true);
@@ -881,7 +860,7 @@ fn checkpoint_from_a_removed_device_is_not_trusted() {
     );
 }
 
-/// One notebook on `a`, already on a paired `b`.
+/// One notebook on `a`, already on a second device `b`.
 fn two_devices_with_a_notebook(
     s: &Arc<InMemoryServer>,
     name: &str,
@@ -894,7 +873,7 @@ fn two_devices_with_a_notebook(
         .unwrap();
     add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
     a.sync().unwrap();
-    let mut b = Client::paired(s, &acct, "b", &mut a);
+    let mut b = Client::joined(s, &acct, "b");
     b.sync().unwrap();
     (a, b, nb.id, p.id)
 }
@@ -916,9 +895,9 @@ fn reconnecting_brings_back_notebooks_permanently_deleted_here() {
         account,
         _dir,
     } = b;
-    engine.disconnect(&root).unwrap();
+    engine.disconnect().unwrap();
     drop(lib);
-    let mut b = common::Client::pair_existing(&server, &account, "b-again", root, _dir, &mut a);
+    let mut b = common::Client::join_existing(&server, &account, "b-again", root, _dir);
     settle(&mut [&mut a, &mut b]);
     assert_eq!(
         ink_count(&mut b.lib, nb),
@@ -1062,6 +1041,7 @@ fn only_an_erased_notebook_can_be_restored() {
 fn a_rename_reaches_every_device_and_keeps_keys_and_membership() {
     let s = server();
     let (mut a, mut b, nb, p) = two_devices_with_a_notebook(&s, "acct-rename");
+    a.sync().unwrap(); // b joined by itself: a learns of it from the key log
     let id = b.engine.device_id().to_string();
     let before = a
         .engine

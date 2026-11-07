@@ -5,10 +5,13 @@
 //!
 //! Key hierarchy, from the top:
 //!
-//! * [`RootSecret`] — 32 random bytes shown to the user once as the recovery
-//!   code. It derives the *account signing key* (signs the key-log genesis and
-//!   recovery enrollments) and the *recovery key-agreement key* (every epoch
-//!   key is also wrapped to it). Devices never store it.
+//! * [`RootSecret`] — 32 random bytes. An account stores it on the server so that
+//!   signing in is enough to add a device (`account-key.v1`). A vault's reaches
+//!   the server only inside a passphrase lock ([`crate::vault`]), and the user
+//!   sees it once as the vault's recovery code. It derives the *account signing
+//!   key* (signs the key-log genesis and enrollments) and the *recovery
+//!   key-agreement key* (every epoch key is also wrapped to it). Devices never
+//!   store it.
 //! * [`EpochKey`] — a random content key per epoch, shared with member devices
 //!   through the key log ([`crate::keylog`]). Per-notebook payload keys, blob
 //!   keys, routing aliases and blob ids are derived from it with HKDF/HMAC, so
@@ -109,8 +112,8 @@ fn hmac32(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
 
 // ------------------------------------------------------------ root secret --
 
-/// The account root secret. Only ever shown to the user as the recovery
-/// code; devices do not keep it. Everything account-level derives from it.
+/// The root secret of an account or a vault. Devices do not keep it. Everything
+/// at that level derives from it.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct RootSecret([u8; KEY_LEN]);
 
@@ -156,6 +159,12 @@ impl RootSecret {
             .map(|c| String::from_utf8(c.to_vec()).unwrap())
             .collect();
         format!("{CODE_PREFIX}-{}", groups.join("-"))
+    }
+
+    /// The secret bytes, for storing on the server (`account-key.v1`) or wrapping in a passphrase
+    /// lock. Never log the result.
+    pub fn to_bytes(&self) -> [u8; KEY_LEN] {
+        self.0
     }
 
     /// Parses a recovery code typed by a person: case, spaces and dashes are
@@ -210,6 +219,11 @@ impl RootSecret {
     /// public half, so the recovery code can always restore access.
     pub fn recovery_dh(&self) -> x25519_dalek::StaticSecret {
         x25519_dalek::StaticSecret::from(hkdf32(&self.0, b"penroam", b"penroam/recovery-dh/v1"))
+    }
+
+    /// The key a vault's name is encrypted under ([`crate::vault::seal_name`]).
+    pub fn vault_name_key(&self) -> [u8; KEY_LEN] {
+        hkdf32(&self.0, b"penroam", b"penroam/vault-name/v1")
     }
 }
 
@@ -300,22 +314,6 @@ pub fn fingerprint(sign_pk: &[u8; 32], dh_pk: &[u8; 32]) -> String {
         &hex[8..12],
         &hex[12..16]
     )
-}
-
-/// Six-digit short authentication string both screens show during pairing:
-/// it binds the account key the new device was given to the device keys the
-/// approving device certified. Equal digits = no substitution in between.
-pub fn short_auth_string(account_pk: &[u8; 32], device_fp: &str) -> String {
-    let h = sha256(
-        &[
-            b"penroam/sas/v1".as_slice(),
-            account_pk,
-            device_fp.as_bytes(),
-        ]
-        .concat(),
-    );
-    let n = u32::from_le_bytes(h[..4].try_into().unwrap()) % 1_000_000;
-    format!("{:03} {:03}", n / 1000, n % 1000)
 }
 
 /// Ed25519 signature over `domain ‖ msg`. The domain prefix keeps a signature

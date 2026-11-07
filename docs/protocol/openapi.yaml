@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: Penroam Sync Protocol
-  version: "1.4"
+  version: "1.6"
   description: |
-    HTTP mapping of the Penroam sync protocol (major 1, minor 4). The normative text is
+    HTTP mapping of the Penroam sync protocol (major 1, minor 6). The normative text is
     sync-protocol-v1.md in this directory; the Rust types are in the penroam-sync-protocol crate.
     This file is hand-written. A test in crates/penroam-sync-protocol checks that it lists
     every route the crate defines.
@@ -308,6 +308,29 @@ components:
         mobile_redirect_uri:
           description: Private-use URI scheme redirect for the mobile apps, e.g. ink.penroam.app://callback (1.2).
           type: string
+    AccountKeyDocument:
+      type: object
+      required: [key]
+      properties:
+        key: { type: string, description: Base64url root secret; opaque to the server }
+    VaultLock:
+      type: object
+      required: [kdf, memory_kib, iterations, parallelism, salt, wrapped_root]
+      properties:
+        kdf: { type: string, enum: [argon2id] }
+        memory_kib: { type: integer }
+        iterations: { type: integer }
+        parallelism: { type: integer }
+        salt: { type: string }
+        wrapped_root: { type: string }
+    VaultRecord:
+      type: object
+      required: [vault_id, lock, name, created_at_unix_s]
+      properties:
+        vault_id: { type: string }
+        lock: { $ref: "#/components/schemas/VaultLock" }
+        name: { type: string, description: Encrypted by the client }
+        created_at_unix_s: { type: integer }
     SessionTokens:
       type: object
       required: [account_id, access_token, expires_in_s, refresh_token]
@@ -658,6 +681,95 @@ paths:
                 properties:
                   url: { type: string, format: uri, maxLength: 2048 }
                   expires_in_s: { type: integer }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/account/key:
+    get:
+      summary: The account's stored root secret; account sessions only, refused for vaults (account-key.v1)
+      responses:
+        "200":
+          description: The stored key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountKeyDocument" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      summary: Store the root secret once; 409 conflict if one is stored, refused for vaults (account-key.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AccountKeyDocument" }
+      responses:
+        "204": { description: Stored }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/vaults:
+    get:
+      summary: The account's vaults, oldest first (vaults.v1)
+      responses:
+        "200":
+          description: Every vault of the account
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [vaults]
+                properties:
+                  vaults:
+                    type: array
+                    items: { $ref: "#/components/schemas/VaultRecord" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      summary: Create a vault and its hidden account (vaults.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lock, name]
+              properties:
+                lock: { $ref: "#/components/schemas/VaultLock" }
+                name: { type: string, description: Encrypted by the client }
+      responses:
+        "200":
+          description: The new vault
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VaultRecord" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/vaults/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    put:
+      summary: Replace a vault's passphrase lock (vaults.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lock]
+              properties:
+                lock: { $ref: "#/components/schemas/VaultLock" }
+      responses:
+        "204": { description: Replaced }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Erase a vault's cloud copy (vaults.v1)
+      responses:
+        "204": { description: Erased }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/vaults/{id}/session:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Get an account session for the vault's own account (vaults.v1)
+      responses:
+        "200":
+          description: A session scoped to the vault
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionTokens" }
         default: { $ref: "#/components/responses/Error" }
   /v1/account/store-purchase:
     post:

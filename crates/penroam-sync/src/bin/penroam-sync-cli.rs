@@ -11,10 +11,8 @@
 //! ```text
 //! penroam-sync-cli <profile> login <server-url> [--id-token-file <file>]
 //! penroam-sync-cli <profile> logout
-//! penroam-sync-cli <profile> create <server-url> <account>        # prints the recovery code
-//! penroam-sync-cli <profile> pair-begin <server-url> <account>    # prints the pairing code
-//! penroam-sync-cli <profile> pair-approve <code> [label]          # prints the comparison code
-//! penroam-sync-cli <profile> pair-poll                            # prints the comparison code or "waiting"
+//! penroam-sync-cli <profile> connect <server-url> <account>       # first device or a later one
+//! penroam-sync-cli <profile> create <server-url> <account>        # prints the recovery code; stores no key
 //! penroam-sync-cli <profile> recover <server-url> <account> <recovery-code>
 //! penroam-sync-cli <profile> new-notebook <title>                 # prints the notebook id
 //! penroam-sync-cli <profile> draw <notebook> <count> <x>          # strokes on the first page
@@ -50,6 +48,8 @@ fn lib_dir(p: &Path) -> PathBuf {
 fn setup(p: &Path, server: &str, account: &str) -> Setup {
     Setup {
         library_root: lib_dir(p),
+        scope: penroam_sync::vault::Scope::Account,
+        device_id: None,
         server_url: server.to_string(),
         account_id: account.to_string(),
         label: p
@@ -294,30 +294,16 @@ fn main() {
             .unwrap_or_else(|e| die(e));
             println!("enrolled");
         }
-        "pair-begin" => {
+        "connect" => {
             let (server, account) = (arg(3), account_arg(&p, &arg(4)));
             Library::open(lib_dir(&p)).unwrap_or_else(|e| die(e));
-            let (_, code) = SyncEngine::begin_pairing(
+            SyncEngine::connect(
                 setup(&p, &server, &account),
                 account_transport(&p, &server, &account),
                 secrets(&p),
             )
             .unwrap_or_else(|e| die(e));
-            println!("{code}");
-        }
-        "pair-approve" => {
-            let (_lib, mut e) = open(&p);
-            let sas = e
-                .approve_device(&arg(3), args.get(4).map_or("device", |s| s))
-                .unwrap_or_else(|e| die(e));
-            println!("{sas}");
-        }
-        "pair-poll" => {
-            let (_lib, mut e) = open(&p);
-            match e.poll_enrollment().unwrap_or_else(|e| die(e)) {
-                Some(sas) => println!("{sas}"),
-                None => println!("waiting"),
-            }
+            println!("connected");
         }
         "new-notebook" => {
             let mut lib = Library::open(lib_dir(&p)).unwrap_or_else(|e| die(e));

@@ -23,6 +23,10 @@
 //! | `POST /v1/keylog` | account | `KeyLogAppendRequest` | `KeyLogAppendResponse` |
 //! | `PUT /v1/blobs/{id}` | device | raw bytes + `Penroam-Content-Sha256` | `BlobPutResponse` |
 //! | `GET /v1/blobs/{id}` | device | — | raw bytes (`application/octet-stream`) |
+//! | `GET`, `PUT /v1/account/key` | account | `AccountKeyDocument` | `AccountKeyDocument`, 204 |
+//! | `GET`, `POST /v1/vaults` | account | `CreateVaultRequest` | `VaultListResponse`, `VaultRecord` |
+//! | `PUT`, `DELETE /v1/vaults/{id}` | account | `UpdateVaultLockRequest` | 204 |
+//! | `POST /v1/vaults/{id}/session` | account | — | `SessionTokens` for the vault's account |
 //!
 //! "account" means any token from `/_test/session`, and "device" means a
 //! token issued with a `device_id`. Every `/v1/*` route except `/v1/meta`
@@ -56,8 +60,9 @@ use penroam_sync_protocol::routes::{
     MEDIA_JSON, MEDIA_OCTETS,
 };
 use penroam_sync_protocol::{
-    AccountId, AckRequest, BlobId, CheckpointRecord, Cursor, DeviceId, DeviceRegistrationRequest,
-    ErrorBody, ErrorCode, KeyLogAppendRequest, PullOpsRequest,
+    AccountId, AccountKeyDocument, AckRequest, BlobId, CheckpointRecord, CreateVaultRequest,
+    Cursor, DeviceId, DeviceRegistrationRequest, ErrorBody, ErrorCode, KeyLogAppendRequest,
+    PullOpsRequest, SessionTokens, UpdateVaultLockRequest,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -492,11 +497,7 @@ fn route_inner(
                         return Err(http_err(ErrorCode::Forbidden, "device not registered", rid));
                     }
                 }
-                let token = format!(
-                    "{}{}",
-                    uuid::Uuid::new_v4().simple(),
-                    uuid::Uuid::new_v4().simple()
-                );
+                let token = new_token();
                 ctx.tokens
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -709,7 +710,65 @@ fn route_inner(
                 })
             }
         }
+        ("GET", "/v1/account/key") => api(s.account_key_get(&account), |v| Response::json(200, &v)),
+        ("PUT", "/v1/account/key") => {
+            let r: AccountKeyDocument = parse_json(req, rid)?;
+            api(s.account_key_put(&account, &r), |_| Response::empty())
+        }
+        ("GET", "/v1/vaults") => api(s.vault_list(&account), |v| Response::json(200, &v)),
+        ("POST", "/v1/vaults") => {
+            let r: CreateVaultRequest = parse_json(req, rid)?;
+            api(s.vault_create(&account, &r), |v| Response::json(200, &v))
+        }
+        (_, _) if p.starts_with("/v1/vaults/") => {
+            let rest = &p["/v1/vaults/".len()..];
+            let (id, session) = match rest.strip_suffix("/session") {
+                Some(id) => (id, true),
+                None => (rest, false),
+            };
+            let vault: AccountId = id
+                .parse()
+                .map_err(|_| http_err(ErrorCode::MalformedRequest, "bad vault id", rid))?;
+            match (m, session) {
+                ("POST", true) => {
+                    if !s.vault_owned_by(&account, &vault) {
+                        return Err(http_err(ErrorCode::NotFound, "unknown vault", rid));
+                    }
+                    let token = new_token();
+                    ctx.tokens
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(token.clone(), (vault.clone(), None));
+                    Outcome::Respond(Response::json(
+                        200,
+                        &SessionTokens {
+                            account_id: vault,
+                            device_id: None,
+                            access_token: token,
+                            expires_in_s: 3600,
+                            refresh_token: new_token(),
+                        },
+                    ))
+                }
+                ("PUT", false) => {
+                    let r: UpdateVaultLockRequest = parse_json(req, rid)?;
+                    api(s.vault_set_lock(&account, &vault, &r), |_| {
+                        Response::empty()
+                    })
+                }
+                ("DELETE", false) => api(s.vault_delete(&account, &vault), |_| Response::empty()),
+                _ => return Err(http_err(ErrorCode::NotFound, "unknown route", rid)),
+            }
+        }
         _ => return Err(http_err(ErrorCode::NotFound, "unknown route", rid)),
     };
     Ok(out)
+}
+
+fn new_token() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }

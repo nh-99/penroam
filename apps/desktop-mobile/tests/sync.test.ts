@@ -6,9 +6,12 @@ import { conflictTitle, conflictValuePreview, resolvable } from "../src/platform
 const api = vi.hoisted(() => ({
   storeReconcile: vi.fn(async () => ({ applied: 0, conflicts: 0, waiting: 0, message: null })),
   info: vi.fn(),
-  setupPair: vi.fn(),
-  setupFirst: vi.fn(),
-  pollPairing: vi.fn(),
+  connect: vi.fn(),
+  erasedNotebooks: vi.fn(async () => []),
+  account: vi.fn(async () => null),
+  vaults: vi.fn(),
+  vaultCreate: vi.fn(),
+  vaultUnlock: vi.fn(),
   disconnect: vi.fn(),
   devices: vi.fn(),
   serverInfo: vi.fn(),
@@ -149,65 +152,79 @@ describe("sync store", () => {
     await s.init();
     expect(s.available).toBe(false);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(api.pollPairing).not.toHaveBeenCalled();
+    expect(api.connect).not.toHaveBeenCalled();
   });
 
-  it("polls only while waiting for pairing approval, then asks to compare codes", async () => {
+  it("shows a vault's recovery key once and clears it after confirmation", async () => {
     const { useSync } = await import("../src/stores/sync");
-    api.info.mockResolvedValue({ available: true, configured: false, status: null });
-    api.setupPair.mockResolvedValue({ recoveryCode: null, pairingCode: "ABCD1234-0000-1111-2222-3333" });
-    api.pollPairing.mockResolvedValueOnce(null).mockResolvedValueOnce("123 456");
+    api.info.mockResolvedValue({ available: true, configured: true, status: null });
+    api.vaults.mockResolvedValue({ supported: true, vaults: [], notebooks: {} });
+    api.vaultCreate.mockResolvedValue("PRK1-AAAAA-BBBBB");
     const s = useSync();
     await s.init();
-    await s.setupPair("http://127.0.0.1:8787", "acct", "tablet");
-    expect(s.step).toBe("pairing");
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(s.step).toBe("pairing");
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(s.step).toBe("compare");
-    expect(s.comparison).toBe("123 456");
-    await vi.advanceTimersByTimeAsync(9000);
-    expect(api.pollPairing).toHaveBeenCalledTimes(2);
-    // codes differ: disconnect without keys and explain
-    api.disconnect.mockResolvedValue(null);
-    await s.confirmComparison(false);
-    expect(api.disconnect).toHaveBeenCalled();
+    expect(await s.createVault("Journal", "a long enough passphrase")).toBe(true);
+    expect(api.vaultCreate).toHaveBeenCalledWith("Journal", "a long enough passphrase");
+    expect(s.vaultRecoveryCode).toBe("PRK1-AAAAA-BBBBB");
+    s.finishVaultRecovery();
+    expect(s.vaultRecoveryCode).toBeNull();
+  });
+
+  it("reports a wrong passphrase and offers only unlocked vaults for notebooks", async () => {
+    const { useSync } = await import("../src/stores/sync");
+    api.info.mockResolvedValue({ available: true, configured: true, status: null });
+    api.vaults.mockResolvedValue({
+      supported: true,
+      vaults: [
+        { vaultId: "v1", name: "Journal", unlocked: true, problem: null },
+        { vaultId: "v2", name: null, unlocked: false, problem: null },
+      ],
+      notebooks: {},
+    });
+    api.vaultUnlock.mockRejectedValue(new Error("that passphrase doesn't open this vault"));
+    const s = useSync();
+    await s.init();
+    await s.refreshVaults();
+    expect(s.openVaults.map((v) => v.vaultId)).toEqual(["v1"]);
+    expect(await s.unlockVault("v2", { passphrase: "nope nope nope" })).toBe(false);
+    expect(s.error).toMatch(/passphrase/);
+  });
+
+  it("asks for a recovery code only for an account that needs one", async () => {
+    const { useSync } = await import("../src/stores/sync");
+    api.info.mockResolvedValue({ available: true, configured: false, status: null });
+    api.connect.mockResolvedValueOnce({ needsRecoveryCode: true }).mockResolvedValueOnce({ needsRecoveryCode: false });
+    const s = useSync();
+    await s.init();
+    await s.connect("http://127.0.0.1:8787", "acct");
+    expect(s.needsRecoveryCode).toBe(true);
     expect(s.configured).toBe(false);
-    expect(s.error).toMatch(/did not match/);
+    api.info.mockResolvedValue({ available: true, configured: true, status: null });
+    api.vaults.mockResolvedValue({ supported: true, vaults: [], notebooks: {} });
+    await s.connect("http://127.0.0.1:8787", "acct", "PRK1-AAAAA");
+    expect(api.connect).toHaveBeenLastCalledWith("http://127.0.0.1:8787", "acct", "PRK1-AAAAA");
+    expect(s.needsRecoveryCode).toBe(false);
+    expect(s.configured).toBe(true);
   });
 
-  it("shows the recovery code once and clears it after confirmation", async () => {
-    const { useSync } = await import("../src/stores/sync");
-    api.info.mockResolvedValue({ available: true, configured: false, status: null });
-    api.setupFirst.mockResolvedValue({ recoveryCode: "PRK1-AAAAA-BBBBB", pairingCode: null });
-    const s = useSync();
-    await s.init();
-    await s.setupFirst("http://127.0.0.1:8787", "acct", "laptop");
-    expect(s.step).toBe("recovery");
-    expect(s.recoveryCode).toBe("PRK1-AAAAA-BBBBB");
-    s.finishRecovery();
-    expect(s.recoveryCode).toBeNull();
-    expect(s.step).toBe("none");
-  });
-
-  it("checks the server, signs in through the browser, and sets up with the server's account", async () => {
+  it("checks the server, and signing in is all it takes to connect", async () => {
     const { useSync } = await import("../src/stores/sync");
     api.info.mockResolvedValue({ available: true, configured: false, status: null });
     api.serverInfo.mockResolvedValue({ signIn: true, signedInAccount: null });
     api.signIn.mockResolvedValue("a1b2c3");
-    api.setupFirst.mockResolvedValue({ recoveryCode: "PRK1-AAAAA", pairingCode: null });
+    api.connect.mockResolvedValue({ needsRecoveryCode: false });
     const s = useSync();
     await s.init();
     await s.checkServer("https://sync.penroam.ink");
     expect(s.server).toEqual({ url: "https://sync.penroam.ink", signIn: true, signedInAccount: null });
+    api.info.mockResolvedValue({ available: true, configured: true, status: null });
+    api.vaults.mockResolvedValue({ supported: true, vaults: [], notebooks: {} });
     const pending = s.signIn("https://sync.penroam.ink");
     expect(s.signingIn).toBe(true);
     expect(await pending).toBe("a1b2c3");
     expect(s.signingIn).toBe(false);
     expect(s.server?.signedInAccount).toBe("a1b2c3");
-    await s.setupFirst("https://sync.penroam.ink", "", "laptop");
-    expect(api.setupFirst).toHaveBeenCalledWith("https://sync.penroam.ink", "", "laptop");
-    expect(s.step).toBe("recovery");
+    expect(api.connect).toHaveBeenCalledWith("https://sync.penroam.ink", "", undefined);
+    expect(s.configured).toBe(true);
   });
 
   it("keeps the form usable when sign-in fails or the server is unreachable", async () => {

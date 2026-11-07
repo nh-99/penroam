@@ -104,9 +104,9 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
-  async function createNotebook(title: string, paper: Paper, template: Template) {
+  async function createNotebook(title: string, paper: Paper, template: Template, vault?: string) {
     try {
-      const { notebook, page } = await api.createNotebook(title, paper, template);
+      const { notebook, page } = await api.createNotebook(title, paper, template, undefined, vault);
       await refresh();
       current.value = notebook;
       currentPageId.value = page.id;
@@ -211,6 +211,18 @@ export const useLibrary = defineStore("library", () => {
       await refresh();
     } catch (e) {
       fail(e, "Could not change the cover");
+    }
+  }
+
+  /** Moves a notebook into a vault; the copy has a new id. */
+  async function moveToVault(id: string, vault: string) {
+    try {
+      await api.moveNotebookToVault(id, vault);
+      await refresh();
+      await useSync().refreshVaults();
+      ui.toast("info", "Notebook moved to the vault.");
+    } catch (e) {
+      fail(e, "Could not move the notebook");
     }
   }
 
@@ -500,6 +512,7 @@ export const useLibrary = defineStore("library", () => {
     covers,
     refresh,
     createNotebook,
+    moveToVault,
     open,
     close,
     rename,

@@ -4,7 +4,7 @@
 //! * Entry 0 (genesis) is signed by the account key derived from the
 //!   recovery secret. It certifies the first device and grants epoch 1.
 //! * `addDevice` certifies a new device and grants it every epoch key. It is
-//!   signed by an active member device (pairing approval) or by the account
+//!   signed by an active member device or by the account
 //!   key (enrollment with the recovery code).
 //! * `removeDevice` deactivates a device and starts a new epoch whose key is
 //!   wrapped only to the remaining devices and to the recovery key.
@@ -94,7 +94,7 @@ impl DeviceCert {
     pub fn dh_pk(&self) -> Result<[u8; 32], CryptoError> {
         crypto::decode32(&self.dh_pk)
     }
-    /// The fingerprint shown in pairing codes and device lists.
+    /// The fingerprint shown in device lists.
     pub fn fingerprint(&self) -> Result<String, CryptoError> {
         Ok(crypto::fingerprint(&self.sign_pk()?, &self.dh_pk()?))
     }
@@ -357,9 +357,8 @@ pub struct Pin {
 /// Verifies a complete key log (entries 0..n as stored bytes).
 /// `expected_account` (from the recovery code or a pin) must match genesis.
 ///
-/// With neither `expected_account` nor `pin` (a new device that is pairing),
-/// the account key is trusted on first use; the pairing comparison code is
-/// what detects a substituted log in that case.
+/// With neither `expected_account` nor `pin`, the account key is trusted on first use. Nothing
+/// that adds a device does that: enrolling always passes the root's account key.
 pub fn verify_log(
     entries: &[Vec<u8>],
     expected_account: Option<&[u8; 32]>,

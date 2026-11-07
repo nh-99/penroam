@@ -84,12 +84,23 @@ your account: the Trash keeps it, and **Restore** brings it back everywhere. A n
 in your account but not on this device shows on the shelf as a card with a cloud icon. Click it
 to download the notebook.
 
-**Sync.** Sync is optional and works through Penroam Cloud. Open **Settings → Sync** and sign in
-with your web browser. On your first device, save the recovery code somewhere safe: it's shown once,
-and without it or another signed-in device your synced notes can't be decrypted. On each new device,
-sign in and either approve it from a device you already have, or enter the recovery code. Notes are
-encrypted on your device before they're uploaded. That encryption hasn't been independently reviewed
-yet. Sync can be paused or disconnected at any time, and your notes stay on the device either way.
+**Sync.** Sync is optional and works through Penroam Cloud. Open **Settings → Sync** and sign in with
+your web browser. That's all: do the same on each new device and your notebooks arrive. Each device
+names itself after your computer or tablet, and you can rename or remove devices in **Settings →
+Sync**. Notebooks are encrypted before they're uploaded, but Penroam keeps a copy of the key so that
+signing in is enough, which means Penroam could read them. Sync can be paused or disconnected at any
+time, and your notes stay on the device either way.
+
+**Vaults.** For notes only you can read, create a vault in **Settings → Sync**: choose a name and a
+passphrase of at least 12 characters, and save the recovery key, which is shown once. Then choose the
+vault under **Keep in** when you create a notebook, or use **Move to vault…** on an existing one. To
+open a vault on another device, sign in, find it under **Vaults** and enter the passphrase once.
+Penroam can't read a vault or reset its passphrase, so if you lose both the passphrase and the
+recovery key, what's in the vault can only be read on devices already holding it. A vault protects
+your notes from Penroam's servers, not from someone using your device: its notebooks are stored on the
+device like any others and don't ask for the passphrase again. When you move a notebook into a vault,
+what had already synced stays in your account's history, so create sensitive notebooks in the vault
+to begin with. Vault encryption hasn't been independently reviewed yet.
 
 **Cloud storage.** Every account includes some free storage. For more, choose a plan in
 **Settings → Sync**. On a computer, plans open a payment page in your browser. On iPhone and iPad they're
@@ -238,10 +249,10 @@ versions, grouped by writing session. Pick one to preview it, then restore the p
 whole notebook as it was at that time (pages added since move to the trash). Restoring is a new
 edit, so the version you had stays in the list and the change syncs like any other. Everything
 from the last week is available, then one version a day for a month, then one a week for a year.
-With sync on, history is part of your encrypted account, so a new device can reach versions made
+With sync on, history is part of your account, so a new device can reach versions made
 on devices you no longer have. **Delete history…** removes a notebook's history from this device
 straight away, and permanently deleting a notebook removes it too. Whatever has already synced
-stays in your encrypted account, including things you've erased, until the account is deleted.
+stays in your account, including things you've erased, until the account is deleted.
 
 **Saving.** There is no save button to remember. Changes are written to disk as you make
 them, and the top bar shows **Saved** once they are safe. `Ctrl+S` writes everything

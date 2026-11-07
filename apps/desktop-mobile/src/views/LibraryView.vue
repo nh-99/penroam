@@ -7,6 +7,7 @@ import { COVERS } from "../editor/covers";
 import NotebookCard from "../components/NotebookCard.vue";
 import CloudNotebookCard from "../components/CloudNotebookCard.vue";
 import NewNotebookDialog from "../components/NewNotebookDialog.vue";
+import MoveToVaultDialog from "../components/MoveToVaultDialog.vue";
 import PromptDialog from "../components/PromptDialog.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import SettingsDialog from "../components/SettingsDialog.vue";
@@ -30,6 +31,7 @@ const showSettings = ref(false);
 const showTrash = ref(false);
 const renaming = ref<NotebookSummary | null>(null);
 const purging = ref<NotebookSummary | null>(null);
+const moving = ref<NotebookSummary | null>(null);
 
 const list = computed(() => (showTrash.value ? lib.trashed : lib.live));
 const search = useSearch();
@@ -65,9 +67,17 @@ function onKey(e: KeyboardEvent) {
 onMounted(() => window.addEventListener("keydown", onKey));
 onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 
-async function create(title: string, paper: Paper, template: TemplateKind) {
+async function create(title: string, paper: Paper, template: TemplateKind, vault?: string) {
   showNew.value = false;
-  await lib.createNotebook(title, paper, { kind: template, spacing: template === "dotted" ? 20 : template === "grid" ? 18 : 24 });
+  await lib.createNotebook(title, paper, { kind: template, spacing: template === "dotted" ? 20 : template === "grid" ? 18 : 24 }, vault);
+  if (vault) await sync.refreshVaults();
+}
+
+/** The vault a notebook is in: its name, or "a vault" when this device doesn't know it. */
+function vaultName(id: string): string | undefined {
+  const v = sync.vaults.notebooks[id];
+  if (!v) return undefined;
+  return sync.vaults.vaults.find((x) => x.vaultId === v)?.name ?? "a vault";
 }
 
 function recolor(nb: NotebookSummary) {
@@ -115,6 +125,7 @@ function recolor(nb: NotebookSummary) {
         </div>
         <div v-else class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           <NotebookCard v-for="nb in list" :key="nb.id" :nb="nb" :cover="lib.covers[nb.id]"
+            :vault-name="vaultName(nb.id)" :can-move-to-vault="sync.openVaults.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-vault="moving = nb"
             @open="lib.open(nb.id)" @rename="renaming = nb" @recolor="recolor(nb)"
             @export="lib.exportNotebook(nb.id, nb.title)" @export-pdf="lib.exportPdf(nb.id, nb.title)" @print="lib.printNotebook(nb.id)" @trash="lib.trash(nb.id)" />
           <CloudNotebookCard v-for="nb in sync.cloudNotebooks" :key="nb.notebookId" :nb="nb"
@@ -149,6 +160,7 @@ function recolor(nb: NotebookSummary) {
     </main>
 
     <NewNotebookDialog v-if="showNew" @close="showNew = false" @create="create" />
+    <MoveToVaultDialog v-if="moving" :notebook="moving" @close="moving = null" />
     <SettingsDialog v-if="showSettings" :native-kind="nativeKind" @close="showSettings = false" />
     <SearchPanel v-if="search.panelOpen" @close="search.panelOpen = false" @open="openHit" />
     <PromptDialog v-if="renaming" title="Rename notebook" label="Title" :value="renaming.title" confirm="Rename"

@@ -26,6 +26,12 @@ any format it can't read rather than change it.
 **I want my notes out of Penroam.** Export a notebook as `.penroam`, PDF, Markdown, text, PNG or SVG,
 or back up the whole library to one file. None of this needs an account.
 
-**I lost my recovery code (sync).** The code can't be replaced yet, but your devices still work and
-you can add a new one by approving it from a device that's signed in. If you lose the code and every
-device, nobody can decrypt the copy in your account, which is how the encryption is meant to work.
+**I forgot my vault's passphrase.** Use the vault's recovery key: choose **Unlock** or the key icon
+next to the vault, then **Use the recovery key**, and set a new passphrase. Any device that already
+has the vault keeps working too. Penroam can't reset either one, so without the passphrase, the
+recovery key and a device that has the vault, nobody can read what's in it. That's how a vault is
+meant to work.
+
+**A device was lost or stolen.** On another device, open **Settings → Sync** and remove it. It stops
+syncing at once. Sign out of Penroam on the identity provider's site too. What it already downloaded
+stays on it, so also use your device maker's find-and-erase service.

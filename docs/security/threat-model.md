@@ -2,11 +2,28 @@
 
 **Status: `security_review_pending`.** This design and its implementation
 (`crates/penroam-sync`) have **not** been reviewed by an independent security reviewer. Do not
-describe Penroam sync as audited end-to-end encryption until that review is done and its
-findings are resolved. Release builds sync only with Penroam Cloud; debug builds also work
+describe vaults as audited end-to-end encryption until that review is done and its findings are
+resolved, and never describe ordinary sync as end-to-end encrypted: the server holds its key. Release builds sync only with Penroam Cloud; debug builds also work
 against the local development test server and other servers with the public sign-in (`auth.v1`).
 
+## Two levels of protection
+
+| | Ordinary notebooks | Notebooks in a vault |
+|---|---|---|
+| Adding a device | Sign in | Sign in, then the vault's passphrase or recovery key, once |
+| Encrypted before upload | Yes | Yes |
+| Who holds the key | Every device **and the server** | Devices. The server holds it only inside a passphrase lock |
+| Read by a malicious or breached server | **Yes**, if it has the stored key and its sealing secret | No, unless it guesses the passphrase offline |
+| Read with a stolen sign-in | **Yes** | No |
+| Lost passphrase and every device | The server still has the key | Recovery key, or the content is gone |
+
+The trade is deliberate. Ordinary sync is as simple as other note apps and offers about the same
+protection from the operator. Vaults are for what the user wouldn't want the operator to read.
+
 ## What we protect
+
+The goals below apply to vaults in full. For ordinary notebooks, an adversary holding the stored
+root secret is out of reach of all of them, since it can do anything a device can.
 
 | Asset | Protection goal |
 |---|---|
@@ -39,10 +56,16 @@ signed but not encrypted, so clients keep labels generic), request times,
 IP addresses and storage usage. Sync is **not metadata-private**: activity patterns, sizes
 and the number of notebooks are visible.
 
+It also holds, for an ordinary account, the root secret (sealed at rest with a service secret, so a
+database backup alone doesn't expose it). For a vault it sees that the vault exists, its owner, its
+size and activity, its passphrase lock and its encrypted name, but not which notebooks are in it. A
+device's name is its host name by default, which the server can read in the key log.
+
 ## Sign-in (servers with `auth.v1`)
 
-Sign-in and encryption are separate. The identity provider and the sync server decide who may
-use an account's storage; they never receive the recovery code or a content key.
+The identity provider and the sync server decide who may use an account. For ordinary notebooks,
+sign-in is also what gives access to the keys. For a vault it isn't: neither ever receives its
+passphrase, recovery key or a content key.
 
 * The app signs in in the system browser (authorization code + PKCE), checks `state` and the
   ID token's `nonce`, and gives the ID token to the sync server, which verifies it. No password
@@ -51,16 +74,19 @@ use an account's storage; they never receive the recovery code or a content key.
   receives it as an `ink.penroam.app:` link, and another app could claim that scheme. Neither
   can redeem the code, because only the app holds the PKCE verifier; the real sign-in then
   times out and the user tries again.
-* An account session only registers devices and reads/appends the key log. Pushing, pulling,
-  blobs and checkpoints need a device session, which the server issues only to a device that
-  signs a fresh challenge with a key that is an active member of the key log. A stolen account
-  session therefore gives no access to ciphertext; even a malicious server gains nothing for
-  confidentiality, because content keys are wrapped only to devices.
+* An account session can fetch the account's root secret, register devices and read or append the
+  key log, so **a stolen account session reads every ordinary notebook**. That's why it is only
+  created by a sign-in, and why the app ends it as soon as it has a device session: a device session
+  can't fetch the root secret, so a stolen or removed device holds no way to it.
+* Pushing, pulling, blobs and checkpoints need a device session, which the server issues only to a
+  device that signs a fresh challenge with a key that is an active member of the key log.
+* A vault's content keys are wrapped only to its member devices and its recovery key. No session,
+  from any account, gives access to them.
 * Session tokens: the app keeps only refresh tokens, in the OS keychain next to the device keys
   (access tokens stay in memory). Refresh tokens are single-use; a copied one ends the session
   when either copy is used twice. The renderer never sees any token.
-* Losing account access (provider account, session) and losing the decryption keys are
-  different problems. Signing in again restores access to storage, not to keys.
+* For a vault, losing account access and losing the keys are different problems. Signing in again
+  restores access to its storage, not to its keys.
 
 ## Plans and billing (servers with `account.v1`)
 
@@ -78,10 +104,14 @@ use an account's storage; they never receive the recovery code or a content key.
 
 ## Key hierarchy
 
+An account and each vault have one of these, independent of each other.
+
 ```text
-recovery code (root secret, 256 bit, shown once, not stored by devices)
- ├─ account signing key (Ed25519)      signs genesis / recovery enrollments in the key log
- └─ recovery key (X25519)              every epoch key is wrapped to it
+root secret (256 bit, not stored by devices)
+  account: stored on the server, sealed     vault: passphrase lock + recovery key shown once
+ ├─ account signing key (Ed25519)      signs genesis and enrollments in the key log
+ ├─ recovery key (X25519)              every epoch key is wrapped to it
+ └─ vault name key                     encrypts a vault's name (vaults only)
 
 epoch key e (random, 256 bit; new epoch whenever a device is removed)
  ├─ per-notebook payload key   HKDF(e, salt = routing alias)
@@ -100,16 +130,22 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
 
 ## Guarantees (as designed and tested)
 
-* **Confidentiality of content** against the server: payloads and blobs are encrypted with
-  keys the server never receives.
+* **Confidentiality of vault content** against the server: payloads and blobs are encrypted with
+  keys the server never receives outside the passphrase lock
+  (`a_vault_syncs_between_unlocked_devices_and_stays_out_of_the_main_account`). The server refuses
+  to store an account key for a vault, and the client's account path refuses a vault scope
+  (`a_vault_can_never_hold_a_stored_key`).
+* **Confidentiality of ordinary content** against the network and object storage, and against a
+  database backup without the service's sealing secret. Not against the service.
 * **Authenticity before use:** a pulled envelope is applied only after its signer is found in
   the verified key log, its Ed25519 signature verifies, its ciphertext hash matches, AEAD
   decryption succeeds, and the decrypted operation matches the signed header. Anything else is
   quarantined and reported (`tampered_envelopes_are_quarantined_and_never_applied`).
-* **No server-injected devices:** membership changes are signed by the account key or an active
-  member and hash-chained; the new device's keys are bound by the pairing code (fingerprint) and
-  confirmed by a 6-digit comparison code on both screens
-  (`server_registered_device_without_approval_gets_nothing`, key-log unit tests).
+* **No server-injected devices in a vault:** membership changes are signed by the account key or an
+  active member and hash-chained, and a device joining a vault verifies the whole key log against
+  the root it opened, so a swapped lock fails (`a_swapped_lock_is_caught_by_the_vault_key_log`,
+  `server_registered_device_without_a_key_log_entry_gets_nothing`). This holds for ordinary accounts
+  only against a server that doesn't use the stored key.
 * **No history rewrite:** clients pin the verified key-log prefix; a log that changes it is
   rejected (`server_cannot_inject_or_rewrite`).
 * **Replay/duplication safety:** operations are deduplicated by id; an id reused with different
@@ -141,12 +177,34 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
   is refused too. The removed device keeps it locally.
 * **Key-log freeze:** the server can withhold new key-log entries (for example, hide a
   removal) from some devices. Detection needs out-of-band comparison or future gossip.
-* **First pairing trust:** a new device learns the account key from the server; the comparison
-  code is what detects substitution. Users who skip the comparison lose that protection.
-  Enrollment with the recovery code needs no such trust.
-* **Recovery code loss:** with the code lost *and* every device lost, encrypted server data
-  cannot be decrypted by anyone, including Penroam. With the code exposed, an attacker with
-  server access can enroll a device. There is no code rotation yet.
+* **Vault passphrases can be guessed offline.** Whoever holds a lock, which includes the server and
+  anyone who breaches it, can try passphrases as fast as they can run Argon2id (64 MiB, 3 iterations).
+  There is no attempt limit, because nothing but the client enforces anything. A passphrase's
+  strength is the vault's strength. The app requires 12 characters and says why, but doesn't measure
+  strength. A short numeric PIN was rejected for this reason.
+* **A vault isn't a device lock.** Its notebooks are plaintext on the device like any others, in the
+  library, search index and version history, and it stays unlocked once a device has opened it.
+  Device loss is left to the operating system's disk encryption. Backups and exports of vault
+  notebooks are plaintext, and a notebook restored from a backup into a library without its
+  assignment is an ordinary notebook, which sync uploads as one.
+* **Moving a notebook into a vault doesn't remove its past.** What the main account already holds
+  stays there, readable by anyone with the stored key, until the account is deleted. Only what's
+  created in a vault was always private.
+* **Assignment is local.** Which notebooks are in a vault is recorded on each device, and a device
+  that loses `vault-notebooks.json` treats them as ordinary. A damaged file stops sync rather than
+  being read as empty.
+* **Removing a device from a vault that the remover hasn't unlocked:** the server ends the device's
+  access, but the vault's key isn't rotated until a device that has it unlocked removes it. A removed
+  device can always decrypt what it could before. A device sign-out on the identity provider's side
+  is the user's to do: the app can't reach it.
+* **Recovery key loss:** with the passphrase, the recovery key and every device lost, nobody can
+  decrypt a vault, including Penroam. With the recovery key exposed, an attacker with server access
+  can enroll a device. Neither the recovery key nor a vault's root can be rotated yet; changing the
+  passphrase re-wraps the same root, and a device or server that kept the old lock can still try the
+  old passphrase.
+* **Stored account key:** the sealing secret is in the service's environment, so a breach of the
+  running service reads every ordinary notebook. Losing the secret strands accounts: only one with a
+  recovery code can come back, and accounts created now have none.
 * **Secret storage:** device private keys live in the OS credential store
   (`KeychainSecretStore`, scoped per library):
 
@@ -183,9 +241,9 @@ came from a system dialog, and the backend doesn't check a path against that dia
 in the WebView could therefore read and write files as the app. Treat any way of running script
 from note content as critical.
 
-## Before calling it end-to-end encrypted
+## Before calling vaults end-to-end encrypted
 
-1. Independent review of this document, §13–§15 of the protocol, and `penroam-sync`.
+1. Independent review of this document, §12e–§15 of the protocol, and `penroam-sync`.
 2. Verify the keychain stores on macOS, iOS, Windows and Android hardware (Linux verified).
-3. Recovery-code rotation and a tested recovery drill on real devices.
+3. Recovery-key rotation and a tested recovery drill on real devices.
 4. Cross-language vectors for third-party clients.
