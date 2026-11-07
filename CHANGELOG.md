@@ -5,7 +5,10 @@ release notes and stops if the version has no entry.
 
 ## Unreleased
 
-No release has been published yet.
+## 0.1.0-beta.1
+
+The first public test build. It's for testers: expect rough edges, and keep a backup of notebooks
+you care about.
 
 * Adding a device now takes a sign-in. There's no pairing code, comparison code or recovery code, and
   a device names itself after your computer or tablet.
