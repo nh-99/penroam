@@ -106,14 +106,33 @@ class Signing(unittest.TestCase):
         env = dict(self.ALL, WINDOWS_SIGN_COMMAND="")
         self.assertEqual(release.sign_status("v1.0.0", env), ["windows"])
 
+    def test_store_uploads_are_optional_even_for_stable(self):
+        env = dict(self.ALL, APPLE_API_KEY_P8="", GOOGLE_PLAY_SERVICE_ACCOUNT_JSON="")
+        self.assertEqual(release.sign_status("v1.0.0", env), ["google-play", "testflight"])
+
+    def test_a_store_channel_needs_all_its_secrets(self):
+        self.assertTrue(release.configured("testflight", self.ALL))
+        self.assertFalse(release.configured("testflight", dict(self.ALL, APPLE_API_ISSUER="")))
+
     def test_a_prerelease_reports_what_is_unsigned(self):
-        self.assertEqual(release.sign_status("v1.0.0-beta.1", {}), ["android", "macos", "updates", "windows"])
+        self.assertEqual(release.sign_status("v1.0.0-beta.1", {}), ["android", "google-play", "macos", "testflight", "updates", "windows"])
 
     def test_the_status_never_repeats_a_value(self):
         env = dict(self.ALL, APPLE_ID="")
         with self.assertRaises(ValueError) as caught:
             release.sign_status("v1.0.0", env)
         self.assertNotIn("'x'", str(caught.exception))
+
+
+class StoreBuildNumbers(unittest.TestCase):
+    def test_ios_build_number_is_one_plain_number(self):
+        self.assertEqual(release.store_config("ios", 57), {"bundle": {"iOS": {"bundleVersion": "57"}}})
+
+    def test_android_version_codes_pass_sideloaded_builds_and_only_rise(self):
+        first = release.store_config("android", 1)["bundle"]["android"]["versionCode"]
+        later = release.store_config("android", 2)["bundle"]["android"]["versionCode"]
+        self.assertGreater(first, 1000)
+        self.assertGreater(later, first)
 
 
 class Matrix(unittest.TestCase):

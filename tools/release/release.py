@@ -6,6 +6,8 @@
     release.py assemble VERSION SHA DIR    checksums, manifests, notes and update feed for DIR
     release.py sign-status TAG             which signing secrets this run has (never their values)
     release.py desktop-matrix TAG          the desktop builds for this tag, as JSON
+    release.py configured CHANNEL          true if a signing or upload channel has its secrets
+    release.py store-config ios|android N  Tauri config with the build number for workflow run N
 
 Only the standard library, so it runs before anything is installed. docs/development.md#releases
 describes the whole process.
@@ -190,9 +192,14 @@ SIGNING = {
     "macos": ["APPLE_CERTIFICATE", "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID"],
     "windows": ["WINDOWS_SIGN_COMMAND"],
     "android": ["PENROAM_ANDROID_KEYSTORE_BASE64"],
+    "testflight": ["APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_P8", "APPLE_TEAM_ID"],
+    "google-play": ["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"],
 }
-# A stable release leaves Windows out rather than failing or shipping it unsigned.
-LEFT_OUT_IF_UNSIGNED = {"windows"}
+# These are skipped when they aren't set up, instead of stopping the release. Windows is never
+# shipped unsigned in a stable release, and the store uploads only add to what was built.
+OPTIONAL = {"windows", "testflight", "google-play"}
+# Store build numbers only go up. Android starts above any version code a sideloaded build used.
+ANDROID_VERSION_CODE_BASE = 10000
 
 DESKTOP_BUILDS = [
     {"os": "ubuntu-24.04", "name": "linux-x86_64", "args": "--bundles deb,appimage"},
@@ -208,10 +215,24 @@ def sign_status(tag, env):
     """Stable tags need every signature they ship. Pre-releases may lack any, and their notes say so."""
     missing = {k: [n for n in v if not env.get(n)] for k, v in SIGNING.items()}
     missing = {k: v for k, v in missing.items() if v}
-    blocking = {k: v for k, v in missing.items() if k not in LEFT_OUT_IF_UNSIGNED}
+    blocking = {k: v for k, v in missing.items() if k not in OPTIONAL}
     if blocking and not is_prerelease(tag):
         raise ValueError(f"a stable release needs these signing secrets; missing {blocking}")
     return sorted(missing)
+
+
+def configured(channel, env):
+    """Are all the secrets for this signing or upload channel present?"""
+    return all(env.get(name) for name in SIGNING[channel])
+
+
+def store_config(platform, run_number):
+    """The Tauri config for a store build. A beta and the release after it share `X.Y.Z`, and the
+    stores refuse a repeated build number, so it comes from the workflow's run number. Apple
+    allows three numbers at most, which rules out `tauri ios build --build-number` (`X.Y.Z.N`)."""
+    if platform == "ios":
+        return {"bundle": {"iOS": {"bundleVersion": str(run_number)}}}
+    return {"bundle": {"android": {"versionCode": ANDROID_VERSION_CODE_BASE + run_number}}}
 
 
 def desktop_matrix(tag, env):
@@ -231,6 +252,10 @@ def main(argv):
         print(f"update feed platforms: {sorted(feed['platforms'])}")
     elif command == "sign-status" and len(argv) == 3:
         print("unsigned:", ", ".join(sign_status(argv[2], os.environ)) or "nothing")
+    elif command == "configured" and len(argv) == 3:
+        print("true" if configured(argv[2], os.environ) else "false")
+    elif command == "store-config" and len(argv) == 4:
+        print(json.dumps(store_config(argv[2], int(argv[3])), separators=(",", ":")))
     elif command == "desktop-matrix" and len(argv) == 3:
         print(json.dumps(desktop_matrix(argv[2], os.environ), separators=(",", ":")))
     else:

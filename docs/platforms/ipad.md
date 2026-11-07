@@ -61,6 +61,13 @@ cd ios && DEVELOPER_DIR=~/.swiftpm/swift-sdks/darwin.artifactbundle/Developer \
 xtool builds SwiftPM only, so the app shell lives in a git-ignored folder that links the Rust
 static library with the Swift plugin packages. xtool's team prefix ends up in the bundle ID.
 
+## Release builds
+
+`release.yml` builds and uploads to TestFlight on a macOS runner; see
+[`../development.md`](../development.md#releases). `src-tauri/Info.ios.plist` holds what the
+generated project needs added: the sign-in URL scheme and the photo and camera usage strings.
+Export compliance for the encryption is answered in App Store Connect, not set in the plist.
+
 ## On a Mac
 
 ```bash

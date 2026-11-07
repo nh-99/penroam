@@ -19,8 +19,8 @@ status. [`capabilities.md`](capabilities.md) has the pen detail for each device.
 | Platform | Package | Status | Signed | Run by a person on | What's missing |
 |---|---|---|---|---|---|
 | Linux x86-64, X11 and Wayland (Ubuntu 24.04 in CI) | `.deb`, AppImage | Beta | Not yet | Developer machine, mouse and keyboard | Pen hardware; other distributions |
-| Android, BOOX Note Air5 C (Android 15) | APK | Beta | Not yet: test key | Earlier builds | Release key; written terms for the Onyx SDK; the device scorecard; regional erase refresh |
-| iPadOS, iPad13,4 with Apple Pencil (iPadOS 26) | None published | Beta, developer build only | Not yet | Developer builds from `xtool` | A packaged App Store or TestFlight build; the device scorecard |
+| Android, BOOX Note Air5 C (Android 15) | APK, Google Play internal track | Beta | Not yet: test key | Earlier builds | Release key; written terms for the Onyx SDK; the device scorecard; regional erase refresh |
+| iPadOS, iPad13,4 with Apple Pencil (iPadOS 26) | TestFlight | Beta, developer build only | Not yet | Developer builds from `xtool` | A first TestFlight build run on the device; the device scorecard |
 | Windows x86-64 | NSIS installer, in beta releases only | Unverified | Not yet | Nobody | Signing certificate; any hands-on run; stylus test |
 | macOS Apple Silicon and Intel | `.dmg` | Unverified | Not yet | Nobody | Developer ID, notarization; any hands-on run |
 | Other Android tablets, Samsung S Pen | APK | Unverified | Not yet | Nobody | Any hands-on run |

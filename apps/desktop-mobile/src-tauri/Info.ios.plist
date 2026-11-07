@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the generated iOS project by `tauri ios build`. The URL scheme is the sign-in
+     redirect, and the usage strings are required because the file picker can reach photos. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>Penroam</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>ink.penroam.app</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>ink.penroam.app</string>
+      </array>
+    </dict>
+  </array>
+  <key>NSCameraUsageDescription</key>
+  <string>Penroam can add photos you take to a notebook.</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>Penroam can import images from your photo library into a notebook.</string>
+</dict>
+</plist>

@@ -380,8 +380,19 @@ Generate the update key once with `pnpm tauri signer generate` and keep the priv
 well: losing it means existing installs can't update. `promote.yml` uses the `release` GitHub
 environment, so required reviewers can be added there.
 
-iOS isn't in `release.yml`: it needs an Apple team and a checked-in `gen/apple` project. See
-[`platforms/ipad.md`](platforms/ipad.md). Store builds never contain purchase links or prices.
+The same tag uploads to testers when the store secrets below are set, and skips that step when they
+aren't. The `testflight` job generates `gen/apple` on a macOS runner and signs through Apple's
+cloud-managed certificates, so it needs no certificate or profile. The `google-play` job uploads to
+the track in the `GOOGLE_PLAY_TRACK` variable, `internal` by default. Moving a build further happens
+in App Store Connect or the Play Console. Build numbers come from the workflow's run number, because
+a beta and its final release share `X.Y.Z` and the stores refuse a repeated build number.
+
+| Name (GitHub) | Kind | Used for |
+|---|---|---|
+| `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` | Secret | App Store Connect API key: the key ID, the issuer ID and the contents of the `.p8` file. The key needs the Admin role for cloud signing. `APPLE_TEAM_ID` is shared with macOS signing |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Secret | Service account allowed to release to the app. Upload the first `.aab` to the Play Console by hand: the API can't create a release for a new app |
+
+Store builds never contain purchase links or prices.
 
 Keep `release.py notices` output out of the repository: it is generated for each build into
 `apps/desktop-mobile/public/` and shown under **Settings → About**.

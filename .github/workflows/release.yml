@@ -1,7 +1,9 @@
 name: release
 
 # A version tag builds every desktop package and the Android APK, and leaves them on a DRAFT
-# GitHub release. Nothing reaches users until a person publishes the draft and runs promote.yml.
+# GitHub release. Nothing reaches the public until a person publishes the draft and runs
+# promote.yml. If their secrets are set, the same tag also uploads to testers: TestFlight, and
+# Google Play's internal track. Moving a build on from there is done in the store consoles.
 # docs/development.md#releases describes the process and the secrets.
 on:
   push:
@@ -19,6 +21,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       desktop_matrix: ${{ steps.matrix.outputs.desktop_matrix }}
+      testflight: ${{ steps.stores.outputs.testflight }}
+      google_play: ${{ steps.stores.outputs.google_play }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: The tag matches the repository
@@ -26,6 +30,10 @@ jobs:
         run: echo "version=$(python3 tools/release/release.py check-version "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
       - name: Signing is complete, or this is a pre-release
         env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -34,6 +42,17 @@ jobs:
           WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
           PENROAM_ANDROID_KEYSTORE_BASE64: ${{ secrets.PENROAM_ANDROID_KEYSTORE_BASE64 }}
         run: python3 tools/release/release.py sign-status "$GITHUB_REF_NAME"
+      - name: Which store uploads are set up
+        id: stores
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          echo "testflight=$(python3 tools/release/release.py configured testflight)" >> "$GITHUB_OUTPUT"
+          echo "google_play=$(python3 tools/release/release.py configured google-play)" >> "$GITHUB_OUTPUT"
       - name: Choose the desktop builds
         id: matrix
         env:
@@ -154,15 +173,87 @@ jobs:
             export PENROAM_ANDROID_KEYSTORE="$RUNNER_TEMP/release.keystore"
             base64 -d <<< "$PENROAM_ANDROID_KEYSTORE_BASE64" > "$PENROAM_ANDROID_KEYSTORE"
           fi
-          pnpm tauri android build --apk --target aarch64
-          mkdir out
-          cp apps/desktop-mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk \
-            "out/Penroam_${VERSION}_android-arm64.apk"
+          pnpm tauri android build --apk --aab --target aarch64 \
+            --config "$(python3 tools/release/release.py store-config android "$GITHUB_RUN_NUMBER")"
+          outputs=apps/desktop-mobile/src-tauri/gen/android/app/build/outputs
+          mkdir out store
+          cp "$outputs"/apk/universal/release/*.apk "out/Penroam_${VERSION}_android-arm64.apk"
+          cp "$outputs"/bundle/universalRelease/*.aab store/penroam.aab
+          cp "$outputs"/mapping/universalRelease/mapping.txt store/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: android
           path: out/*
           if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-store
+          path: store/*
+          if-no-files-found: error
+
+  # Separate from `android`, and not something `draft` waits for: a store refusing an upload
+  # shouldn't hold back the packages for everyone else.
+  google-play:
+    needs: [verify, android]
+    if: needs.verify.outputs.google_play == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: android-store
+          path: store
+      - uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ink.penroam.app
+          releaseFiles: store/penroam.aab
+          mappingFile: store/mapping.txt
+          track: ${{ vars.GOOGLE_PLAY_TRACK || 'internal' }}
+          status: completed
+
+  # gen/apple isn't checked in: it needs macOS to generate, so each run makes it fresh. With an
+  # App Store Connect key, Tauri skips local signing and Xcode signs at export through Apple's
+  # cloud-managed certificates, so no certificate or profile is stored here.
+  testflight:
+    needs: verify
+    if: needs.verify.outputs.testflight == 'true'
+    runs-on: macos-latest
+    env:
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 24, cache: pnpm }
+      - run: rustup toolchain install --no-self-update && rustup target add aarch64-apple-ios
+      - run: pnpm install --frozen-lockfile
+      - run: python3 tools/release/release.py notices apps/desktop-mobile/public/third-party-notices.txt
+      - name: App Store Connect key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        # altool looks for the key in this folder under this name.
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          key=~/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY}.p8
+          printf '%s' "$APPLE_API_KEY_P8" > "$key"
+          echo "APPLE_API_KEY_PATH=$key" >> "$GITHUB_ENV"
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          pnpm tauri ios init --ci
+          cp apps/desktop-mobile/src-tauri/icons/ios/*.png \
+            apps/desktop-mobile/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
+      - name: Build
+        run: |
+          pnpm tauri ios build --ci --target aarch64 --export-method app-store-connect \
+            --config "$(python3 tools/release/release.py store-config ios "$GITHUB_RUN_NUMBER")"
+      - name: Upload to TestFlight
+        run: |
+          ipa=$(find apps/desktop-mobile/src-tauri/gen/apple/build -name '*.ipa' | head -1)
+          xcrun altool --upload-app --type ios --file "$ipa" \
+            --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
 
   draft:
     needs: [verify, desktop, android]
@@ -179,6 +270,8 @@ jobs:
         with:
           path: release
           merge-multiple: true
+      - name: Store-only files stay out of the release
+        run: rm -f release/penroam.aab release/mapping.txt
       - name: Software bill of materials
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
