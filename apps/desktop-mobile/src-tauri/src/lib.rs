@@ -176,6 +176,7 @@ pub fn run() {
             commands::export_annotated_pdf,
             commands::notebook_math,
             commands::print_notebook,
+            commands::open_link,
             commands::import_stroke_document,
             commands::exit_app,
             sync::sync_info,

@@ -1252,6 +1252,60 @@ fn print_job(
     Ok(PrintStatus::Viewer)
 }
 
+/// Link schemes [`open_link`] hands to the system. Anything else (`file:`, custom app schemes)
+/// could run or open something local, and notes can come from other people through sync.
+const LINK_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
+
+/// Checks a link from a text block and returns it normalised, or why it can't be opened.
+fn checked_link(raw: &str) -> Result<String, String> {
+    let url = url::Url::parse(raw.trim()).map_err(|e| format!("not a valid address: {e}"))?;
+    if !LINK_SCHEMES.contains(&url.scheme()) {
+        return Err(format!("{}: links are not opened", url.scheme()));
+    }
+    Ok(url.into())
+}
+
+/// Opens a link the user tapped in a text block, in the system browser or mail app. Only
+/// http, https and mailto links are opened; others fail with [`ErrorCode::Invalid`].
+#[tauri::command]
+pub fn open_link(app: AppHandle, url: String) -> R<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = checked_link(&url).map_err(|message| CmdError {
+        code: ErrorCode::Invalid,
+        message,
+    })?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| CmdError {
+            code: ErrorCode::Platform,
+            message: format!("could not open the link: {e}"),
+        })
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::checked_link;
+
+    #[test]
+    fn opens_web_and_mail_links_only() {
+        assert_eq!(
+            checked_link("https://penroam.ink/a b").unwrap(),
+            "https://penroam.ink/a%20b"
+        );
+        assert!(checked_link("mailto:someone@example.com").is_ok());
+        assert!(checked_link("HTTP://example.com").is_ok());
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ink.penroam.app:x",
+            "example.com",
+            "",
+        ] {
+            assert!(checked_link(bad).is_err(), "{bad}");
+        }
+    }
+}
+
 /// Imports a canonical stroke document (`m00-strokes` v1) onto a page.
 /// Used by the benchmark harness and for bringing native test captures forward.
 #[tauri::command(async)]

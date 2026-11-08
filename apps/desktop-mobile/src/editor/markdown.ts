@@ -61,6 +61,18 @@ export interface Paint {
   segments: Segment[];
   math: MathMark[];
 }
+/**
+ * Where a link's text landed, relative to the block's top left, so a tap can open it. A link
+ * that wraps gets one box per line. Kept out of [`Paint`]: the PDF side has no links, and
+ * `Paint` must match penroam-core's layout exactly.
+ */
+export interface LinkBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  href: string;
+}
 
 const isSlot = (c: string) => {
   const cp = c.codePointAt(0)!;
@@ -182,7 +194,7 @@ export function extractMath(src: string): { source: string; spans: MathSpan[] } 
 
 const BOLD = 1, ITALIC = 2, MONO = 4, STRIKE = 8, UNDERLINE = 16;
 
-type Inline = { kind: "text"; text: string; flags: number } | { kind: "break" } | { kind: "math"; index: number };
+type Inline = { kind: "text"; text: string; flags: number; href?: string } | { kind: "break" } | { kind: "math"; index: number };
 interface Item {
   task: boolean | null;
   blocks: Block[];
@@ -295,35 +307,39 @@ class Builder {
     }
   }
 
-  private pushText(out: Inline[], text: string, flags: number) {
+  private pushText(out: Inline[], text: string, flags: number, href?: string) {
     let cur = "";
     for (const c of text) {
       if (isSlot(c) && slotIndex(c) < this.spans.length) {
-        if (cur) out.push({ kind: "text", text: cur, flags });
+        if (cur) out.push({ kind: "text", text: cur, flags, href });
         cur = "";
         out.push({ kind: "math", index: slotIndex(c) });
       } else cur += c;
     }
-    if (cur) out.push({ kind: "text", text: cur, flags });
+    if (cur) out.push({ kind: "text", text: cur, flags, href });
   }
 
-  /** `flags` are the open styles, shared across an image's alt text. */
-  private inlines(tokens: Token[], out: Inline[], style: number[]) {
+  /**
+   * `flags` are the open styles, shared across an image's alt text. `hrefs` are the open links;
+   * the innermost one wins, as CommonMark never nests links but an image inside a link can.
+   */
+  private inlines(tokens: Token[], out: Inline[], style: number[], hrefs: string[]) {
     const flags = () => style.reduce((f, n, i) => (n > 0 ? f | (1 << i) : f), 0);
+    const href = () => hrefs[hrefs.length - 1];
     for (const t of tokens) {
       switch (t.type) {
         case "text":
-          this.pushText(out, t.content, flags());
+          this.pushText(out, t.content, flags(), href());
           break;
         case "softbreak":
         case "hardbreak":
           out.push({ kind: "break" });
           break;
         case "code_inline":
-          out.push({ kind: "text", text: this.restore(t.content), flags: flags() | MONO });
+          out.push({ kind: "text", text: this.restore(t.content), flags: flags() | MONO, href: href() });
           break;
         case "html_inline":
-          out.push({ kind: "text", text: this.restore(t.content), flags: flags() });
+          out.push({ kind: "text", text: this.restore(t.content), flags: flags(), href: href() });
           break;
         case "strong_open":
           style[0]++;
@@ -345,12 +361,15 @@ class Builder {
           break;
         case "link_open":
           style[4]++;
+          // a formula in the link text came through extraction as a slot; put it back
+          hrefs.push(this.restore(t.attrGet("href") ?? ""));
           break;
         case "link_close":
           style[4]--;
+          hrefs.pop();
           break;
         case "image":
-          this.inlines(t.children ?? [], out, style);
+          this.inlines(t.children ?? [], out, style, hrefs);
           break;
       }
     }
@@ -358,7 +377,7 @@ class Builder {
 
   private inline(t: Token): Inline[] {
     const out: Inline[] = [];
-    this.inlines(t.children ?? [], out, [0, 0, 0, 0, 0]);
+    this.inlines(t.children ?? [], out, [0, 0, 0, 0, 0], []);
     return out;
   }
 
@@ -464,7 +483,7 @@ const faceOf = (flags: number): Face => {
 };
 
 type Atom =
-  | { kind: "char"; c: string; flags: number; size: number; width: number }
+  | { kind: "char"; c: string; flags: number; size: number; width: number; href?: string }
   | { kind: "math"; index: number; size: number; width: number; height: number; depth: number };
 
 const atomIsSpace = (a: Atom) => a.kind === "char" && a.c === " ";
@@ -476,9 +495,11 @@ const sum = (atoms: Atom[], from: number, to: number) => {
   return w;
 };
 
-function charAtom(c: string, flags: number, size: number): Atom {
+function charAtom(c: string, flags: number, size: number, href?: string): Atom {
   const s = flags & MONO ? size * MONO_SCALE : size;
-  return { kind: "char", c, flags, size: s, width: (advanceIn(faceOf(flags), c) * s) / metrics.unitsPerEm };
+  const a: Atom = { kind: "char", c, flags, size: s, width: (advanceIn(faceOf(flags), c) * s) / metrics.unitsPerEm };
+  if (href !== undefined) a.href = href;
+  return a;
 }
 
 class Layout {
@@ -486,6 +507,7 @@ class Layout {
   listDepth = 0;
   marker: { x: number; text: string | null; task: boolean | null } | null = null;
   paint: Paint = { height: 0, bottom: 0, runs: [], segments: [], math: [] };
+  links: LinkBox[] = [];
 
   constructor(
     private fs: number,
@@ -550,6 +572,7 @@ class Layout {
       advance = up + down;
     }
     const dx = align === "center" ? (avail - width) / 2 : align === "right" ? avail - width : 0;
+    this.linkBoxes(atoms, x + dx, baseline);
     let cx = x + dx;
     let i = 0;
     while (i < atoms.length) {
@@ -604,6 +627,28 @@ class Layout {
     this.y += advance;
   }
 
+  /** One box per run of atoms with the same link, from ascender to descender. */
+  linkBoxes(atoms: Atom[], x: number, baseline: number) {
+    let cx = x;
+    let open: LinkBox | null = null;
+    for (const a of atoms) {
+      const href = a.kind === "char" ? a.href : undefined;
+      if (open && open.href !== href) open = null;
+      if (href !== undefined && a.kind === "char") {
+        const up = baseline - (metrics.ascent * a.size) / metrics.unitsPerEm;
+        const down = baseline - (metrics.descent * a.size) / metrics.unitsPerEm;
+        if (!open) {
+          open = { x0: cx, y0: up, x1: cx, y1: down, href };
+          this.links.push(open);
+        }
+        open.x1 = cx + a.width;
+        open.y0 = Math.min(open.y0, up);
+        open.y1 = Math.max(open.y1, down);
+      }
+      cx += a.width;
+    }
+  }
+
   wrap(source: Atom[], x: number, avail: number, align: TextAlign, base: number) {
     let end = source.length;
     while (end > 0 && atomIsBlank(source[end - 1])) end--;
@@ -639,7 +684,7 @@ class Layout {
     let afterDisplay = false;
     inlines.forEach((item, i) => {
       if (item.kind === "text") {
-        for (const c of item.text) line.push(charAtom(c, item.flags | extra, size));
+        for (const c of item.text) line.push(charAtom(c, item.flags | extra, size, item.href));
         afterDisplay = false;
       } else if (item.kind === "break") {
         const next = inlines[i + 1];
@@ -799,6 +844,18 @@ class Layout {
 
 /** Lays Markdown out. `rowPitch` locks lines to rows; `lookup` sizes formulas. */
 export function layoutMarkdown(text: string, fontSize: number, boxWidth: number, rowPitch: number | null, align: TextAlign, lookup: MathLookup): Paint {
+  return layoutMarkdownWithLinks(text, fontSize, boxWidth, rowPitch, align, lookup).paint;
+}
+
+/** [`layoutMarkdown`], plus where each link's text landed. */
+export function layoutMarkdownWithLinks(
+  text: string,
+  fontSize: number,
+  boxWidth: number,
+  rowPitch: number | null,
+  align: TextAlign,
+  lookup: MathLookup,
+): { paint: Paint; links: LinkBox[] } {
   const { source, spans } = extractMath(text);
   const blocks = new Builder(spans, source).build(md.parse(source, {}));
   const l = new Layout(fontSize, rowPitch, align, spans, lookup);
@@ -806,7 +863,7 @@ export function layoutMarkdown(text: string, fontSize: number, boxWidth: number,
   if (!blocks.length) l.place([], 0, boxWidth, align, fontSize);
   l.paint.height = round6(l.y);
   l.paint.bottom = Math.max(l.paint.bottom, l.paint.height);
-  return l.paint;
+  return { paint: l.paint, links: l.links };
 }
 
 /** Number of rows a line of `fontSize` text takes at `pitch`. */

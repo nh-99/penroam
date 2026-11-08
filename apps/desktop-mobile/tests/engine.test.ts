@@ -642,3 +642,52 @@ describe("editor engine", () => {
     expect(session.page.elements[0]).toMatchObject({ tool: "highlighter", pressure: false, opacity: 0.35 });
   });
 });
+
+describe("links in text blocks", () => {
+  const opened: string[] = [];
+  const mouse = { pointerType: "mouse" };
+  beforeEach(async () => {
+    opened.length = 0;
+    ed.dispose();
+    ed = new InkEditor(vp, { onState: () => {}, onError: (m) => { throw new Error(m); }, onPageEdited: () => {}, openLink: (u) => opened.push(u) });
+    const p = page();
+    p.elements.push({ type: "text", id: "t1", z: 1, x: 100, y: 100, width: 300, height: 20, text: "[link](https://a.example/) rest", fontSize: 16, color: "#000000", align: "left" });
+    session = new PageSession("nb", p, async () => ({ revision: 1, updatedAt: 0, durable: true }));
+    await ed.setSession(session, null);
+    ed.setTransform({ scale: 1, ox: 0, oy: 0 });
+  });
+  const click = (x: number, y: number, o: Parameters<typeof ptr>[3] = mouse) => {
+    ptr("pointerdown", x, y, o);
+    ptr("pointerup", x, y, o);
+  };
+
+  it("opens on a hand-tool tap, not on a drag or off the link", () => {
+    ed.setTool("hand");
+    click(110, 112);
+    expect(opened).toEqual(["https://a.example/"]);
+    click(170, 112);
+    ptr("pointerdown", 110, 112, mouse);
+    move(160, 112, mouse);
+    ptr("pointerup", 160, 112, mouse);
+    expect(opened).toEqual(["https://a.example/"]);
+  });
+
+  it("opens on a finger tap in pen-only mode, not when it becomes a pinch", () => {
+    ed.setTool("pen");
+    ed.setSettings({ penOnly: "on" });
+    const touch = { pointerType: "touch", pointerId: 11, pressure: 0.5 };
+    click(110, 112, touch);
+    expect(opened).toEqual(["https://a.example/"]);
+    ptr("pointerdown", 110, 112, touch);
+    ptr("pointerdown", 300, 300, { ...touch, pointerId: 12 });
+    ptr("pointerup", 110, 112, touch);
+    expect(opened).toHaveLength(1);
+  });
+
+  it("opens on Ctrl-click with any tool, and a plain click with the pen draws", () => {
+    ed.setTool("pen");
+    vp.dispatchEvent(new PointerEvent("pointerdown", { clientX: 110, clientY: 112, pointerId: 3, pointerType: "mouse", button: 0, buttons: 1, ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(opened).toEqual(["https://a.example/"]);
+    expect(session.page.elements.filter((e) => e.type === "ink")).toHaveLength(0);
+  });
+});

@@ -31,7 +31,7 @@ import {
 import { newId } from "./ids";
 import { classifyPointer, PALM_CONTACT_PX, PENCIL_CURVE, penErases, pressureArrived, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
 import { PdfCache, PdfPageRenderer } from "./pdf";
-import { drawText, elementBounds, PageRenderer, paintOf, textBounds, type Ink, type Text } from "./renderer";
+import { drawText, elementBounds, linkAt, PageRenderer, paintOf, textBounds, type Ink, type Text } from "./renderer";
 import type { PageSession, SaveState } from "./session";
 import { rowsFor } from "./markdown";
 import { onMathReady } from "./math";
@@ -94,6 +94,8 @@ export interface EditorCallbacks {
   onPageEdited(): void;
   /** Bytes of a notebook attachment, for images on the page. */
   readAsset?(hash: string): Promise<Uint8Array>;
+  /** A link in a text block was tapped: open `url` outside the app. */
+  openLink?(url: string): void;
 }
 
 export const ERASER_RADIUS_PX = 8;
@@ -103,6 +105,8 @@ const HIGHLIGHTER_OPACITY = 0.35;
 const PINCH_GRACE_MS = 250;
 /** Contacts this soon after the pen lifts are the writing hand, not a deliberate gesture. */
 const PEN_LIFT_GRACE_MS = 400;
+/** A press that moves less than this (screen pixels) before it lifts is a tap. */
+const TAP_SLOP_PX = 8;
 
 interface ActiveStroke {
   stroke: Ink;
@@ -178,6 +182,8 @@ export class InkEditor {
   private touches = new Map<number, { x: number; y: number }>();
   private pinch: { dist: number; scale: number; ax: number; ay: number } | null = null;
   private pan: { pointerId: number; x: number; y: number } | null = null;
+  /** A navigating press that started on a link; it opens if the press lifts as a tap. */
+  private linkTap: { pointerId: number; x: number; y: number; href: string } | null = null;
   /** The finger behind the stroke, erase or drag in progress, in viewport coordinates. */
   private fingerDraw: { pointerId: number; x: number; y: number } | null = null;
   private penDown = false;
@@ -281,7 +287,10 @@ export class InkEditor {
     if (this.sampleEvent === "pointerrawupdate") on(viewport, "pointerrawupdate", (e: PointerEvent) => this.onMove(e));
     on(viewport, "pointerup", (e: PointerEvent) => this.onUp(e, false));
     on(viewport, "pointercancel", (e: PointerEvent) => this.onUp(e, true));
-    on(viewport, "pointerleave", () => this.clearHover());
+    on(viewport, "pointerleave", () => {
+      this.clearHover();
+      this.showLinkHover(null, false);
+    });
     on(viewport, "lostpointercapture", (e: PointerEvent) => this.onLostCapture(e));
     on(viewport, "wheel", (e: WheelEvent) => this.onWheel(e), { passive: false });
     on(viewport, "contextmenu", (e: Event) => e.preventDefault());
@@ -776,6 +785,14 @@ export class InkEditor {
         return;
       }
     }
+    // Ctrl-click (Cmd-click on macOS) opens a link whatever the tool, as in other editors.
+    if (e.pointerType === "mouse" && e.button === 0 && (e.ctrlKey || e.metaKey) && !this.edit) {
+      const href = this.linkUnder(e);
+      if (href) {
+        e.preventDefault();
+        return this.cb.openLink?.(href);
+      }
+    }
     const grabbed = e.target === this.editFrame ? this.edit?.id : undefined;
     // finishing a text edit consumes the tap
     if (this.edit && !(e.pointerType === "touch" && this.touches.size > 0)) {
@@ -845,7 +862,12 @@ export class InkEditor {
 
   private onMove(e: PointerEvent) {
     if (e.pointerType === "pen" && e.buttons === 0 && e.type === "pointermove" && !this.active && !this.erase && !this.drag) return this.drawHover(e);
+    if (e.pointerType === "mouse" && e.buttons === 0 && e.type === "pointermove") this.updateLinkHover(e);
     if (this.fingerDraw?.pointerId === e.pointerId) [this.fingerDraw.x, this.fingerDraw.y] = this.viewportPoint(e);
+    if (this.linkTap?.pointerId === e.pointerId) {
+      const [x, y] = this.viewportPoint(e);
+      if (Math.hypot(x - this.linkTap.x, y - this.linkTap.y) > TAP_SLOP_PX) this.linkTap = null;
+    }
     if (this.touches.has(e.pointerId) || this.pan?.pointerId === e.pointerId) {
       if (e.type === "pointermove") this.navigate(e);
       return;
@@ -880,6 +902,11 @@ export class InkEditor {
   private onUp(e: PointerEvent, cancelled: boolean) {
     if (e.pointerType === "pen") this.liftPen();
     if (this.fingerDraw?.pointerId === e.pointerId) this.fingerDraw = null;
+    const tap = this.linkTap?.pointerId === e.pointerId ? this.linkTap : null;
+    if (tap) {
+      this.linkTap = null;
+      if (!cancelled) this.cb.openLink?.(tap.href);
+    }
     if (this.touches.delete(e.pointerId)) {
       if (this.touches.size < 2) this.pinch = null;
       return;
@@ -940,6 +967,7 @@ export class InkEditor {
     this.touches.clear();
     this.pinch = null;
     this.pan = null;
+    this.linkTap = null;
     this.penDown = false;
     this.spaceDown = false;
   }
@@ -968,6 +996,11 @@ export class InkEditor {
     e.preventDefault();
     this.capture(e);
     const p = this.viewportPoint(e);
+    // Panning is what a hand or finger does on a page, so a tap that doesn't pan is free to
+    // open a link. A second finger makes it a pinch.
+    const first = e.pointerType !== "touch" || this.touches.size === 0;
+    const href = first && e.button <= 0 ? this.linkUnder(e) : null;
+    this.linkTap = href ? { pointerId: e.pointerId, x: p[0], y: p[1], href } : null;
     if (e.pointerType === "touch") {
       this.touches.set(e.pointerId, { x: p[0], y: p[1] });
       if (this.touches.size === 2) {
@@ -1176,6 +1209,31 @@ export class InkEditor {
       forward: [{ op: "removeElements", ids: removed.map((e) => e.id) }],
       inverse: [{ op: "addElements", elements: removed }],
     });
+  }
+
+  // --------------------------------------------------------- links --
+  private linkUnder(e: { clientX: number; clientY: number }): string | null {
+    if (!this.session) return null;
+    const [x, y] = this.docPoint(e);
+    const t = this.hitText(x, y);
+    return t ? linkAt(t, x, y) : null;
+  }
+
+  /**
+   * Shows a mouse user where a link is: its address as a tooltip, and a pointer cursor when a
+   * click would open it (the hand tool, or Ctrl/Cmd held).
+   */
+  private updateLinkHover(e: PointerEvent) {
+    const href = this.edit ? null : this.linkUnder(e);
+    this.showLinkHover(href, this.tool === "hand" || e.ctrlKey || e.metaKey);
+  }
+
+  private showLinkHover(href: string | null, clickable: boolean) {
+    const v = this.viewport;
+    if (href) v.title = href;
+    else v.removeAttribute("title");
+    if (href && clickable) v.dataset.link = "";
+    else delete v.dataset.link;
   }
 
   // -------------------------------------------------------- select --

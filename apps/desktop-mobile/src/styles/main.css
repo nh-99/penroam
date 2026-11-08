@@ -249,3 +249,7 @@ body {
 [data-tool="eraser"] {
   cursor: cell;
 }
+/* Over a link a click would open (see the editor's link hover). */
+[data-tool][data-link] {
+  cursor: pointer;
+}

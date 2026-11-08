@@ -162,13 +162,20 @@ to move the box instead.
 | ` ``` ` on the lines above and below | A block of code |
 | `\| a \| b \|`, then `\|---\|---\|`, then rows | A table |
 | `---` | A horizontal line |
+| `[text](https://example.com)`, `<https://example.com>` | A link |
 | `$E = mc^2$` | An inline formula |
 | `$$\sum_i x_i$$` | A formula on its own line |
 
 Formulas use LaTeX with the AMS math environments. One Penroam can't draw, such as a typo in a
 command, is shown as you wrote it. A dollar sign followed by a digit or a space stays a dollar
-sign, and `\$` always does. Links are underlined but don't open, and images show their
-description, because Penroam doesn't fetch anything from the web for a note.
+sign, and `\$` always does. Images show their description, because Penroam doesn't fetch
+anything from the web for a note.
+
+**Opening links.** Links are underlined. To open one in your browser or mail app, tap it with a
+finger (when the pen is set to draw and fingers move the page) or with the hand tool, or
+`Ctrl`-click it (`Cmd`-click on macOS) with any tool. Hovering over a link with the mouse shows
+its address. Only `http`, `https` and `mailto` links open, and a web address written without
+`[...](...)` or `<...>` is plain text.
 
 Undo and redo with `Ctrl+Z` / `Ctrl+Shift+Z`. Zoom with `Ctrl` and the mouse wheel, a pinch on a
 touchpad or touchscreen, or `Ctrl+=` / `Ctrl+-`. `Ctrl+0` fits the page to the window width.

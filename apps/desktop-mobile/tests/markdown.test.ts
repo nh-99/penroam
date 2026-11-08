@@ -1,6 +1,6 @@
 import { fixture } from "./fixture";
 import { describe, expect, it } from "vitest";
-import { extractMath, layoutMarkdown, MAX_DEPTH, rowsFor, type MathBox } from "../src/editor/markdown";
+import { extractMath, layoutMarkdown, layoutMarkdownWithLinks, MAX_DEPTH, rowsFor, type MathBox } from "../src/editor/markdown";
 
 const golden = JSON.parse(fixture("markdown-layout-golden.json"));
 
@@ -17,6 +17,29 @@ describe("Markdown layout (same golden as penroam-core)", () => {
       expect(p).toEqual(c.paint);
     });
   }
+});
+
+describe("link boxes", () => {
+  const links = (text: string, width = 400) => layoutMarkdownWithLinks(text, 12, width, null, "left", math).links;
+  it("covers the link text and carries the address", () => {
+    const [box, ...rest] = links("see [the docs](https://penroam.ink/docs) here");
+    expect(rest).toEqual([]);
+    expect(box.href).toBe("https://penroam.ink/docs");
+    const runs = layoutMarkdown("see [the docs](https://penroam.ink/docs) here", 12, 400, null, "left", math).runs;
+    expect(box.x0).toBeGreaterThan(runs[0].x);
+    expect(box.y0).toBeLessThan(runs[0].y);
+    expect(box.y1).toBeGreaterThan(runs[0].y);
+  });
+  it("splits a wrapped link per line and keeps neighbours apart", () => {
+    expect(links("[one two three four five six](https://a.example)", 60).length).toBeGreaterThan(1);
+    expect(links("[a](https://a.example)[b](https://b.example)").map((l) => l.href)).toEqual(["https://a.example", "https://b.example"]);
+  });
+  it("finds autolinks and links around images, and no unsafe ones", () => {
+    expect(links("<https://a.example>")[0].href).toBe("https://a.example");
+    expect(links("[![alt](x.png)](https://a.example)")[0].href).toBe("https://a.example");
+    expect(links("[x](javascript:alert(1))")).toEqual([]);
+    expect(links("plain https://a.example")).toEqual([]);
+  });
 });
 
 describe("formula scanning", () => {

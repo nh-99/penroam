@@ -31,7 +31,7 @@ import type { TextBlock } from "../generated/TextBlock";
 import type { Template } from "../generated/Template";
 import { drawStroke, rectsIntersect, strokeBounds, type Rect } from "./geometry";
 import { drawTemplate } from "./templates";
-import { layoutMarkdown, type Paint } from "./markdown";
+import { layoutMarkdownWithLinks, type LinkBox, type Paint } from "./markdown";
 import { drawMath, ensureMath, mathBox, mathEpoch, renderedMath } from "./math";
 import { canvasFont } from "./textLayout";
 
@@ -40,20 +40,33 @@ export type Text = { type: "text" } & TextBlock;
 
 // Bounds are read on every hit test and dirty-rect redraw, so layouts are kept.
 const PAINT_CACHE_ENTRIES = 2048;
-const paints = new Map<string, Paint>();
+const layouts = new Map<string, { paint: Paint; links: LinkBox[] }>();
+
+type Layoutable = Pick<TextBlock, "text" | "fontSize" | "width" | "align" | "rowPitch">;
+
+function layoutOf(t: Layoutable): { paint: Paint; links: LinkBox[] } {
+  const key = `${mathEpoch()}|${t.fontSize}|${t.width}|${t.rowPitch ?? ""}|${t.align}|${t.text}`;
+  let l = layouts.get(key);
+  if (!l) {
+    l = layoutMarkdownWithLinks(t.text, t.fontSize, t.width, t.rowPitch ?? null, t.align, mathBox);
+    if (layouts.size >= PAINT_CACHE_ENTRIES) layouts.clear();
+    layouts.set(key, l);
+    // Until MathJax has loaded formulas show their source.
+    if (l.paint.runs.some((r) => r.face === "mono" && r.text.includes("$"))) void ensureMath();
+  }
+  return l;
+}
 
 /** The cached Markdown layout of a block. */
-export function paintOf(t: Pick<TextBlock, "text" | "fontSize" | "width" | "align" | "rowPitch">): Paint {
-  const key = `${mathEpoch()}|${t.fontSize}|${t.width}|${t.rowPitch ?? ""}|${t.align}|${t.text}`;
-  let p = paints.get(key);
-  if (!p) {
-    p = layoutMarkdown(t.text, t.fontSize, t.width, t.rowPitch ?? null, t.align, mathBox);
-    if (paints.size >= PAINT_CACHE_ENTRIES) paints.clear();
-    paints.set(key, p);
-    // Until MathJax has loaded formulas show their source.
-    if (p.runs.some((r) => r.face === "mono" && r.text.includes("$"))) void ensureMath();
-  }
-  return p;
+export function paintOf(t: Layoutable): Paint {
+  return layoutOf(t).paint;
+}
+
+/** The link under a page point, if the block has one there. */
+export function linkAt(t: TextBlock, x: number, y: number): string | null {
+  const lx = x - t.x, ly = y - t.y;
+  for (const b of layoutOf(t).links) if (lx >= b.x0 && lx <= b.x1 && ly >= b.y0 && ly <= b.y1) return b.href;
+  return null;
 }
 
 export function textBounds(t: TextBlock): Rect {

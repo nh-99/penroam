@@ -108,6 +108,8 @@ export const api = {
     call<ApplyOutcome>("apply_page_operations", { notebookId, pageId, batch }),
   flushPage: (notebookId: string, pageId: string) => call<void>("flush_page", { notebookId, pageId }),
   flushAll: () => call<void>("flush_all"),
+  /** Opens a link from a text block in the system browser or mail app (http, https, mailto only). */
+  openLink: (url: string) => call<void>("open_link", { url }),
   async readAsset(notebookId: string, hash: string): Promise<Uint8Array> {
     return asBytes(await call<ArrayBuffer>("read_asset", { notebookId, hash }));
   },

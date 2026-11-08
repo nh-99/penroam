@@ -230,6 +230,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       onError: (m) => ui.error(m),
       readAsset: (hash) => api.readAsset(lib.current!.id, hash),
       onPageEdited: () => void thumbnailNow(),
+      openLink: (url) => void api.openLink(url).catch((err) => ui.error(`Could not open the link (${errorMessage(err)}).`)),
     });
     editor.value = e;
     benchHooks.editor = e;
