@@ -3,7 +3,7 @@
 User-visible changes for each release. The release workflow copies a version's section into its
 release notes and stops if the version has no entry.
 
-## Unreleased
+## 0.1.0-beta.5
 
 * The Linux AppImage adds Penroam to your app menu. **Settings → Advanced** can remove it before you
   delete the AppImage.
