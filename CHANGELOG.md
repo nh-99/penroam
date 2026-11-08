@@ -18,6 +18,10 @@ release notes and stops if the version has no entry.
 * Dialogs have room below their buttons again, and messages no longer sit on the bottom edge of the
   window.
 * A long press while drawing no longer selects the text in the top bar and toolbar.
+* Penroam no longer crashes on Android when the handwriting model finishes downloading or loads at
+  startup.
+* If a handwriting model ever crashes Penroam while loading, Penroam stops using it so the app still
+  opens, and says so in **Settings → Advanced**.
 
 ## 0.1.0-beta.4
 

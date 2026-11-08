@@ -366,6 +366,69 @@ pub fn installed(models_dir: &Path) -> Vec<(PathBuf, Manifest)> {
     out
 }
 
+/// How many launches in a row may die while loading the same model before [`LoadGuard::enter`]
+/// refuses it. More than one, so that the system killing the app at a bad moment doesn't turn
+/// handwriting recognition off.
+pub const MAX_LOAD_ATTEMPTS: u32 = 2;
+
+/// Marker inside the bundle directory. Installing replaces the whole directory, so a fresh copy
+/// of a model starts with a clean record. The leading dot keeps it out of the bundle's files.
+const LOAD_ATTEMPT_FILE: &str = ".load-attempt";
+
+#[derive(Serialize, Deserialize)]
+struct LoadAttempt {
+    key: String,
+    attempts: u32,
+}
+
+/// Remembers across launches that loading a model killed the app.
+///
+/// Loading runs native code on a file downloaded after the app was built, and a segfault there
+/// can't be caught. The model is loaded at every launch, so without this one bad combination of
+/// model and device would stop the app from opening at all. Handwriting recognition is optional;
+/// opening the app is not.
+///
+/// The marker written by [`LoadGuard::enter`] survives only if the process dies before
+/// [`LoadGuard::finish`]. There is deliberately no `Drop`: a panic during the load counts as a
+/// failed attempt too. A load that returns an error isn't a crash, so call `finish` for it.
+pub struct LoadGuard {
+    path: PathBuf,
+}
+
+impl LoadGuard {
+    /// Records a load attempt, or returns `None` if [`MAX_LOAD_ATTEMPTS`] launches in a row
+    /// already died loading this bundle under the same `key`.
+    ///
+    /// `key` should change whenever a retry is worth making: include the model and app versions.
+    /// If the marker can't be written the load goes ahead, since a read-only directory is no
+    /// reason to give up on the model.
+    pub fn enter(bundle_dir: &Path, key: &str) -> Option<LoadGuard> {
+        let path = bundle_dir.join(LOAD_ATTEMPT_FILE);
+        let previous = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<LoadAttempt>(&b).ok())
+            .filter(|a| a.key == key)
+            .map_or(0, |a| a.attempts);
+        if previous >= MAX_LOAD_ATTEMPTS {
+            return None;
+        }
+        let attempt = LoadAttempt {
+            key: key.to_string(),
+            attempts: previous + 1,
+        };
+        // no fsync: this only has to outlive the process, not the device
+        if let Ok(bytes) = serde_json::to_vec(&attempt) {
+            let _ = std::fs::write(&path, bytes);
+        }
+        Some(LoadGuard { path })
+    }
+
+    /// The load returned, successfully or with an error, so the app survived it.
+    pub fn finish(self) {
+        let _ = std::fs::remove_file(self.path);
+    }
+}
+
 /// The model input for an image: `(value / 255 − mean) / std`, row-major
 /// `[1, channels, H, W]`, with every channel the same (see [`GraphSpec`]).
 pub fn input_tensor(img: &GrayImage, g: &GraphSpec) -> Vec<f32> {
@@ -834,6 +897,44 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_load_that_returns_leaves_no_record() {
+        let d = tempfile::tempdir().unwrap();
+        for _ in 0..(MAX_LOAD_ATTEMPTS + 2) {
+            LoadGuard::enter(d.path(), "m@1/1").unwrap().finish();
+        }
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn launches_that_die_loading_a_model_stop_loading_it() {
+        let d = tempfile::tempdir().unwrap();
+        for _ in 0..MAX_LOAD_ATTEMPTS {
+            // not finished: the process died during the load
+            assert!(LoadGuard::enter(d.path(), "m@1/1").is_some());
+        }
+        assert!(LoadGuard::enter(d.path(), "m@1/1").is_none());
+        assert!(LoadGuard::enter(d.path(), "m@1/1").is_none(), "stays off");
+        // a new app or model version is worth another try
+        assert!(LoadGuard::enter(d.path(), "m@1/2").is_some());
+    }
+
+    #[test]
+    fn a_survived_load_clears_earlier_deaths() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(LoadGuard::enter(d.path(), "k").is_some());
+        LoadGuard::enter(d.path(), "k").unwrap().finish();
+        assert!(LoadGuard::enter(d.path(), "k").is_some());
+        assert!(LoadGuard::enter(d.path(), "k").is_some(), "count restarted");
+    }
+
+    #[test]
+    fn a_damaged_record_does_not_block_the_model() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join(LOAD_ATTEMPT_FILE), b"{not json").unwrap();
+        assert!(LoadGuard::enter(d.path(), "k").is_some());
+    }
+
     fn archive(files: &[(&str, &[u8])]) -> Vec<u8> {
         use std::io::Write;
         let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -877,6 +978,15 @@ mod tests {
         assert_eq!(b.dir, models.join("hw-en"));
         assert!(!b.dir.join("extra.txt").exists());
         assert_eq!(installed(&models).len(), 1);
+
+        // a model that killed the app gets a fresh start when it is installed again
+        for _ in 0..MAX_LOAD_ATTEMPTS {
+            LoadGuard::enter(&b.dir, "k").unwrap();
+        }
+        assert!(LoadGuard::enter(&b.dir, "k").is_none());
+        let b = install_archive(&good, &models).unwrap();
+        assert!(LoadGuard::enter(&b.dir, "k").is_some());
+        assert_eq!(installed(&models).len(), 1, "the marker isn't a model");
 
         // a corrupt update is refused and leaves version 1 installed
         let bad = archive(&[

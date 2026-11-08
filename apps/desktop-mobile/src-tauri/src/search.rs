@@ -33,6 +33,10 @@
 //! Settings → Advanced can pick one of the two ([`RecognizerChoice`]). The model is downloaded
 //! ([`crate::models`]) or installed from a file. Without either, typed text, titles and PDF text
 //! are still indexed. No search data, query, ink or recognized text leaves the device.
+//!
+//! The model is loaded at every launch, in native code that can crash the process, so
+//! `penroam_search::model::LoadGuard` stops loading one that keeps killing the app. The app must
+//! always open; losing handwriting search is the acceptable failure.
 
 use crate::commands::CmdError;
 use crate::AppState;
@@ -57,6 +61,10 @@ const EDIT_QUIET: Duration = Duration::from_millis(1500);
 const POWER_POLL: Duration = Duration::from_secs(60);
 /// Most results returned by one query.
 const MAX_RESULTS: usize = 100;
+/// Shown after `penroam_search::model::LoadGuard` turns a model off, following "The installed
+/// model could not be loaded:" in settings.
+const MODEL_KILLED_APP: &str = "it made Penroam close while starting, so it was turned off. \
+     Install the model again or update Penroam to retry.";
 
 /// Which index a notebook's rows live in: `None` for the main index, or the vault it belongs
 /// to. Each open vault has its own index, so a vault's text can be encrypted with its notebooks
@@ -510,12 +518,25 @@ fn build_stack(app: &AppHandle, choice: RecognizerChoice) -> Stack {
         .map(|d| penroam_search::model::installed(&d))
         .and_then(|v| v.into_iter().next())
     {
-        match penroam_search::model::OnnxRecognizer::load(&dir) {
-            Ok(m) => {
-                model_summary = Some(ModelSummary::from(&manifest));
-                model = Some(Box::new(m) as Box<dyn Recognizer>);
+        let key = format!(
+            "{}@{}/{}",
+            manifest.id,
+            manifest.version,
+            app.package_info().version
+        );
+        match penroam_search::model::LoadGuard::enter(&dir, &key) {
+            None => model_error = Some(MODEL_KILLED_APP.to_string()),
+            Some(guard) => {
+                let loaded = penroam_search::model::OnnxRecognizer::load(&dir);
+                guard.finish();
+                match loaded {
+                    Ok(m) => {
+                        model_summary = Some(ModelSummary::from(&manifest));
+                        model = Some(Box::new(m) as Box<dyn Recognizer>);
+                    }
+                    Err(e) => model_error = Some(e.to_string()),
+                }
             }
-            Err(e) => model_error = Some(e.to_string()),
         }
     }
     let (use_platform, use_model) = choice.resolve(platform.is_some(), model.is_some());
