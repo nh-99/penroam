@@ -17,6 +17,7 @@ release notes and stops if the version has no entry.
   stay on your devices, marked **Not synced**, where you can **Restore cloud sync** or remove them.
 * Dialogs have room below their buttons again, and messages no longer sit on the bottom edge of the
   window.
+* A long press while drawing no longer selects the text in the top bar and toolbar.
 
 ## 0.1.0-beta.4
 

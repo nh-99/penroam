@@ -163,7 +163,7 @@ async function confirmForget() {
     <!-- one-time recovery key -->
     <Modal v-if="sync.vaultRecoveryCode && !keyHidden" title="Save your recovery key" @close="keyHidden = true">
       <div class="space-y-3">
-        <div class="grid grid-cols-3 gap-1.5 font-mono text-base font-semibold tracking-wider sm:grid-cols-4" aria-label="Recovery key">
+        <div class="grid select-text grid-cols-3 gap-1.5 font-mono text-base font-semibold tracking-wider sm:grid-cols-4" aria-label="Recovery key">
           <span v-for="(g, i) in groups" :key="i" class="rounded-md bg-surface-2 px-2 py-1 text-center epaper:border">{{ g }}</span>
         </div>
         <p class="text-sm leading-relaxed">If you forget the passphrase, this key is the only way back in. Penroam can't reset either one. Store it in a password manager or write it down; it's shown only until you confirm.</p>

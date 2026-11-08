@@ -146,6 +146,18 @@ body {
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
+  /* A long press while drawing would otherwise start a text selection in the top bar and
+     toolbar. Chrome is not selectable; text fields and copyable text opt back in below. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+input,
+textarea,
+[contenteditable]:not([contenteditable="false"]),
+pre,
+.select-text {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .safe-top {

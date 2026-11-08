@@ -98,7 +98,7 @@ async function confirmDisconnect() {
       <template v-else>
         <!-- the server address is an implementation detail; only developer mode shows it -->
         <p v-if="sync.customServers" class="flex items-center gap-2 text-xs">
-          <span class="min-w-0 flex-1 truncate">Server: <span class="font-mono">{{ sync.server.url }}</span></span>
+          <span class="min-w-0 flex-1 truncate">Server: <span class="select-text font-mono">{{ sync.server.url }}</span></span>
           <button class="touch-target rounded-lg px-2 text-brand underline-offset-2 hover:underline" :disabled="sync.busy" @click="sync.changeServer()">Change</button>
         </p>
         <template v-if="sync.server.signIn">
@@ -167,7 +167,7 @@ async function confirmDisconnect() {
             <Smartphone :size="16" class="shrink-0 text-muted" />
             <div class="min-w-0 flex-1">
               <p class="truncate text-sm">{{ d.label || "Unnamed device" }}<span v-if="d.thisDevice" class="text-muted"> (this device)</span><span v-if="!d.active" class="text-muted"> · removed</span></p>
-              <p class="font-mono text-[11px] text-muted">{{ d.fingerprint }}</p>
+              <p class="select-text font-mono text-[11px] text-muted">{{ d.fingerprint }}</p>
             </div>
             <button v-if="d.active && sync.status?.phase !== 'revoked'" class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" :aria-label="`Rename ${d.label}`" @click="renaming = d">
               <Pencil :size="16" />
