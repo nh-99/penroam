@@ -1,6 +1,6 @@
 import { fixture } from "./fixture";
 import { describe, expect, it } from "vitest";
-import { extractMath, layoutMarkdown, layoutMarkdownWithLinks, MAX_DEPTH, rowsFor, type MathBox } from "../src/editor/markdown";
+import { extractMath, layoutMarkdown, layoutMarkdownWithTargets, MAX_DEPTH, rowsFor, toggledTask, type MathBox } from "../src/editor/markdown";
 
 const golden = JSON.parse(fixture("markdown-layout-golden.json"));
 
@@ -9,6 +9,37 @@ const math = (tex: string, display: boolean): MathBox | null =>
   tex.includes("bad") ? null : { width: tex.includes("wide") ? 40 : 2, height: display ? 1.5 : 0.8, depth: display ? 0.6 : 0.25 };
 
 
+
+describe("task checkboxes", () => {
+  const math = () => null;
+  const tasks = (text: string) => layoutMarkdownWithTargets(text, 12, 400, null, "left", math).tasks;
+  const tick = (text: string, i = 0) => toggledTask(text, tasks(text)[i]);
+
+  it("ticks and unticks the marker in the source and nothing else", () => {
+    expect(tick("- [ ] a [ ] b")).toBe("- [x] a [ ] b");
+    expect(tick("- [x] done")).toBe("- [ ] done");
+    expect(tick("- [X] done")).toBe("- [ ] done");
+    expect(tick("- [ ] a\n- [ ] b", 1)).toBe("- [ ] a\n- [x] b");
+  });
+
+  it("finds markers in nested containers and across line endings", () => {
+    expect(tick("> - [ ] quoted")).toBe("> - [x] quoted");
+    expect(tick("1. x\n   - [ ] nested")).toBe("1. x\n   - [x] nested");
+    expect(tick("- a\r\n- [ ] crlf\r\n")).toBe("- a\r\n- [x] crlf\r\n");
+  });
+
+  it("maps past formulas extracted from earlier lines", () => {
+    const text = "$$a\nb$$\n\n- [ ] $x$ and more\n- [ ] \u{1F600} $y$";
+    expect(tick(text)).toBe("$$a\nb$$\n\n- [x] $x$ and more\n- [ ] \u{1F600} $y$");
+    expect(tick(text, 1)).toBe("$$a\nb$$\n\n- [ ] $x$ and more\n- [x] \u{1F600} $y$");
+  });
+
+  it("gives no box to anything that isn't a marker it can find in the source", () => {
+    expect(tasks("[ ] not in a list")).toEqual([]);
+    expect(tasks("- plain")).toEqual([]);
+    expect(tasks("- &#91; ] entity [ ] later")).toEqual([]);
+  });
+});
 
 describe("Markdown layout (same golden as penroam-core)", () => {
   for (const c of golden) {
@@ -20,7 +51,7 @@ describe("Markdown layout (same golden as penroam-core)", () => {
 });
 
 describe("link boxes", () => {
-  const links = (text: string, width = 400) => layoutMarkdownWithLinks(text, 12, width, null, "left", math).links;
+  const links = (text: string, width = 400) => layoutMarkdownWithTargets(text, 12, width, null, "left", math).links;
   it("covers the link text and carries the address", () => {
     const [box, ...rest] = links("see [the docs](https://penroam.ink/docs) here");
     expect(rest).toEqual([]);

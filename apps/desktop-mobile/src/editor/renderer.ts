@@ -31,7 +31,7 @@ import type { TextBlock } from "../generated/TextBlock";
 import type { Template } from "../generated/Template";
 import { drawStroke, rectsIntersect, strokeBounds, type Rect } from "./geometry";
 import { drawTemplate } from "./templates";
-import { layoutMarkdownWithLinks, type LinkBox, type Paint } from "./markdown";
+import { layoutMarkdownWithTargets, type LinkBox, type Paint, type TaskBox } from "./markdown";
 import { drawMath, ensureMath, mathBox, mathEpoch, renderedMath } from "./math";
 import { canvasFont } from "./textLayout";
 
@@ -40,15 +40,16 @@ export type Text = { type: "text" } & TextBlock;
 
 // Bounds are read on every hit test and dirty-rect redraw, so layouts are kept.
 const PAINT_CACHE_ENTRIES = 2048;
-const layouts = new Map<string, { paint: Paint; links: LinkBox[] }>();
+const layouts = new Map<string, TextLayout>();
 
 type Layoutable = Pick<TextBlock, "text" | "fontSize" | "width" | "align" | "rowPitch">;
+type TextLayout = { paint: Paint; links: LinkBox[]; tasks: TaskBox[] };
 
-function layoutOf(t: Layoutable): { paint: Paint; links: LinkBox[] } {
+function layoutOf(t: Layoutable): TextLayout {
   const key = `${mathEpoch()}|${t.fontSize}|${t.width}|${t.rowPitch ?? ""}|${t.align}|${t.text}`;
   let l = layouts.get(key);
   if (!l) {
-    l = layoutMarkdownWithLinks(t.text, t.fontSize, t.width, t.rowPitch ?? null, t.align, mathBox);
+    l = layoutMarkdownWithTargets(t.text, t.fontSize, t.width, t.rowPitch ?? null, t.align, mathBox);
     if (layouts.size >= PAINT_CACHE_ENTRIES) layouts.clear();
     layouts.set(key, l);
     // Until MathJax has loaded formulas show their source.
@@ -67,6 +68,21 @@ export function linkAt(t: TextBlock, x: number, y: number): string | null {
   const lx = x - t.x, ly = y - t.y;
   for (const b of layoutOf(t).links) if (lx >= b.x0 && lx <= b.x1 && ly >= b.y0 && ly <= b.y1) return b.href;
   return null;
+}
+
+/** The task checkbox nearest a page point, if one is within `pad` of it. */
+export function taskAt(t: TextBlock, x: number, y: number, pad: number): TaskBox | null {
+  const lx = x - t.x, ly = y - t.y;
+  let best: TaskBox | null = null;
+  let bestDist = pad;
+  for (const b of layoutOf(t).tasks) {
+    const dist = Math.hypot(Math.max(b.x0 - lx, lx - b.x1, 0), Math.max(b.y0 - ly, ly - b.y1, 0));
+    if (dist <= bestDist) {
+      best = b;
+      bestDist = dist;
+    }
+  }
+  return best;
 }
 
 export function textBounds(t: TextBlock): Rect {

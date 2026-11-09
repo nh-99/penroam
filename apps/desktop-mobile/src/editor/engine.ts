@@ -31,9 +31,11 @@ import {
 import { newId } from "./ids";
 import { classifyPointer, PALM_CONTACT_PX, PENCIL_CURVE, penErases, pressureArrived, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
 import { PdfCache, PdfPageRenderer } from "./pdf";
-import { drawText, elementBounds, linkAt, PageRenderer, paintOf, textBounds, type Ink, type Text } from "./renderer";
+import { drawText, elementBounds, linkAt, PageRenderer, paintOf, taskAt, textBounds, type Ink, type Text } from "./renderer";
 import type { PageSession, SaveState } from "./session";
-import { rowsFor } from "./markdown";
+import { rowsFor, toggledTask, type TaskBox } from "./markdown";
+import { MarkdownEditor } from "./markdownEditor";
+import type { FormatAction } from "./markdownFormat";
 import { onMathReady } from "./math";
 import { alignment, SNAP_DISTANCE_PX, type Guide, type TextEdges } from "./snap";
 import { rowPitchOf, snapToRow } from "./templates";
@@ -81,6 +83,8 @@ export interface EditorState {
   /** The current page's paper has rows that text can lock to. */
   pageHasRows: boolean;
   editingText: boolean;
+  /** Formatting commands that are on at the caret of the text box being edited. */
+  textFormats: FormatAction[];
   saveState: SaveState;
   saveError: string | null;
   nativeActive: boolean;
@@ -107,6 +111,24 @@ const PINCH_GRACE_MS = 250;
 const PEN_LIFT_GRACE_MS = 400;
 /** A press that moves less than this (screen pixels) before it lifts is a tap. */
 const TAP_SLOP_PX = 8;
+/** How far (screen pixels) outside a task's small checkbox a tap still reaches it. */
+const TASK_TAP_PAD_PX = 6;
+
+/** A task checkbox under a page point, with the text its position was worked out from. */
+interface TaskHit {
+  id: string;
+  text: string;
+  box: TaskBox;
+}
+
+/** A press on a task's checkbox; it ticks the box if the press lifts as a tap. */
+interface TaskTap extends TaskHit {
+  pointerId: number;
+  x: number;
+  y: number;
+  /** With the select tool nothing starts until the press moves; this is where to start it from. */
+  selectFrom?: PointerEvent;
+}
 
 interface ActiveStroke {
   stroke: Ink;
@@ -162,7 +184,9 @@ export class InkEditor {
   private overlay: HTMLDivElement;
   private selBox: HTMLDivElement;
   private selHandle: HTMLDivElement;
-  private textarea: HTMLTextAreaElement;
+  /** Holds the text box editor, positioned over the block; the editor exists during an edit. */
+  private textHost: HTMLDivElement;
+  private textEditor: MarkdownEditor | null = null;
   /** The strip around the box being edited. Dragging it moves the box. */
   private editFrame: HTMLDivElement;
   private activeCv: HTMLCanvasElement;
@@ -184,6 +208,7 @@ export class InkEditor {
   private pan: { pointerId: number; x: number; y: number } | null = null;
   /** A navigating press that started on a link; it opens if the press lifts as a tap. */
   private linkTap: { pointerId: number; x: number; y: number; href: string } | null = null;
+  private taskTap: TaskTap | null = null;
   /** The finger behind the stroke, erase or drag in progress, in viewport coordinates. */
   private fingerDraw: { pointerId: number; x: number; y: number } | null = null;
   private penDown = false;
@@ -240,18 +265,16 @@ export class InkEditor {
     this.selHandle.className = "penroam-handle absolute hidden";
     this.overlay.appendChild(this.selHandle);
 
-    // before the textarea, so the textarea stays on top of the strip's middle
+    // before the text editor, so the editor stays on top of the strip's middle
     this.editFrame = document.createElement("div");
     this.editFrame.className = "penroam-editframe absolute hidden";
     this.editFrame.title = "Drag to move";
     this.editFrame.style.pointerEvents = "auto";
     this.overlay.appendChild(this.editFrame);
-    this.textarea = document.createElement("textarea");
-    this.textarea.className = "penroam-textedit absolute hidden";
-    this.textarea.setAttribute("aria-label", "Text block");
-    this.textarea.spellcheck = true;
-    this.textarea.style.pointerEvents = "auto";
-    this.overlay.appendChild(this.textarea);
+    this.textHost = document.createElement("div");
+    this.textHost.className = "penroam-textedit absolute hidden";
+    this.textHost.style.pointerEvents = "auto";
+    this.overlay.appendChild(this.textHost);
 
     const mkScreen = () => {
       const c = document.createElement("canvas");
@@ -295,20 +318,21 @@ export class InkEditor {
     on(viewport, "wheel", (e: WheelEvent) => this.onWheel(e), { passive: false });
     on(viewport, "contextmenu", (e: Event) => e.preventDefault());
     on(viewport, "dblclick", (e: MouseEvent) => this.onDoubleClick(e));
-    on(this.textarea, "input", () => this.onTextInput());
-    on(this.textarea, "compositionstart", () => this.edit && (this.edit.composing = true));
-    on(this.textarea, "compositionend", () => {
+    on(this.textHost, "compositionstart", () => this.edit && (this.edit.composing = true));
+    on(this.textHost, "compositionend", () => {
       if (this.edit) this.edit.composing = false;
-      this.onTextInput();
+      if (this.textEditor) this.onTextInput(this.textEditor.view.state.doc.toString());
     });
-    on(this.textarea, "keydown", (e: KeyboardEvent) => {
+    on(this.textHost, "keydown", (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         this.endTextEdit();
       }
       e.stopPropagation(); // typing never triggers editor shortcuts
     });
-    on(this.textarea, "blur", () => this.endTextEdit());
+    on(this.textHost, "focusout", (e: FocusEvent) => {
+      if (!this.textHost.contains(e.relatedTarget as Node | null)) this.endTextEdit();
+    });
     on(window, "keydown", (e: KeyboardEvent) => {
       if (e.code === "Space" && !this.edit && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) this.spaceDown = true;
     });
@@ -370,6 +394,7 @@ export class InkEditor {
       selectionTextFree: sel.every((e) => e.type !== "text" || e.rowPitch === undefined),
       pageHasRows: this.pageHasRows(),
       editingText: !!this.edit,
+      textFormats: this.textEditor?.formats ?? [],
       saveState: this.session?.saveState ?? "saved",
       saveError: this.session?.lastError ?? null,
       nativeActive: this.nativeVisible,
@@ -691,7 +716,7 @@ export class InkEditor {
       if (t.textColor) d.color = t.textColor;
       if (t.textSize) d.fontSize = t.textSize;
       if (freed) Object.assign(d, this.placedForMode(d, this.tools.textFreePlacement));
-      this.layoutTextarea();
+      this.layoutTextEditor();
       this.scheduleTextCommit();
     }
     if (this.native && this.nativeMounted) this.nativeCall((n) => n.setTool(this.nativeTool()));
@@ -770,7 +795,7 @@ export class InkEditor {
   }
 
   private onDown(e: PointerEvent) {
-    if (e.target === this.textarea) return;
+    if (this.textHost.contains(e.target as Node)) return;
     if (!this.session) return;
     this.clearMatches();
     this.rect = this.viewport.getBoundingClientRect();
@@ -820,6 +845,14 @@ export class InkEditor {
     }
     // an empty box is gone once its edit ended, and then this is an ordinary press
     if (grabbed && this.session.elementById(grabbed)) return this.beginTextMove(grabbed, e);
+    // Only the lift can tell a tap from a stroke or a drag. A pen stroke starts anyway so that
+    // ink never lags and is dropped if this was a tap; selecting waits, or a tap would flash
+    // the selection and the toolbar's selection buttons.
+    this.taskTap = this.pressedTask(e, tool);
+    if (this.taskTap && tool === "select") {
+      this.taskTap.selectFrom = e;
+      return;
+    }
     switch (tool) {
       case "pen":
       case "highlighter":
@@ -868,6 +901,14 @@ export class InkEditor {
       const [x, y] = this.viewportPoint(e);
       if (Math.hypot(x - this.linkTap.x, y - this.linkTap.y) > TAP_SLOP_PX) this.linkTap = null;
     }
+    if (this.taskTap?.pointerId === e.pointerId) {
+      const [x, y] = this.viewportPoint(e);
+      if (Math.hypot(x - this.taskTap.x, y - this.taskTap.y) > TAP_SLOP_PX) {
+        const from = this.taskTap.selectFrom;
+        this.taskTap = null;
+        if (from) this.beginSelect(from);
+      }
+    }
     if (this.touches.has(e.pointerId) || this.pan?.pointerId === e.pointerId) {
       if (e.type === "pointermove") this.navigate(e);
       return;
@@ -907,6 +948,14 @@ export class InkEditor {
       this.linkTap = null;
       if (!cancelled) this.cb.openLink?.(tap.href);
     }
+    const task = this.taskTap?.pointerId === e.pointerId ? this.taskTap : null;
+    if (task) {
+      this.taskTap = null;
+      if (!cancelled) {
+        if (this.active?.pointerId === e.pointerId) this.dropStroke();
+        this.toggleTask(task);
+      }
+    }
     if (this.touches.delete(e.pointerId)) {
       if (this.touches.size < 2) this.pinch = null;
       return;
@@ -942,6 +991,7 @@ export class InkEditor {
     const finger = this.fingerDraw;
     if (!finger) return null;
     this.fingerDraw = null;
+    this.taskTap = null;
     if (this.active) {
       if (performance.now() - this.active.t0 >= keepAfterMs) this.finishStroke();
       else this.dropStroke();
@@ -968,6 +1018,7 @@ export class InkEditor {
     this.pinch = null;
     this.pan = null;
     this.linkTap = null;
+    this.taskTap = null;
     this.penDown = false;
     this.spaceDown = false;
   }
@@ -988,7 +1039,8 @@ export class InkEditor {
     if (this.tool !== "select" || !this.session) return;
     const [x, y] = this.docPoint(e);
     const t = this.hitText(x, y);
-    if (t) this.beginTextEdit(t, false);
+    // quick taps on a checkbox are ticks, not a request to edit the box
+    if (t && !this.taskAtPoint(x, y)) this.beginTextEdit(t, false);
   }
 
   // ----------------------------------------------------- navigation --
@@ -1001,6 +1053,7 @@ export class InkEditor {
     const first = e.pointerType !== "touch" || this.touches.size === 0;
     const href = first && e.button <= 0 ? this.linkUnder(e) : null;
     this.linkTap = href ? { pointerId: e.pointerId, x: p[0], y: p[1], href } : null;
+    this.taskTap = first && !href ? this.pressedTask(e, this.effectiveTool(e)) : null;
     if (e.pointerType === "touch") {
       this.touches.set(e.pointerId, { x: p[0], y: p[1] });
       if (this.touches.size === 2) {
@@ -1220,20 +1273,47 @@ export class InkEditor {
   }
 
   /**
-   * Shows a mouse user where a link is: its address as a tooltip, and a pointer cursor when a
-   * click would open it (the hand tool, or Ctrl/Cmd held).
+   * Shows a mouse user where a click would act: a link's address as a tooltip, and a pointer
+   * cursor over a link a click would open (the hand tool, or Ctrl/Cmd held) or a checkbox it
+   * would tick.
    */
   private updateLinkHover(e: PointerEvent) {
     const href = this.edit ? null : this.linkUnder(e);
-    this.showLinkHover(href, this.tool === "hand" || e.ctrlKey || e.metaKey);
+    const task = !this.edit && !!this.session && (this.tool === "pen" || this.tool === "select" || this.tool === "hand") && !!this.taskAtPoint(...this.docPoint(e));
+    this.showLinkHover(href, this.tool === "hand" || e.ctrlKey || e.metaKey, task);
   }
 
-  private showLinkHover(href: string | null, clickable: boolean) {
+  private showLinkHover(href: string | null, clickable: boolean, task = false) {
     const v = this.viewport;
     if (href) v.title = href;
     else v.removeAttribute("title");
-    if (href && clickable) v.dataset.link = "";
+    if ((href && clickable) || task) v.dataset.link = "";
     else delete v.dataset.link;
+  }
+
+  // --------------------------------------------------------- tasks --
+  private taskAtPoint(x: number, y: number): TaskHit | null {
+    const t = this.hitText(x, y);
+    const box = t && taskAt(t, x, y, TASK_TAP_PAD_PX / this.transform.scale);
+    return t && box ? { id: t.id, text: t.text, box } : null;
+  }
+
+  /** The checkbox this press could tick. Ticking belongs to the pen, select and hand tools. */
+  private pressedTask(e: PointerEvent, tool: Tool): TaskTap | null {
+    if (!this.session || e.button > 0 || (tool !== "pen" && tool !== "select" && tool !== "hand")) return null;
+    const hit = this.taskAtPoint(...this.docPoint(e));
+    if (!hit) return null;
+    const [x, y] = this.viewportPoint(e);
+    return { ...hit, pointerId: e.pointerId, x, y };
+  }
+
+  private toggleTask(hit: TaskHit) {
+    const s = this.session;
+    const t = s?.elementById(hit.id);
+    // a sync or an undo can change the block under a press, and `at` is only good for its text
+    if (!s || t?.type !== "text" || t.text !== hit.text) return;
+    const next: Text = { ...t, text: toggledTask(t.text, hit.box) };
+    s.commit({ label: hit.box.done ? "Untick task" : "Tick task", forward: [{ op: "replaceElements", elements: [next] }], inverse: [{ op: "replaceElements", elements: [t] }] });
   }
 
   // -------------------------------------------------------- select --
@@ -1635,23 +1715,29 @@ export class InkEditor {
       this.renderer.hidden.add(t.id);
       this.renderer.renderText(textBounds(t));
     }
-    this.textarea.value = t.text;
-    this.textarea.classList.remove("hidden");
+    this.textHost.classList.remove("hidden");
     this.editFrame.classList.remove("hidden");
-    this.layoutTextarea();
-    // focus without scrolling the page under the keyboard
-    this.textarea.focus({ preventScroll: true });
-    const len = this.textarea.value.length;
-    this.textarea.setSelectionRange(len, len);
-    this.emit({ editingText: true });
+    this.layoutTextEditor();
+    this.textEditor = new MarkdownEditor(this.textHost, {
+      text: t.text,
+      fontSize: t.fontSize,
+      rowPitch: t.rowPitch,
+      onChange: (text) => this.onTextInput(text),
+      onFormats: (textFormats) => this.emit({ textFormats }),
+      onResize: () => this.layoutTextEditor(),
+    });
+    this.layoutTextEditor();
+    // focusing doesn't scroll the page under the keyboard: CodeMirror focuses with preventScroll
+    this.textEditor.focus();
+    this.emit({ editingText: true, textFormats: this.textEditor.formats });
     this.updateNative();
   }
 
-  /** Shows the block's Markdown source over the page while it is edited. */
-  private layoutTextarea() {
+  /** Places the text box editor over the block it is editing. */
+  private layoutTextEditor() {
     const d = this.edit?.draft;
     if (!d) return;
-    const ta = this.textarea;
+    const host = this.textHost;
     const fs = d.fontSize;
     const pitch = d.rowPitch;
     const lh = pitch === undefined ? lineHeight(fs) : rowsFor(fs, pitch) * pitch;
@@ -1659,7 +1745,7 @@ export class InkEditor {
     // bottom of it, so the source moves down to the same baselines.
     const cssBaseline = ((lh - ((metrics.ascent - metrics.descent) * fs) / metrics.unitsPerEm) / 2) + (metrics.ascent * fs) / metrics.unitsPerEm;
     const top = pitch === undefined ? d.y : d.y + lh - cssBaseline;
-    Object.assign(ta.style, {
+    Object.assign(host.style, {
       left: `${d.x}px`,
       top: `${top}px`,
       width: `${d.width}px`,
@@ -1669,17 +1755,16 @@ export class InkEditor {
       color: d.color,
       textAlign: d.align,
     });
-    ta.style.height = "0px";
-    const h = Math.max(contentHeight(d.text, fs, d.width, lh), ta.scrollHeight, lh);
-    ta.style.height = `${h}px`;
+    const h = Math.max(this.textEditor?.height || contentHeight(d.text, fs, d.width, lh), lh);
+    host.style.height = `${h}px`;
     Object.assign(this.editFrame.style, { left: `${d.x}px`, top: `${top}px`, width: `${d.width}px`, height: `${h}px` });
   }
 
-  private onTextInput() {
+  private onTextInput(text: string) {
     const ed = this.edit;
     if (!ed) return;
-    ed.draft.text = this.textarea.value;
-    this.layoutTextarea();
+    ed.draft.text = text;
+    this.layoutTextEditor();
     if (!ed.composing) this.scheduleTextCommit();
   }
 
@@ -1716,7 +1801,7 @@ export class InkEditor {
     } else return;
     ed.committed = next;
     ed.isNew = false;
-    // keep the edited block hidden on canvas while the textarea shows it
+    // keep the edited block hidden on canvas while the text editor shows it
     this.renderer.hidden.add(next.id);
     this.renderer.renderText(textBounds(next));
   }
@@ -1728,13 +1813,19 @@ export class InkEditor {
     this.commitText(true);
     this.edit = null;
     this.renderer.hidden.delete(ed.id);
-    this.textarea.classList.add("hidden");
+    this.textEditor?.destroy();
+    this.textEditor = null;
+    this.textHost.classList.add("hidden");
     this.editFrame.classList.add("hidden");
-    if (document.activeElement === this.textarea) this.textarea.blur();
     const e = this.session?.elementById(ed.id);
     this.renderer.renderText(e ? textBounds(e as Text) : textBounds(ed.draft));
     this.emit({ editingText: false });
     this.updateNative();
+  }
+
+  /** Applies a toolbar formatting command to the text box being edited. */
+  formatText(action: FormatAction) {
+    this.textEditor?.format(action);
   }
 
   get isEditingText() {
@@ -1892,6 +1983,7 @@ export class InkEditor {
     if (!down) return this.liftPen();
     this.penDown = true;
     this.abandonFingerDraw();
+    this.taskTap = null;
     this.touches.clear();
     this.pinch = null;
     this.pan = null;
@@ -1901,6 +1993,12 @@ export class InkEditor {
     this.markPenSeen(); // surfaces that only report finished strokes (BOOX)
     const s = this.session;
     if (!s) return;
+    const task = this.nativeTaskTap(stroke);
+    if (task) {
+      this.toggleTask(task);
+      // the native layer has already drawn the dot, so it has to be told to let go of it
+      return this.nativeCall((n) => (n.ownsCommittedInk ? n.removeStrokes([stroke.id]) : n.commitAck(stroke.id)));
+    }
     const el: Ink = { ...stroke, type: "ink", z: s.nextZ() };
     this.nativeEcho = true;
     try {
@@ -1912,6 +2010,15 @@ export class InkEditor {
     if (this.native && !this.native.ownsCommittedInk) {
       requestAnimationFrame(() => requestAnimationFrame(() => this.nativeCall((n) => n.commitAck(el.id))));
     }
+  }
+
+  /** The checkbox a finished native pen stroke tapped, if the stroke was only a tap on one. */
+  private nativeTaskTap(stroke: InkStroke): TaskHit | null {
+    const start = stroke.points[0];
+    if (!start || stroke.tool !== "pen" || this.tool !== "pen") return null;
+    const slop = TAP_SLOP_PX / this.transform.scale;
+    if (stroke.points.some((p) => Math.hypot(p.x - start.x, p.y - start.y) > slop)) return null;
+    return this.taskAtPoint(start.x, start.y);
   }
 
   private onNativeErased(ids: string[]) {

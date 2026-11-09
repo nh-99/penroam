@@ -7,6 +7,7 @@ import type { PenOnlyMode } from "../editor/input";
 import type { Paper } from "../generated/Paper";
 import type { TemplateKind } from "../generated/TemplateKind";
 import type { UpdateChannel } from "../platform/updates";
+import { normalizeHex } from "../editor/color";
 
 export interface AutoBackup {
   target: "off" | "folder" | "webdav";
@@ -19,7 +20,16 @@ export interface AutoBackup {
 
 export type ThemePref = "system" | "light" | "dark" | "epaper";
 
+/** Which set of toolbar colours is meant. Text and recolouring a selection use the pen's. */
+export type PaletteKind = "pen" | "highlighter";
+
 const KEY = "penroam.settings.v1";
+
+/** The colours the toolbar offers until the user changes them. */
+export const PEN_COLORS = ["#111111", "#1d4ed8", "#b91c1c", "#15803d", "#7c3aed", "#c2410c"];
+export const HIGHLIGHTER_COLORS = ["#facc15", "#4ade80", "#f472b6", "#60a5fa"];
+/** Keeps the colours from pushing the rest of the toolbar out of sight. */
+export const MAX_PALETTE_COLORS = 12;
 
 interface Persisted {
   theme: ThemePref;
@@ -40,6 +50,10 @@ interface Persisted {
   highlighterWidth: number;
   textColor: string;
   textSize: number;
+  /** The toolbar's pen colours: distinct `#rrggbb` values, never empty. */
+  penPalette: string[];
+  /** The toolbar's highlighter colours: distinct `#rrggbb` values, never empty. */
+  highlighterPalette: string[];
   /** New text is placed anywhere on ruled and dotted paper instead of on its rows. */
   textFreePlacement: boolean;
   paper: Paper;
@@ -68,6 +82,8 @@ const defaults: Persisted = {
   highlighterWidth: 14,
   textColor: "#111111",
   textSize: 16,
+  penPalette: PEN_COLORS,
+  highlighterPalette: HIGHLIGHTER_COLORS,
   textFreePlacement: false,
   paper: "letter",
   template: "ruled",
@@ -78,18 +94,28 @@ const defaults: Persisted = {
   developerMode: false,
 };
 
+/** A saved palette held to its invariants. Always a new array, so edits can't reach the built-in lists. */
+function cleanPalette(saved: unknown, fallback: string[]): string[] {
+  const colors = Array.isArray(saved) ? saved.flatMap((c) => (typeof c === "string" ? (normalizeHex(c) ?? []) : [])) : [];
+  const distinct = [...new Set(colors)].slice(0, MAX_PALETTE_COLORS);
+  return distinct.length ? distinct : [...fallback];
+}
+
 function load(): Persisted {
+  let saved: Partial<Persisted> = {};
   try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) return { ...defaults, ...JSON.parse(raw) };
+    saved = JSON.parse(localStorage.getItem(KEY) ?? "{}") ?? {};
   } catch {
     /* corrupted prefs: fall back to defaults */
   }
-  return { ...defaults };
+  return {
+    ...defaults,
+    ...saved,
+    penPalette: cleanPalette(saved.penPalette, PEN_COLORS),
+    highlighterPalette: cleanPalette(saved.highlighterPalette, HIGHLIGHTER_COLORS),
+  };
 }
 
-export const PEN_COLORS = ["#111111", "#1d4ed8", "#b91c1c", "#15803d", "#7c3aed", "#c2410c"];
-export const HIGHLIGHTER_COLORS = ["#facc15", "#4ade80", "#f472b6", "#60a5fa"];
 export const PEN_WIDTHS = [1.2, 2.2, 3.5, 6];
 export const HIGHLIGHTER_WIDTHS = [8, 14, 22];
 export const TEXT_SIZES = [12, 16, 22, 32];
@@ -131,5 +157,43 @@ export const useSettings = defineStore("settings", () => {
     }
   }
 
-  return { s, effectiveTheme, preferEpaper };
+  function palette(kind: PaletteKind): string[] {
+    return kind === "pen" ? s.value.penPalette : s.value.highlighterPalette;
+  }
+
+  /** Adds a toolbar colour. Does nothing if it is already there or the palette is full. */
+  function addPaletteColor(kind: PaletteKind, color: string) {
+    const p = palette(kind);
+    if (p.length < MAX_PALETTE_COLORS && !p.includes(color)) p.push(color);
+  }
+
+  /** Changes a toolbar colour in place. If the new colour is already in the palette, the two become one. */
+  function replacePaletteColor(kind: PaletteKind, old: string, color: string) {
+    const p = palette(kind);
+    const i = p.indexOf(old);
+    if (i < 0 || old === color) return;
+    if (p.includes(color)) p.splice(i, 1);
+    else p[i] = color;
+    // A tool using this swatch keeps using it, rather than being left on a colour no longer offered.
+    if (kind === "highlighter") {
+      if (s.value.highlighterColor === old) s.value.highlighterColor = color;
+    } else {
+      if (s.value.penColor === old) s.value.penColor = color;
+      if (s.value.textColor === old) s.value.textColor = color;
+    }
+  }
+
+  /** Removes a toolbar colour, unless it is the last one. */
+  function removePaletteColor(kind: PaletteKind, color: string) {
+    const p = palette(kind);
+    if (p.length > 1 && p.includes(color)) p.splice(p.indexOf(color), 1);
+  }
+
+  /** Puts a palette back to the colours the app ships with. */
+  function resetPalette(kind: PaletteKind) {
+    if (kind === "pen") s.value.penPalette = [...PEN_COLORS];
+    else s.value.highlighterPalette = [...HIGHLIGHTER_COLORS];
+  }
+
+  return { s, effectiveTheme, preferEpaper, palette, addPaletteColor, replacePaletteColor, removePaletteColor, resetPalette };
 });

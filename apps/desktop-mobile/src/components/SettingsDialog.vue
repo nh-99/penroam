@@ -6,6 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { Monitor, Sun, Moon, Tablet, ShieldCheck } from "@lucide/vue";
 import Modal from "./ui/Modal.vue";
 import Tabs from "./ui/Tabs.vue";
+import ToolColorsSection from "./ToolColorsSection.vue";
 import BackupSection from "./BackupSection.vue";
 import SyncSection from "./SyncSection.vue";
 import SearchSection from "./SearchSection.vue";
@@ -92,6 +93,7 @@ function versionTapped() {
             </button>
           </div>
         </section>
+        <ToolColorsSection />
         <section>
           <h3 class="mb-2 text-sm font-medium">Touch input</h3>
           <div class="space-y-1.5" role="radiogroup" aria-label="Finger input">

@@ -1,7 +1,7 @@
 # Development
 
 Stack: Tauri 2 · Vue 3 (Composition API) + TypeScript · Vite · Tailwind CSS 4 · `@lucide/vue` ·
-Pinia · PDF.js · markdown-it · MathJax · Rust (`penroam-core`, `penroam-storage`, `penroam-pdf`,
+Pinia · PDF.js · markdown-it · CodeMirror · MathJax · Rust (`penroam-core`, `penroam-storage`, `penroam-pdf`,
 `penroam-search`, `lopdf`, `pulldown-cmark`, `zip`, SQLite via `rusqlite`) ·
 native ink adapters (BOOX Onyx SDK on Android, UIKit Pencil layer on iPadOS).
 Design: [`architecture/overview.md`](architecture/overview.md).

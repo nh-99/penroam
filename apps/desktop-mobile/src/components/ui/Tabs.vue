@@ -4,41 +4,19 @@
 // `settings-panel-<tab id>`. It scrolls sideways rather than wrapping on narrow screens, with no
 // visible scrollbar: GTK's overlay scrollbar sits on the labels and takes their clicks. Arrow
 // buttons appear when the tabs don't fit, which also shows that there's more to reach.
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { nextTick, ref, watch } from "vue";
 import { ChevronLeft, ChevronRight } from "@lucide/vue";
-import { tabsScroll, type TabsScroll } from "./tabsScroll";
+import { useSideScroll } from "../../composables/useSideScroll";
 
 const props = defineProps<{ tabs: { id: string; label: string }[]; modelValue: string; label: string }>();
 const emit = defineEmits<{ "update:modelValue": [id: string] }>();
 const bar = ref<HTMLElement | null>(null);
-const scroll = ref<TabsScroll>({ overflowing: false, canLeft: false, canRight: false });
-let observer: ResizeObserver | null = null;
-
-function measure() {
-  const el = bar.value;
-  if (el) scroll.value = tabsScroll(el.scrollLeft, el.clientWidth, el.scrollWidth);
-}
-
-/** Moves most of a bar's width, so the tab at the edge stays in view for context. */
-function nudge(direction: -1 | 1) {
-  const el = bar.value;
-  el?.scrollBy({ left: direction * el.clientWidth * 0.7, behavior: "smooth" });
-}
+const { scroll, measure, nudge } = useSideScroll(bar);
 
 function showSelected() {
   bar.value?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ inline: "nearest", block: "nearest", behavior: "smooth" });
 }
 
-onMounted(() => {
-  measure();
-  if (typeof ResizeObserver !== "undefined" && bar.value) {
-    observer = new ResizeObserver(measure);
-    observer.observe(bar.value);
-  }
-});
-onBeforeUnmount(() => observer?.disconnect());
-// the tab list changes when sync or search report in, after the bar has been measured
-watch(() => props.tabs.length, () => void nextTick(measure));
 watch(() => props.modelValue, () => void nextTick(showSelected));
 
 async function onKey(e: KeyboardEvent) {

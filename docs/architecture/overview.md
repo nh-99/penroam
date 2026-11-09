@@ -193,8 +193,11 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   scanned out before either parser runs, so they can't disagree about TeX. Rendering uses bundled
   Liberation fonts, metric-compatible with the Helvetica and Courier that the PDF export uses. A
   layout is cached by its inputs, because hit tests and dirty-rect redraws need a block's bounds.
-  Editing uses a textarea overlay in the same coordinates, showing the Markdown source; text
-  locked to the paper's rows uses the row pitch as its line height there too.
+  Editing uses a CodeMirror overlay in the same coordinates (`markdownEditor.ts`). Its document
+  is the Markdown source, with decorations that show the formatting and hide the markers away
+  from the caret (`markdownPreview.ts`). That preview parses with Lezer and is approximate: the
+  finished block is always drawn by the layout above. Text locked to the paper's rows uses the
+  row pitch as its line height there too.
 * Formulas come from MathJax, loaded on first use because it is the largest dependency. It runs
   only in the webview, so PDF export and printing first ask Rust which formulas a notebook has,
   render them, and pass the outlines back. Until MathJax is ready a formula shows its source.

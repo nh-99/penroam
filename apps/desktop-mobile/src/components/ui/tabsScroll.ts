@@ -1,8 +1,8 @@
-// Which way a sideways-scrolling tab bar can still move. Separate from the component so the rounding
+// Which way a sideways-scrolling bar of tabs or tools can still move. Separate from the component so the rounding
 // can be tested: on high-density screens scroll positions are fractional, and the far end can sit
 // a fraction of a pixel short of `scrollWidth - clientWidth`.
 export interface TabsScroll {
-  /** The tabs don't fit, so the arrows are shown. */
+  /** The contents don't fit, so the arrows are shown. */
   overflowing: boolean;
   canLeft: boolean;
   canRight: boolean;

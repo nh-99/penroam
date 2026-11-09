@@ -36,6 +36,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     selectionCount: 0,
     selectionHasText: false, selectionTextFree: true, pageHasRows: false,
     editingText: false,
+    textFormats: [],
     saveState: "saved",
     saveError: null,
     nativeActive: false,

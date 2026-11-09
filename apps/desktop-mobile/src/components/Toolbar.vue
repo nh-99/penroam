@@ -1,18 +1,24 @@
 <script setup lang="ts">
 // Pen toolbar: tools, colour, thickness, undo/redo, zoom. Shown as a strip
 // under the top bar on wide screens and as a bottom tray on narrow ones (it
-// never floats over the canvas, so native ink overlays can't cover it).
-import { computed } from "vue";
-import { Pen, Highlighter, Eraser, MousePointer2, LassoSelect, Type, Hand, Undo2, Redo2, ZoomIn, ZoomOut, Scan, Trash, SquarePen, Rows3 } from "@lucide/vue";
+// never floats over the canvas, so native ink overlays can't cover it). When it doesn't fit it
+// scrolls sideways, with arrows at each end because there is no scrollbar to show that it can.
+import { computed, ref } from "vue";
+import { Pen, Highlighter, Eraser, MousePointer2, LassoSelect, Type, Hand, Undo2, Redo2, ZoomIn, ZoomOut, Scan, Trash, SquarePen, Rows3, Bold, Italic, Strikethrough, Code, Sigma, Heading1, Heading2, Heading3, List, ListOrdered, ListChecks, Quote, SquareCode, Link, Minus, Table, ChevronLeft, ChevronRight, Palette } from "@lucide/vue";
 import IconBtn from "./ui/IconBtn.vue";
+import ColorDialog from "./ColorDialog.vue";
 import type { EditorState, Tool } from "../editor/engine";
-import { HIGHLIGHTER_COLORS, HIGHLIGHTER_WIDTHS, PEN_COLORS, PEN_WIDTHS, TEXT_SIZES, useSettings } from "../stores/settings";
+import type { FormatAction } from "../editor/markdownFormat";
+import { HIGHLIGHTER_WIDTHS, PEN_WIDTHS, TEXT_SIZES, useSettings } from "../stores/settings";
 import { modKey } from "../platform/device";
+import { useSideScroll } from "../composables/useSideScroll";
 
 const props = defineProps<{ state: EditorState; compact?: boolean }>();
-const emit = defineEmits<{ tool: [t: Tool]; undo: []; redo: []; zoomIn: []; zoomOut: []; fit: []; deleteSelection: []; editText: []; restyle: [s: { color?: string; fontSize?: number }]; freePlacement: [free: boolean] }>();
+const emit = defineEmits<{ tool: [t: Tool]; format: [a: FormatAction]; undo: []; redo: []; zoomIn: []; zoomOut: []; fit: []; deleteSelection: []; editText: []; restyle: [s: { color?: string; fontSize?: number }]; freePlacement: [free: boolean] }>();
 const settings = useSettings();
 const mod = modKey();
+const strip = ref<HTMLElement | null>(null);
+const { scroll, measure, nudge, handlers } = useSideScroll(strip);
 
 const tools: { t: Tool; label: string; icon: any; key: string }[] = [
   { t: "pen", label: "Pen", icon: Pen, key: "P" },
@@ -24,8 +30,36 @@ const tools: { t: Tool; label: string; icon: any; key: string }[] = [
   { t: "hand", label: "Pan", icon: Hand, key: "H" },
 ];
 
+// Shown while a text box is being edited. Those that insert something have nothing to light up.
+const formatGroups: { a: FormatAction; label: string; icon: any; shortcut?: string; inserts?: boolean }[][] = [
+  [
+    { a: "bold", label: "Bold", icon: Bold, shortcut: `${mod}+B` },
+    { a: "italic", label: "Italic", icon: Italic, shortcut: `${mod}+I` },
+    { a: "strike", label: "Strikethrough", icon: Strikethrough },
+    { a: "code", label: "Inline code", icon: Code },
+    { a: "math", label: "Formula", icon: Sigma },
+  ],
+  [
+    { a: "h1", label: "Heading 1", icon: Heading1 },
+    { a: "h2", label: "Heading 2", icon: Heading2 },
+    { a: "h3", label: "Heading 3", icon: Heading3 },
+  ],
+  [
+    { a: "bullet", label: "Bulleted list", icon: List },
+    { a: "ordered", label: "Numbered list", icon: ListOrdered },
+    { a: "task", label: "Task list", icon: ListChecks },
+    { a: "quote", label: "Quotation", icon: Quote },
+    { a: "codeBlock", label: "Code block", icon: SquareCode },
+  ],
+  [
+    { a: "link", label: "Link", icon: Link, shortcut: `${mod}+K` },
+    { a: "rule", label: "Horizontal line", icon: Minus, inserts: true },
+    { a: "table", label: "Table", icon: Table, inserts: true },
+  ],
+];
+
 const selecting = computed(() => props.state.tool === "select" || props.state.tool === "lasso");
-const colors = computed(() => (props.state.tool === "highlighter" ? HIGHLIGHTER_COLORS : PEN_COLORS));
+const colors = computed(() => settings.palette(props.state.tool === "highlighter" ? "highlighter" : "pen"));
 const currentColor = computed(() =>
   props.state.tool === "highlighter" ? settings.s.highlighterColor : props.state.tool === "text" ? settings.s.textColor : settings.s.penColor,
 );
@@ -40,6 +74,13 @@ function setColor(c: string) {
 }
 function isActiveColor(c: string) {
   return !selecting.value && currentColor.value === c;
+}
+const showColorDialog = ref(false);
+// The tool is on a colour with no swatch of its own, so the custom button stands in for one.
+const customColorActive = computed(() => !selecting.value && !colors.value.includes(currentColor.value));
+function pickCustomColor(c: string) {
+  setColor(c);
+  showColorDialog.value = false;
 }
 const sizes = computed(() => {
   const t = props.state.tool;
@@ -66,57 +107,85 @@ function setSize(v: number) {
 </script>
 
 <template>
-  <div class="flex items-center gap-1 overflow-x-auto px-2 py-1.5 [scrollbar-width:none]" role="toolbar" aria-label="Pen tools">
-    <div class="flex items-center gap-0.5" role="radiogroup" aria-label="Tool">
-      <IconBtn v-for="x in tools" :key="x.t" :label="x.label" :shortcut="x.key" :active="state.tool === x.t" role="radio" :aria-checked="state.tool === x.t" @click="emit('tool', x.t)">
-        <component :is="x.icon" :size="20" />
-      </IconBtn>
-    </div>
-
-    <template v-if="showStyle">
-      <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
-      <div class="flex items-center gap-1" role="group" aria-label="Colour">
-        <button v-for="c in colors" :key="c" type="button" class="touch-target inline-flex shrink-0 items-center justify-center rounded-full"
-          :aria-label="`Colour ${c}`" :aria-pressed="isActiveColor(c)" :title="c" @click="setColor(c)">
-          <span class="h-6 w-6 rounded-full border border-black/15" :class="isActiveColor(c) ? 'ring-2 ring-accent ring-offset-2 ring-offset-surface epaper:ring-black' : ''" :style="{ background: c }" />
-        </button>
+  <div class="flex items-center" role="toolbar" aria-label="Pen tools" v-on="handlers">
+    <!-- mousedown.prevent: taking focus would end a text edit, as with the formatting buttons -->
+    <button v-if="scroll.overflowing" type="button" tabindex="-1" aria-label="Scroll toolbar left" title="Scroll left" :disabled="!scroll.canLeft" class="inline-flex w-7 shrink-0 items-center justify-center self-stretch text-muted hover:text-ink disabled:opacity-30" @mousedown.prevent @click="nudge(-1)">
+      <ChevronLeft :size="20" />
+    </button>
+    <div ref="strip" class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" @scroll.passive="measure">
+      <!-- on a phone the formatting needs the room, and tapping away from the box picks tools again -->
+      <div v-if="!(compact && state.editingText)" class="flex items-center gap-0.5" role="radiogroup" aria-label="Tool">
+        <IconBtn v-for="x in tools" :key="x.t" :label="x.label" :shortcut="x.key" :active="state.tool === x.t" role="radio" :aria-checked="state.tool === x.t" @click="emit('tool', x.t)">
+          <component :is="x.icon" :size="20" />
+        </IconBtn>
       </div>
-      <template v-if="sizes.length">
+
+      <!-- Pressing a button must not take focus: leaving the box ends the edit. -->
+      <div v-if="state.editingText" class="flex items-center gap-0.5" role="group" aria-label="Text formatting" @mousedown.prevent>
+        <template v-for="(group, i) in formatGroups" :key="i">
+          <div v-if="i > 0 || !compact" class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+          <IconBtn v-for="x in group" :key="x.a" :label="x.label" :shortcut="x.shortcut" :active="x.inserts ? undefined : state.textFormats.includes(x.a)" @click="emit('format', x.a)">
+            <component :is="x.icon" :size="20" />
+          </IconBtn>
+        </template>
+      </div>
+
+      <template v-if="showStyle && !state.editingText">
         <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
-        <div class="flex items-center gap-0.5" role="group" :aria-label="state.tool === 'text' ? 'Text size' : 'Thickness'">
-          <button v-for="s in sizes" :key="s.v" type="button" class="touch-target inline-flex shrink-0 items-center justify-center rounded-xl hover:bg-surface-2"
-            :class="s.active ? 'bg-brand-soft ring-1 ring-brand/40 epaper:bg-black epaper:text-white' : ''"
-            :aria-pressed="s.active" :aria-label="state.tool === 'text' ? `Text size ${s.v} pt` : `Thickness ${s.v} pt`" @click="setSize(s.v)">
-            <span v-if="s.dot" class="rounded-full bg-current" :style="{ width: `${s.dot}px`, height: `${s.dot}px` }" />
-            <span v-else class="text-xs font-semibold">{{ s.v }}</span>
+        <div class="flex items-center gap-1" role="group" aria-label="Colour">
+          <button v-for="c in colors" :key="c" type="button" class="touch-target inline-flex shrink-0 items-center justify-center rounded-full"
+            :aria-label="`Colour ${c}`" :aria-pressed="isActiveColor(c)" :title="c" @click="setColor(c)">
+            <span class="h-6 w-6 rounded-full border border-black/15" :class="isActiveColor(c) ? 'ring-2 ring-accent ring-offset-2 ring-offset-surface epaper:ring-black' : ''" :style="{ background: c }" />
+          </button>
+          <button type="button" class="touch-target inline-flex shrink-0 items-center justify-center rounded-full text-muted hover:text-ink" aria-label="Custom colour" title="Custom colour" :aria-pressed="customColorActive" @click="showColorDialog = true">
+            <span v-if="customColorActive" class="h-6 w-6 rounded-full border border-black/15 ring-2 ring-accent ring-offset-2 ring-offset-surface epaper:ring-black" :style="{ background: currentColor }" />
+            <Palette v-else :size="20" />
           </button>
         </div>
+        <template v-if="sizes.length">
+          <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+          <div class="flex items-center gap-0.5" role="group" :aria-label="state.tool === 'text' ? 'Text size' : 'Thickness'">
+            <button v-for="s in sizes" :key="s.v" type="button" class="touch-target inline-flex shrink-0 items-center justify-center rounded-xl hover:bg-surface-2"
+              :class="s.active ? 'bg-brand-soft ring-1 ring-brand/40 epaper:bg-black epaper:text-white' : ''"
+              :aria-pressed="s.active" :aria-label="state.tool === 'text' ? `Text size ${s.v} pt` : `Thickness ${s.v} pt`" @click="setSize(s.v)">
+              <span v-if="s.dot" class="rounded-full bg-current" :style="{ width: `${s.dot}px`, height: `${s.dot}px` }" />
+              <span v-else class="text-xs font-semibold">{{ s.v }}</span>
+            </button>
+          </div>
+        </template>
       </template>
-    </template>
 
-    <template v-if="showRowLock">
-      <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
-      <IconBtn :label="rowLocked ? 'Text locked to rows (click for free placement)' : 'Free text placement (click to lock to rows)'" :active="rowLocked" role="switch" :aria-checked="rowLocked" @click="toggleRowLock"><Rows3 :size="20" /></IconBtn>
-    </template>
-
-    <template v-if="selecting && state.selectionCount > 0">
-      <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
-      <IconBtn v-if="state.selectionCount === 1 && state.selectionHasText" label="Edit text" shortcut="Enter" @click="emit('editText')"><SquarePen :size="20" /></IconBtn>
-      <IconBtn label="Delete selection" shortcut="Del" @click="emit('deleteSelection')"><Trash :size="20" /></IconBtn>
-    </template>
-
-    <div class="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
-      <IconBtn label="Undo" :shortcut="`${mod}+Z`" :disabled="!state.canUndo" @click="emit('undo')"><Undo2 :size="20" /></IconBtn>
-      <IconBtn label="Redo" :shortcut="`${mod}+Shift+Z`" :disabled="!state.canRedo" @click="emit('redo')"><Redo2 :size="20" /></IconBtn>
-      <template v-if="!compact">
-        <div class="mx-1.5 h-7 w-px bg-line" aria-hidden="true" />
-        <IconBtn label="Zoom out" :shortcut="`${mod}+−`" @click="emit('zoomOut')"><ZoomOut :size="20" /></IconBtn>
-        <button class="touch-target min-w-14 rounded-xl px-1 text-xs tabular-nums text-muted hover:bg-surface-2" :aria-label="`Zoom ${Math.round(state.scale * 100)}%, fit width`" title="Fit width" @click="emit('fit')">
-          {{ Math.round(state.scale * 100) }}%
-        </button>
-        <IconBtn label="Zoom in" :shortcut="`${mod}+=`" @click="emit('zoomIn')"><ZoomIn :size="20" /></IconBtn>
-        <IconBtn label="Fit page width" :shortcut="`${mod}+0`" @click="emit('fit')"><Scan :size="20" /></IconBtn>
+      <template v-if="showRowLock && !state.editingText">
+        <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+        <IconBtn :label="rowLocked ? 'Text locked to rows (click for free placement)' : 'Free text placement (click to lock to rows)'" :active="rowLocked" role="switch" :aria-checked="rowLocked" @click="toggleRowLock"><Rows3 :size="20" /></IconBtn>
       </template>
+
+      <template v-if="selecting && state.selectionCount > 0">
+        <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+        <IconBtn v-if="state.selectionCount === 1 && state.selectionHasText" label="Edit text" shortcut="Enter" @click="emit('editText')"><SquarePen :size="20" /></IconBtn>
+        <IconBtn label="Delete selection" shortcut="Del" @click="emit('deleteSelection')"><Trash :size="20" /></IconBtn>
+      </template>
+
+      <div class="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+        <IconBtn label="Undo" :shortcut="`${mod}+Z`" :disabled="!state.canUndo" @click="emit('undo')"><Undo2 :size="20" /></IconBtn>
+        <IconBtn label="Redo" :shortcut="`${mod}+Shift+Z`" :disabled="!state.canRedo" @click="emit('redo')"><Redo2 :size="20" /></IconBtn>
+        <template v-if="!compact">
+          <div class="mx-1.5 h-7 w-px bg-line" aria-hidden="true" />
+          <IconBtn label="Zoom out" :shortcut="`${mod}+−`" @click="emit('zoomOut')"><ZoomOut :size="20" /></IconBtn>
+          <button class="touch-target min-w-14 rounded-xl px-1 text-xs tabular-nums text-muted hover:bg-surface-2" :aria-label="`Zoom ${Math.round(state.scale * 100)}%, fit width`" title="Fit width" @click="emit('fit')">
+            {{ Math.round(state.scale * 100) }}%
+          </button>
+          <IconBtn label="Zoom in" :shortcut="`${mod}+=`" @click="emit('zoomIn')"><ZoomIn :size="20" /></IconBtn>
+          <IconBtn label="Fit page width" :shortcut="`${mod}+0`" @click="emit('fit')"><Scan :size="20" /></IconBtn>
+        </template>
+      </div>
     </div>
+    <button v-if="scroll.overflowing" type="button" tabindex="-1" aria-label="Scroll toolbar right" title="Scroll right" :disabled="!scroll.canRight" class="inline-flex w-7 shrink-0 items-center justify-center self-stretch text-muted hover:text-ink disabled:opacity-30" @mousedown.prevent @click="nudge(1)">
+      <ChevronRight :size="20" />
+    </button>
+    <!-- out of the toolbar's DOM, so its scrolling gestures don't act on the dialog's sliders -->
+    <Teleport to="body">
+      <ColorDialog v-if="showColorDialog" title="Custom colour" :color="currentColor" confirm="Use colour" @close="showColorDialog = false" @pick="pickCustomColor" />
+    </Teleport>
   </div>
 </template>

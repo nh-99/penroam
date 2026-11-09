@@ -136,6 +136,15 @@ subscription, so do that too or you'll keep being charged.
 | Text | `T` | Click where you want to type, click a text box to edit it, or drag one to move it. `Esc` finishes the text box |
 | Pan | `H` | Move around the page |
 
+If the toolbar doesn't fit the window, arrows appear at each end to move along it. With a mouse
+you can also turn the wheel over the toolbar, or hold the middle button and drag.
+
+For a colour that isn't in the toolbar, press the palette button after the colours, then use the
+sliders or type a hex value such as `#1d4ed8`. To change which colours the toolbar offers, open
+**Settings → General → Tool colours**: choose a colour to change or remove it, press **+** to add
+one, and **Reset** to go back to the original set. Pen and text share one set of colours, the
+highlighter has its own, and ink you've already drawn doesn't change.
+
 **Typing on rows.** On ruled and dotted paper, text sits on the paper's rows: each line lands
 on a row, large text takes more than one row, and dragging a text box moves it a row at a time.
 The rows button in the toolbar turns this off, so new text can go anywhere on the page. With a
@@ -148,9 +157,12 @@ box, it snaps into line with it and a pink guide shows what it lined up with. Dr
 match left edges, centres and right edges, and free text also matches tops and baselines. Hold
 `Alt` to place text without snapping.
 
-**Formatting text.** Write Markdown in a text box. You see the source while you type and the
-formatted result when you finish the box. Press `Enter` for a new line and leave a blank line
-for a gap. While you edit, dragging inside the box selects text; drag the area just around it
+**Formatting text.** Write Markdown in a text box, or use the formatting buttons that replace
+the colour and size controls in the toolbar while you edit: bold, italic, headings, lists,
+checkboxes, links, tables and more. `Ctrl+B`, `Ctrl+I` and `Ctrl+K` (`Cmd` on macOS) do bold,
+italic and links. Formatting appears as you type, and the Markdown symbols only show on the line
+you're on. Formulas and tables stay as you wrote them until you finish the box. Press `Enter`
+for a new line, which carries a list on, and leave a blank line for a gap. While you edit, dragging inside the box selects text; drag the area just around it
 to move the box instead.
 
 | Write | To get |
@@ -176,6 +188,10 @@ finger (when the pen is set to draw and fingers move the page) or with the hand 
 `Ctrl`-click it (`Cmd`-click on macOS) with any tool. Hovering over a link with the mouse shows
 its address. Only `http`, `https` and `mailto` links open, and a web address written without
 `[...](...)` or `<...>` is plain text.
+
+**Ticking tasks.** Tap a checkbox in a task list to tick or untick it, with the pen, select or
+pan tool (a click works too). With the pen, starting on a checkbox and drawing still
+draws; with the select tool, dragging still moves the box. Undo brings the checkbox back.
 
 Undo and redo with `Ctrl+Z` / `Ctrl+Shift+Z`. Zoom with `Ctrl` and the mouse wheel, a pinch on a
 touchpad or touchscreen, or `Ctrl+=` / `Ctrl+-`. `Ctrl+0` fits the page to the window width.

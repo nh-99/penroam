@@ -108,6 +108,8 @@ shows the note, and search indexes what was typed. Rules for rendering it:
   apart, and several blank lines count as one.
 * HTML is shown as text. Links are underlined. The app opens http, https and mailto links
   when they are tapped; exported PDFs have no clickable links. Images show their alt text.
+* Tapping a task's checkbox in the app edits the source: the character between its brackets
+  becomes `x`, or a space if it was ticked.
   Containers nested past 16 levels join their parent.
 * `$…$` is an inline formula: it closes on its line, opens before a non-space, and closes after
   a non-space and not before a digit. `$$…$$` is a display formula on its own line and may span

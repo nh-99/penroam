@@ -17,7 +17,7 @@ export const MAX_DEPTH = 16;
 
 const SLOT_FIRST = 0xf0000;
 const SLOT_LAST = 0xffffd;
-const HEADING_SCALE = [1.75, 1.5, 1.25, 1.1, 1, 0.9];
+export const HEADING_SCALE = [1.75, 1.5, 1.25, 1.1, 1, 0.9];
 const ROW_FRAME_DROP = 0.22;
 const STROKE_EM = 0.06;
 
@@ -73,6 +73,20 @@ export interface LinkBox {
   y1: number;
   href: string;
 }
+/**
+ * Where a task list's checkbox landed, relative to the block's top left, so a tap can tick it.
+ * `at` is the offset of the marker's `[` in the block's text. A marker whose source can't be
+ * pinned down (one written with an entity, say) gets no box, so a tap can never edit the wrong
+ * characters. Kept out of [`Paint`] for the same reason as [`LinkBox`].
+ */
+export interface TaskBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  at: number;
+  done: boolean;
+}
 
 const isSlot = (c: string) => {
   const cp = c.codePointAt(0)!;
@@ -92,7 +106,7 @@ function fenceAt(line: string[]): { ch: string; len: number; bare: boolean } | n
   return { ch, len, bare: line.slice(start + len).every(isSpace) };
 }
 
-function scanMath(chars: string[], i: number): [number, number, number, boolean] | null {
+export function scanMath(chars: string[], i: number): [number, number, number, boolean] | null {
   const n = chars.length;
   if (chars[i + 1] === "$") {
     let j = i + 2;
@@ -197,6 +211,8 @@ const BOLD = 1, ITALIC = 2, MONO = 4, STRIKE = 8, UNDERLINE = 16;
 type Inline = { kind: "text"; text: string; flags: number; href?: string } | { kind: "break" } | { kind: "math"; index: number };
 interface Item {
   task: boolean | null;
+  /** Offset of the task marker's `[` in the block's text, if it could be found. */
+  taskAt: number | null;
   blocks: Block[];
 }
 type Block =
@@ -257,17 +273,52 @@ md.inline.ruler2.at("strikethrough", (state) => {
   return false;
 });
 
+/** Container markers, then a task marker: the only shape a task item's first line can have. */
+const TASK_LINE = /^((?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*)\[[ xX\t]\]/;
+
+/** Maps an offset in `source` back to the `text` that [`extractMath`] made it from. */
+function originalOffset(text: string, source: string, spans: MathSpan[], offset: number): number {
+  if (source === text) return offset;
+  let from = 0, to = 0;
+  for (const c of source) {
+    if (from >= offset) break;
+    from += c.length;
+    if (isSlot(c)) to += spans[slotIndex(c)].source.length;
+    // extraction can replace an astral character with a shorter U+FFFD
+    else to += text.codePointAt(to)! > 0xffff ? 2 : 1;
+  }
+  return to;
+}
+
 class Builder {
   stack: Frame[] = [{ kind: "root", blocks: [] }];
   pushed: boolean[] = [];
 
-  private lines: string[];
+  private lines: string[] = [];
+  private lineStarts: number[] = [];
 
   constructor(
     private spans: MathSpan[],
-    source: string,
+    private source: string,
+    private text: string,
   ) {
-    this.lines = source.split("\n");
+    // markdown-it's own line breaks, so its line numbers index these
+    let start = 0;
+    for (const m of source.matchAll(/\r\n?|\n/g)) {
+      this.lines.push(source.slice(start, m.index));
+      this.lineStarts.push(start);
+      start = m.index + m[0].length;
+    }
+    this.lines.push(source.slice(start));
+    this.lineStarts.push(start);
+  }
+
+  /** Where the task marker on source line `line` is in the block's text. */
+  private taskOffset(line: number): number | null {
+    const m = TASK_LINE.exec(this.lines[line] ?? "");
+    if (!m) return null;
+    const at = originalOffset(this.text, this.source, this.spans, this.lineStarts[line] + m[1].length);
+    return /^\[[ xX\t]\]/.test(this.text.slice(at, at + 3)) ? at : null;
   }
 
   private restore(text: string): string {
@@ -283,7 +334,7 @@ class Builder {
     const f = this.stack[this.stack.length - 1];
     if (f.kind === "item") return f.item.blocks;
     if (f.kind === "list") {
-      if (!f.items.length) f.items.push({ task: null, blocks: [] });
+      if (!f.items.length) f.items.push({ task: null, taskAt: null, blocks: [] });
       return f.items[f.items.length - 1].blocks;
     }
     return f.blocks;
@@ -404,6 +455,7 @@ class Builder {
             const spaced = first!.content.length > 3 || line < this.lines.length - 1 || /\[[ xX\t]\][ \t]/.test(this.lines[line] ?? "");
             if (m && first && spaced && (first.content.length > 3 || !next || next.type === "softbreak")) {
               top.item.task = m[1] !== " " && m[1] !== "\t";
+              top.item.taskAt = this.taskOffset(line);
               first.content = first.content.slice(m[0].length);
               // text on the next line follows the marker, it doesn't start a line of its own
               if (!first.content && next?.type === "softbreak") {
@@ -427,7 +479,7 @@ class Builder {
           this.open({ kind: "list", start: Number(t.attrGet("start") ?? 1), tight: true, items: [] });
           break;
         case "list_item_open":
-          this.open({ kind: "item", item: { task: null, blocks: [] } });
+          this.open({ kind: "item", item: { task: null, taskAt: null, blocks: [] } });
           break;
         case "blockquote_close":
         case "bullet_list_close":
@@ -505,9 +557,10 @@ function charAtom(c: string, flags: number, size: number, href?: string): Atom {
 class Layout {
   y = 0;
   listDepth = 0;
-  marker: { x: number; text: string | null; task: boolean | null } | null = null;
+  marker: { x: number; text: string | null; task: boolean | null; at: number | null } | null = null;
   paint: Paint = { height: 0, bottom: 0, runs: [], segments: [], math: [] };
   links: LinkBox[] = [];
+  tasks: TaskBox[] = [];
 
   constructor(
     private fs: number,
@@ -611,6 +664,7 @@ class Layout {
         const side = 0.68 * this.fs;
         const x0 = mk.x, y0 = baseline - side, x1 = mk.x + side, y1 = baseline;
         const w = STROKE_EM * this.fs;
+        if (mk.at !== null) this.tasks.push({ x0, y0, x1, y1, at: mk.at, done: mk.task });
         this.segment(x0, y0, x1, y0, w);
         this.segment(x1, y0, x1, y1, w);
         this.segment(x1, y1, x0, y1, w);
@@ -773,7 +827,7 @@ class Layout {
             for (const c of label) w += advanceIn("regular", c);
             w = (w * this.fs) / metrics.unitsPerEm;
           }
-          this.marker = { x: Math.max(x, x + gutter - 0.4 * this.fs - w), text: label, task: item.task };
+          this.marker = { x: Math.max(x, x + gutter - 0.4 * this.fs - w), text: label, task: item.task, at: item.taskAt };
           this.blocks(item.blocks, x + gutter, avail - gutter, !b.tight);
           if (this.marker) this.place([], x + gutter, avail - gutter, "left", this.fs);
         });
@@ -844,26 +898,31 @@ class Layout {
 
 /** Lays Markdown out. `rowPitch` locks lines to rows; `lookup` sizes formulas. */
 export function layoutMarkdown(text: string, fontSize: number, boxWidth: number, rowPitch: number | null, align: TextAlign, lookup: MathLookup): Paint {
-  return layoutMarkdownWithLinks(text, fontSize, boxWidth, rowPitch, align, lookup).paint;
+  return layoutMarkdownWithTargets(text, fontSize, boxWidth, rowPitch, align, lookup).paint;
 }
 
-/** [`layoutMarkdown`], plus where each link's text landed. */
-export function layoutMarkdownWithLinks(
+/** [`layoutMarkdown`], plus where the things a tap can act on landed: links and checkboxes. */
+export function layoutMarkdownWithTargets(
   text: string,
   fontSize: number,
   boxWidth: number,
   rowPitch: number | null,
   align: TextAlign,
   lookup: MathLookup,
-): { paint: Paint; links: LinkBox[] } {
+): { paint: Paint; links: LinkBox[]; tasks: TaskBox[] } {
   const { source, spans } = extractMath(text);
-  const blocks = new Builder(spans, source).build(md.parse(source, {}));
+  const blocks = new Builder(spans, source, text).build(md.parse(source, {}));
   const l = new Layout(fontSize, rowPitch, align, spans, lookup);
   l.blocks(blocks, 0, boxWidth, true);
   if (!blocks.length) l.place([], 0, boxWidth, align, fontSize);
   l.paint.height = round6(l.y);
   l.paint.bottom = Math.max(l.paint.bottom, l.paint.height);
-  return { paint: l.paint, links: l.links };
+  return { paint: l.paint, links: l.links, tasks: l.tasks };
+}
+
+/** `text` with the task marker of `box`, laid out from that same text, ticked or unticked. */
+export function toggledTask(text: string, box: TaskBox): string {
+  return text.slice(0, box.at + 1) + (box.done ? " " : "x") + text.slice(box.at + 2);
 }
 
 /** Number of rows a line of `fontSize` text takes at `pitch`. */

@@ -25,6 +25,12 @@ function move(x: number, y: number, o: Parameters<typeof ptr>[3] = {}) {
   ptr("pointermove", x, y, o);
 }
 
+/** Replaces the text of the box being edited, as typing would. */
+function typeIn(text: string) {
+  const view = (ed as any).textEditor.view;
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+}
+
 function drawLine(x0: number, y0: number, x1: number, y1: number, o: Parameters<typeof ptr>[3] = {}) {
   ptr("pointerdown", x0, y0, o);
   for (let i = 1; i <= 8; i++) move(x0 + ((x1 - x0) * i) / 8, y0 + ((y1 - y0) * i) / 8, o);
@@ -313,10 +319,9 @@ describe("editor engine", () => {
     ed.setTool("text");
     ptr("pointerdown", 120, 200);
     ptr("pointerup", 120, 200);
-    const ta = vp.querySelector("textarea")!;
+    const ta = vp.querySelector<HTMLElement>(".penroam-textedit")!;
     expect(ta.classList.contains("hidden")).toBe(false);
-    ta.value = "Hello\nworld";
-    ta.dispatchEvent(new Event("input"));
+    typeIn("Hello\nworld");
     // pen input on the page while editing ends the edit instead of drawing
     ptr("pointerdown", 400, 400);
     ptr("pointerup", 400, 400);
@@ -331,12 +336,9 @@ describe("editor engine", () => {
     ed.setTool("text");
     ptr("pointerdown", 50, 50);
     ptr("pointerup", 50, 50);
-    const ta = vp.querySelector("textarea")!;
-    ta.value = "first";
-    ta.dispatchEvent(new Event("input"));
+    typeIn("first");
     vi.advanceTimersByTime(800);
-    ta.value = "first second";
-    ta.dispatchEvent(new Event("input"));
+    typeIn("first second");
     ed.endTextEdit();
     expect((session.page.elements[0] as any).text).toBe("first second");
     ed.undo();
@@ -355,9 +357,7 @@ describe("editor engine", () => {
       ed.setTool("text");
       ptr("pointerdown", x, y);
       ptr("pointerup", x, y);
-      const ta = vp.querySelector("textarea")!;
-      ta.value = text;
-      ta.dispatchEvent(new Event("input"));
+      typeIn(text);
       ed.endTextEdit();
       return session.page.elements[session.page.elements.length - 1] as any;
     };
@@ -509,7 +509,7 @@ describe("editor engine", () => {
       const t = type(300, 300, "hello");
       ptr("pointerdown", t.x + 5, t.y + 5, { pointerType: "mouse" });
       ptr("pointerup", t.x + 5, t.y + 5, { pointerType: "mouse" });
-      const ta = vp.querySelector("textarea")!;
+      const ta = vp.querySelector<HTMLElement>(".penroam-textedit")!;
       expect(ta.classList.contains("hidden")).toBe(false);
       ed.endTextEdit();
       ptr("pointerdown", t.x + 5, t.y + 5, { pointerType: "mouse" });
@@ -546,8 +546,8 @@ describe("editor engine", () => {
       const t = type(300, 300, "hello");
       ptr("pointerdown", t.x + 5, t.y + 5, { pointerType: "mouse" });
       ptr("pointerup", t.x + 5, t.y + 5, { pointerType: "mouse" });
-      press(vp.querySelector("textarea")!, t.x + 5, t.y + 5);
-      expect(vp.querySelector("textarea")!.classList.contains("hidden")).toBe(false);
+      press(vp.querySelector<HTMLElement>(".penroam-textedit")!, t.x + 5, t.y + 5);
+      expect(vp.querySelector<HTMLElement>(".penroam-textedit")!.classList.contains("hidden")).toBe(false);
       expect(last().x).toBe(t.x);
     });
 
@@ -593,9 +593,7 @@ describe("editor engine", () => {
     ed.setTool("text");
     ptr("pointerdown", 100, 100);
     ptr("pointerup", 100, 100);
-    const ta = vp.querySelector("textarea")!;
-    ta.value = "move me";
-    ta.dispatchEvent(new Event("input"));
+    typeIn("move me");
     ed.endTextEdit();
     ed.setTool("select");
     const t0 = session.page.elements[0] as any;
@@ -689,5 +687,104 @@ describe("links in text blocks", () => {
     vp.dispatchEvent(new PointerEvent("pointerdown", { clientX: 110, clientY: 112, pointerId: 3, pointerType: "mouse", button: 0, buttons: 1, ctrlKey: true, bubbles: true, cancelable: true }));
     expect(opened).toEqual(["https://a.example/"]);
     expect(session.page.elements.filter((e) => e.type === "ink")).toHaveLength(0);
+  });
+});
+
+describe("task checkboxes in text blocks", () => {
+  // At 16px with no row lock the first box spans about x 106.7-117.6, y 104-115.
+  const BOX = [112, 110] as const;
+  const mouse = { pointerType: "mouse" };
+  const text = () => (session.page.elements.find((e) => e.id === "t1") as any).text as string;
+  const inks = () => session.page.elements.filter((e) => e.type === "ink");
+  const tap = (o: Parameters<typeof ptr>[3] = {}) => {
+    ptr("pointerdown", BOX[0], BOX[1], o);
+    ptr("pointerup", BOX[0], BOX[1], o);
+  };
+  beforeEach(() => {
+    session.commit({ label: "add", forward: [{ op: "addElements", elements: [{ type: "text", id: "t1", z: 1, x: 100, y: 100, width: 300, height: 44, text: "- [ ] one\n- [x] two", fontSize: 16, color: "#000000", align: "left" }] }], inverse: [{ op: "removeElements", ids: ["t1"] }] });
+  });
+
+  it("ticks on a pen tap with the pen tool, leaving no ink, and undoes", () => {
+    ed.setTool("pen");
+    tap();
+    expect(text()).toBe("- [x] one\n- [x] two");
+    expect(inks()).toHaveLength(0);
+    ed.undo();
+    expect(text()).toBe("- [ ] one\n- [x] two");
+  });
+
+  it("still draws when a pen stroke starts on the box and moves away", () => {
+    ed.setTool("pen");
+    drawLine(BOX[0], BOX[1], BOX[0] + 60, BOX[1]);
+    expect(text()).toBe("- [ ] one\n- [x] two");
+    expect(inks()).toHaveLength(1);
+  });
+
+  it("toggles on a select-tool click without selecting, and a drag moves the block", () => {
+    ed.setTool("select");
+    tap(mouse);
+    expect(text()).toBe("- [x] one\n- [x] two");
+    expect(ed.selection.size).toBe(0);
+    tap(mouse);
+    expect(text()).toBe("- [ ] one\n- [x] two");
+    ptr("pointerdown", BOX[0], BOX[1], mouse);
+    move(BOX[0] + 40, BOX[1], mouse);
+    ptr("pointerup", BOX[0] + 40, BOX[1], mouse);
+    expect(text()).toBe("- [ ] one\n- [x] two");
+    expect(ed.selection.has("t1")).toBe(true);
+    expect((session.page.elements.find((e) => e.id === "t1") as any).x).toBe(140);
+  });
+
+  it("toggles on a finger tap that would otherwise pan and with the hand tool, not with other tools", () => {
+    ed.setTool("pen");
+    ed.setSettings({ penOnly: "on" });
+    const touch = { pointerType: "touch", pointerId: 11, pressure: 0.5 };
+    tap(touch);
+    expect(text()).toBe("- [x] one\n- [x] two");
+    ed.setTool("hand");
+    tap(mouse);
+    ed.setTool("highlighter");
+    tap(mouse);
+    expect(text()).toBe("- [ ] one\n- [x] two");
+  });
+
+  it("doesn't tick when the block changed under the press", () => {
+    ed.setTool("select");
+    ptr("pointerdown", BOX[0], BOX[1], mouse);
+    const t = session.page.elements[0] as any;
+    session.commit({ label: "edit", forward: [{ op: "replaceElements", elements: [{ ...t, text: "x - [ ] one" }] }], inverse: [{ op: "replaceElements", elements: [t] }] });
+    ptr("pointerup", BOX[0], BOX[1], mouse);
+    expect(text()).toBe("x - [ ] one");
+  });
+
+  it("ticks on a tap from a native surface and has it drop the dot", async () => {
+    const removed: string[][] = [];
+    let handlers: NativeHandlers | null = null;
+    const noop = async () => {};
+    const surface: NativeInkSurface = {
+      kind: "boox",
+      ownsCommittedInk: true,
+      capabilities: {},
+      mount: async (_r, _t, _tool, _s, h) => void (handlers = h),
+      unmount: noop,
+      setBounds: noop,
+      setViewportTransform: noop,
+      setTool: noop,
+      setVisible: noop,
+      loadCommittedInk: noop,
+      addStrokes: noop,
+      removeStrokes: async (ids) => void removed.push(ids),
+      commitAck: noop,
+      metrics: async () => ({}),
+    };
+    ed.setTool("pen");
+    ed.setSettings({ useNativeInk: true });
+    ed.setNativeSurface(surface);
+    await vi.waitFor(() => expect(handlers).not.toBeNull());
+    const point = { x: BOX[0], y: BOX[1], pressure: 0.5, tiltX: 0, tiltY: 0, timeUs: 0 };
+    handlers!.strokeFinalized({ id: "dot", z: 1, tool: "pen", color: "#111111", opacity: 1, width: 2, pressure: true, source: "stylus", input: {}, points: [point] } as any);
+    expect(text()).toBe("- [x] one\n- [x] two");
+    expect(inks()).toHaveLength(0);
+    await vi.waitFor(() => expect(removed).toEqual([["dot"]]));
   });
 });
