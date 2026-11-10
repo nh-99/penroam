@@ -20,7 +20,6 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
-      desktop_matrix: ${{ steps.matrix.outputs.desktop_matrix }}
       testflight: ${{ steps.stores.outputs.testflight }}
       google_play: ${{ steps.stores.outputs.google_play }}
     steps:
@@ -53,11 +52,6 @@ jobs:
         run: |
           echo "testflight=$(python3 tools/release/release.py configured testflight)" >> "$GITHUB_OUTPUT"
           echo "google_play=$(python3 tools/release/release.py configured google-play)" >> "$GITHUB_OUTPUT"
-      - name: Choose the desktop builds
-        id: matrix
-        env:
-          WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
-        run: echo "desktop_matrix=$(python3 tools/release/release.py desktop-matrix "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
       - name: The version has a changelog entry
         run: grep -q "^## ${GITHUB_REF_NAME#v}" CHANGELOG.md
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -75,13 +69,29 @@ jobs:
       - name: Tests, including the golden format and protocol fixtures
         run: cargo test --workspace --locked
 
+  # A job of its own so it is handed no secrets. The runner drops any job output that contains
+  # part of a secret the job was given, and multi-line secrets (the Google Play service account
+  # JSON) are masked line by line, so a lone `{` hides every JSON matrix. When that happened
+  # inside `verify`, `desktop` was never created and the draft was skipped.
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      desktop_matrix: ${{ steps.matrix.outputs.desktop_matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Choose the desktop builds
+        id: matrix
+        env:
+          WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
+        run: echo "desktop_matrix=$(python3 tools/release/release.py desktop-matrix "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+
   desktop:
-    needs: verify
+    needs: [verify, plan]
     strategy:
       fail-fast: false
       matrix:
         # tools/release/release.py: stable tags leave Windows out until it can be signed.
-        include: ${{ fromJSON(needs.verify.outputs.desktop_matrix) }}
+        include: ${{ fromJSON(needs.plan.outputs.desktop_matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
