@@ -3,6 +3,27 @@
 User-visible changes for each release. The release workflow copies a version's section into its
 release notes and stops if the version has no entry.
 
+## 0.1.0-beta.6
+
+0.1.0-beta.5 reached TestFlight and Google Play testing but never got a GitHub release, so if you
+install from GitHub, its changes below are new to you as well.
+
+* Pages scroll continuously: scroll past the end of a page and the next one follows, and a press
+  on another page opens it. The switch at the bottom right of the canvas goes back to one page at a
+  time.
+* New: folders in the library. Make one with the folder button at the top, then use a notebook's
+  **⋮** menu and **Move to folder…**. Folders can hold folders and sync with your account. Deleting
+  a folder moves what's inside it up one level. Devices still on an older version keep the folder
+  changes and ask to be updated.
+* Text boxes have formatting buttons while you edit (bold, italic, headings, lists, checkboxes,
+  links, tables and more), and `Ctrl+B`, `Ctrl+I` and `Ctrl+K` work. Formatting shows as you type,
+  with the Markdown symbols only on the line you're on.
+* Tap a checkbox in a task list to tick or untick it.
+* The palette button after the toolbar colours picks any colour, and **Settings → General → Tool
+  colours** changes which colours the toolbar offers.
+* When the toolbar doesn't fit the window, arrows at each end move along it, and so does the mouse
+  wheel.
+
 ## 0.1.0-beta.5
 
 * The Linux AppImage adds Penroam to your app menu. **Settings → Advanced** can remove it before you
