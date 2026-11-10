@@ -192,6 +192,14 @@ pre,
 :root[data-theme="epaper"] .penroam-page {
   outline: 1px solid #000;
 }
+/* the other pages in continuous scrolling: pictures that look like the live page */
+.penroam-strip-page {
+  background: #ffffff no-repeat center / 100% 100%;
+  box-shadow: var(--pr-shadow);
+}
+:root[data-theme="epaper"] .penroam-strip-page {
+  outline: 1px solid #000;
+}
 .penroam-selection {
   border: calc(1.5px * var(--inv, 1)) dashed #2563eb;
   border-radius: calc(3px * var(--inv, 1));

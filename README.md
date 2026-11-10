@@ -218,8 +218,11 @@ On a touchscreen, **Settings** decides what your fingers do:
 
 **Pages.** The sidebar shows all pages. Use **+** (or `Ctrl+Shift+N`) to add a page, drag
 thumbnails to reorder them, and open a page's **⋮** menu to insert, move or delete it.
-**Page template** in the top bar changes the current page's style. `PgUp` / `PgDn` move
-between pages.
+**Page template** in the top bar changes the current page's style. Scroll down past the end of
+a page to reach the next one. All the pages of a notebook sit in one column, and the page in the
+middle of the window is the one you're writing on. The sidebar, the arrows in the top bar and
+`PgUp` / `PgDn` jump straight to a page. To see one page at a time instead, use the page
+buttons at the bottom right of the canvas.
 
 **PDFs.** Click **Import PDF as pages** in the top bar to add every page of a PDF to the
 notebook, then write on it like any other page. To get the PDF back with your notes on it,

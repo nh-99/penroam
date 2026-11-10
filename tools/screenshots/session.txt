@@ -1,6 +1,4 @@
-# README screenmove 2300 1650
-sleep 700
-shot session for tools/linux-e2e/e2e.py.
+# README screenshot session for tools/linux-e2e/e2e.py and tools/screenshots/capture-windows.mjs.
 # Coordinates are X pixels of a 2560x1800 Xephyr screen with GDK_SCALE=2
 # (twice the logical 1280x900 window layout).
 

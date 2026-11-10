@@ -44,10 +44,18 @@ export function fitPage(viewW: number, viewH: number, pageW: number, pageH: numb
 
 /** Keeps at least `keep` CSS px of the page visible so it cannot be lost off-screen. */
 export function constrain(t: ViewTransform, viewW: number, viewH: number, pageW: number, pageH: number, keep = 80): ViewTransform {
-  const w = pageW * t.scale, h = pageH * t.scale;
-  const ox = Math.min(viewW - keep, Math.max(keep - w, t.ox));
-  const oy = Math.min(viewH - keep, Math.max(keep - h, t.oy));
-  return { scale: t.scale, ox, oy };
+  return constrainTo(t, viewW, viewH, [0, 0, pageW, pageH], keep);
+}
+
+/**
+ * Like `constrain`, for content covering `[x0, y0, x1, y1]` (doc pt) rather than a single
+ * page at the origin: the column of pages in continuous scrolling.
+ */
+export function constrainTo(t: ViewTransform, viewW: number, viewH: number, [x0, y0, x1, y1]: [number, number, number, number], keep = 80): ViewTransform {
+  const s = t.scale;
+  const ox = Math.min(viewW - keep - x0 * s, Math.max(keep - x1 * s, t.ox));
+  const oy = Math.min(viewH - keep - y0 * s, Math.max(keep - y1 * s, t.oy));
+  return { scale: s, ox, oy };
 }
 
 /**

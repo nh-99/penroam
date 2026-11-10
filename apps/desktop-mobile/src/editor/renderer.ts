@@ -697,14 +697,23 @@ export class PageRenderer {
   /** Small PNG of the current page for the sidebar / library. */
   async thumbnail(maxWidth = 240): Promise<Uint8Array | null> {
     await this.whenComplete();
-    const scale = maxWidth / this.width;
+    const c = this.snapshot(maxWidth);
+    const blob: Blob | null = await new Promise((r) => c.toBlob(r, "image/png"));
+    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+  }
+
+  /**
+   * The page layers flattened into one canvas `width` pixels wide (the layers' own width
+   * if omitted), as drawn so far. Call `whenComplete` first for a finished picture.
+   */
+  snapshot(width = this.bg.width): HTMLCanvasElement {
+    const scale = width / this.width;
     const c = document.createElement("canvas");
     c.width = Math.max(1, Math.round(this.width * scale));
     c.height = Math.max(1, Math.round(this.height * scale));
     const x = c.getContext("2d")!;
     x.imageSmoothingQuality = "high";
     for (const layer of [this.bg, this.ink, this.text]) x.drawImage(layer, 0, 0, c.width, c.height);
-    const blob: Blob | null = await new Promise((r) => c.toBlob(r, "image/png"));
-    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+    return c;
   }
 }

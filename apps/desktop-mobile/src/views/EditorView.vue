@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search, FileText, FileImage, ClipboardCopy, History } from "@lucide/vue";
+import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search, FileText, FileImage, ClipboardCopy, History, File, GalleryVertical } from "@lucide/vue";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
@@ -299,6 +299,10 @@ watch(narrow, (n) => {
             <p class="mt-1 text-xs text-muted">{{ host.pageError.value }}</p>
             <Btn class="mt-3" variant="outline" @click="host.openPage(lib.currentPageId)">Try again</Btn>
           </div>
+        </div>
+        <div v-if="nb.pageOrder.length > 0" class="absolute bottom-3 right-3 z-10 flex items-center gap-0.5 rounded-xl border border-line bg-surface p-0.5 shadow-sm epaper:border-2 epaper:shadow-none" role="group" aria-label="Page layout">
+          <IconBtn label="One page at a time" :active="!settings.s.continuousScroll" @click="settings.s.continuousScroll = false"><File :size="18" /></IconBtn>
+          <IconBtn label="Continuous scrolling" :active="settings.s.continuousScroll" @click="settings.s.continuousScroll = true"><GalleryVertical :size="18" /></IconBtn>
         </div>
         <div v-if="nb.pageOrder.length === 0" class="absolute inset-0 flex items-center justify-center">
           <div class="text-center">

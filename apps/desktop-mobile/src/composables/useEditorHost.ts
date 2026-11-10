@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, type Ref } from "vue";
+import type { Size } from "../generated/Size";
 import { InkEditor, type EditorState } from "../editor/engine";
 import { PALM_CONTACT_PX } from "../editor/input";
 import { PdfCache, PdfPageRenderer } from "../editor/pdf";
@@ -50,11 +51,33 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   let pdfCache: PdfCache | null = null;
   let pdfCacheFor: string | null = null;
   let openSeq = 0;
+  /** The page continuous scrolling asked for, so that opening it keeps the view. */
+  let scrollTarget: string | null = null;
+  /** Sizes of the pages loaded so far, for laying out continuous scrolling. */
+  const sizes = new Map<string, Size>();
+  let sizesFor: string | null = null;
+  /**
+   * Sessions of pages left recently, so that scrolling back to one keeps its undo history.
+   * Keyed by notebook and page; dropped when the page changes elsewhere.
+   */
+  const recent = new Map<string, PageSession>();
+  const RECENT_SESSIONS = 8;
+  const recentKey = (nbId: string, pageId: string) => `${nbId}/${pageId}`;
+  function keepRecent(s: PageSession) {
+    const k = recentKey(s.notebookId, s.page.id);
+    recent.delete(k);
+    recent.set(k, s);
+    for (const old of recent.keys()) {
+      if (recent.size <= RECENT_SESSIONS) break;
+      recent.delete(old);
+    }
+  }
 
   function applySettings() {
     const e = editor.value;
     if (!e) return;
     const s = settings.s;
+    e.setContinuous(s.continuousScroll);
     e.setSettings({
       penOnly: s.penOnly,
       mono: settings.effectiveTheme() === "epaper",
@@ -93,6 +116,13 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
    * behind it is drawn at that resolution from the original, so `width` sets the detail.
    */
   async function renderPagePng(page: Page, width: number): Promise<Uint8Array | null> {
+    const c = await renderPageCanvas(page, width);
+    const blob: Blob | null = await new Promise((r) => c.toBlob(r, "image/png"));
+    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+  }
+
+  /** Like `renderPagePng`, but keeps the picture as a canvas (continuous scrolling). */
+  async function renderPageCanvas(page: Page, width: number): Promise<HTMLCanvasElement> {
     const host = document.createElement("div");
     const r = new PageRenderer(host, () => page.elements);
     r.setPage(page.size.width, page.size.height, page.template);
@@ -105,8 +135,62 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     const nb = lib.current;
     if (nb) await r.loadImages(page.elements, (hash) => api.readAsset(nb.id, hash));
     r.renderAll(null);
-    return r.thumbnail(width);
+    await r.whenComplete();
+    return r.snapshot(width);
   }
+
+  /** Tells the editor the notebook's pages, with the sizes and thumbnails known so far. */
+  function pushPageList() {
+    const e = editor.value;
+    const nb = lib.current;
+    if (!e || !nb) return;
+    if (sizesFor !== nb.id) {
+      sizes.clear();
+      sizesFor = nb.id;
+    }
+    e.setPageList(nb.pageOrder.map((id) => ({ id, ...sizes.get(id), placeholder: lib.thumbs[id] ?? null })));
+  }
+
+  /** Records a page's size; the layout changes only if it differs from what was assumed. */
+  function noteSize(nbId: string, page: Page) {
+    if (sizesFor !== nbId) return;
+    const old = sizes.get(page.id);
+    if (old && old.width === page.size.width && old.height === page.size.height) return;
+    sizes.set(page.id, page.size);
+    pushPageList();
+  }
+
+  /** Pictures of other pages the editor asked for, nearest first; drawn one at a time. */
+  let imageQueue: { id: string; width: number }[] = [];
+  let imagesBusy = false;
+  /** The page being drawn now; not queued again while it is. */
+  let drawing: string | null = null;
+  async function drawPageImages() {
+    if (imagesBusy) return;
+    imagesBusy = true;
+    try {
+      for (let want = imageQueue.shift(); want; want = imageQueue.shift()) {
+        drawing = want.id;
+        const nb = lib.current;
+        const e = editor.value;
+        if (!nb || !e) break;
+        if (want.id === session?.page.id || !nb.pageOrder.includes(want.id)) continue;
+        try {
+          const page = await api.loadPage(nb.id, want.id);
+          if (lib.current?.id !== nb.id || editor.value !== e) break;
+          noteSize(nb.id, page);
+          const canvas = await renderPageCanvas(page, want.width);
+          if (lib.current?.id === nb.id) e.setPageImage(want.id, canvas);
+        } catch (err) {
+          console.warn("page picture", want.id, err);
+        }
+      }
+    } finally {
+      imagesBusy = false;
+      drawing = null;
+    }
+  }
+
 
   /** Imported notebooks have no thumbnails: render the missing ones in the background. */
   async function fillMissingThumbs(nbId: string) {
@@ -140,8 +224,14 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     const nb = lib.current;
     const e = editor.value;
     if (!nb || !e) return;
-    if (session && session.page.id === pageId && session.notebookId === nb.id) return;
+    const keepView = scrollTarget === pageId;
+    scrollTarget = null;
     const seq = ++openSeq;
+    if (session && session.page.id === pageId && session.notebookId === nb.id) {
+      // back on the open page before another one finished loading: that load is dropped
+      loading.value = false;
+      return;
+    }
     if (session) {
       try {
         await flush();
@@ -150,6 +240,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
         if (lib.currentPageId !== session.page.id) lib.currentPageId = session.page.id;
         return;
       }
+      if (seq !== openSeq) return;
     }
     if (!pageId) {
       session = null;
@@ -160,15 +251,28 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       pdfCache = new PdfCache((hash) => api.readAsset(nb.id, hash));
       pdfCacheFor = nb.id;
     }
-    loading.value = true;
+    // pages of another notebook may have changed since: only this notebook's sessions are kept
+    if (session && session.notebookId !== nb.id) recent.clear();
+    else if (session) keepRecent(session);
+    // scrolled onto: its picture is already on screen, so no spinner over it
+    loading.value = !keepView;
     pageError.value = null;
     try {
-      const page = await api.loadPage(nb.id, pageId);
-      if (seq !== openSeq) return;
-      session = new PageSession(nb.id, page, (batch) => api.applyPageOperations(nb.id, page.id, batch));
-      // a save rejected because synced remote edits changed the page is rebased, not lost
-      session.reload = () => api.loadPage(nb.id, page.id);
-      await e.setSession(session, pdfCache);
+      const cached = recent.get(recentKey(nb.id, pageId));
+      recent.delete(recentKey(nb.id, pageId));
+      let next: PageSession;
+      if (cached?.idle) next = cached;
+      else {
+        const page = await api.loadPage(nb.id, pageId);
+        if (seq !== openSeq) return;
+        next = new PageSession(nb.id, page, (batch) => api.applyPageOperations(nb.id, page.id, batch));
+        // a save rejected because synced remote edits changed the page is rebased, not lost
+        next.reload = () => api.loadPage(nb.id, page.id);
+      }
+      session = next;
+      const page = next.page;
+      noteSize(nb.id, page);
+      await e.setSession(next, pdfCache, { keepView });
       if (!lib.thumbs[pageId]) setTimeout(() => void thumbnailNow(), page.background ? 1500 : 200);
     } catch (err) {
       if (seq === openSeq) pageError.value = errorMessage(err);
@@ -205,7 +309,10 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     // other changed pages: refresh their thumbnails in the background
     for (const pid of [...remotePending]) {
       remotePending.delete(pid);
-      if (pid === session?.page.id || !nb.pageOrder.includes(pid)) continue;
+      if (pid === session?.page.id) continue;
+      recent.delete(recentKey(nb.id, pid));
+      if (!nb.pageOrder.includes(pid)) continue;
+      e.dropPageImage(pid);
       try {
         const page = await api.loadPage(nb.id, pid);
         if (page.elements.length > 20000) continue;
@@ -232,6 +339,15 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       readAsset: (hash) => api.readAsset(lib.current!.id, hash),
       onPageEdited: () => void thumbnailNow(),
       openLink: (url) => void api.openLink(url).catch((err) => ui.error(`Could not open the link (${errorMessage(err)}).`)),
+      onScrollToPage: (id) => {
+        if (!lib.current?.pageOrder.includes(id) || lib.currentPageId === id) return;
+        scrollTarget = id;
+        lib.currentPageId = id;
+      },
+      wantPageImages: (wants) => {
+        imageQueue = wants.filter((w) => w.id !== drawing);
+        void drawPageImages();
+      },
     });
     editor.value = e;
     benchHooks.editor = e;
@@ -254,6 +370,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
         else off();
       });
     }
+    pushPageList();
     await openPage(lib.currentPageId);
     if (lib.current) void fillMissingThumbs(lib.current.id);
     const n = await detectNativeInk();
@@ -280,6 +397,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   });
 
   watch(() => lib.currentPageId, (id) => void openPage(id));
+  watch([() => lib.current?.id, () => lib.current?.pageOrder.join(","), () => lib.thumbs], pushPageList);
   watch(() => settings.s, applySettings, { deep: true });
   watch(() => settings.effectiveTheme(), applySettings);
   watch(

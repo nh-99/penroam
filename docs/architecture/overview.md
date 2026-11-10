@@ -33,6 +33,7 @@ android/  ios/                  native ink modules used by the plugin: BooxInkVi
 tests/fixtures/                 shared fixtures (strokes, geometry, text and Markdown layout goldens, scenes, PDF, .prp golden, legacy libraries)
 fuzz/                           cargo-fuzz targets (page decoder, journal open, sync batch frame)
 tools/linux-e2e/                XTest input driver + session runner for real-app E2E on Linux
+tools/screenshots/              README screenshots: capture.sh (Linux, Xephyr) and capture-windows.mjs (WebView2 DevTools)
 tools/  docs/                   dev tools, documentation (benchmarks/ = local, git-ignored benchmark output)
 ```
 
@@ -231,9 +232,22 @@ page layer and soften past the limit.
 **Redraws never hold up the pen.** A settled zoom draws the visible region into a detached canvas
 in slices of about 8 ms and swaps it in with the other layers in one task; the rest of the page
 follows in bands, nearest first, and shows the old pixels scaled until then. A stroke added
-meanwhile is queued on the job, and any other ink change restarts it. Only the open page stays in memory,
-so a notebook's size does not affect this. There is no separate tile cache: the page-sized canvas
+meanwhile is queued on the job, and any other ink change restarts it. Only the open page has
+canvases and redraw jobs (pictures of other pages are flat images, below), so a notebook's size does
+not affect this. There is no separate tile cache: the page-sized canvas
 already covers pan, and the cost is in drawing, not in finding what to draw.
+
+**Continuous scrolling** (`pageStrip.ts`, on by default, toggled at the bottom of the canvas). Only the
+open page is live. The other pages are laid out in one column around it, in its coordinates, and
+move with the same CSS transform. Each is a flat picture: the sidebar thumbnail at first, then a
+canvas the host renders off-screen for the pages within a screen of the view, at most a quarter of
+a page layer's pixels each and six kept. A page whose size is not loaded yet takes the open page's.
+When the middle of the view reaches another page, the editor asks the host to open it with the view
+kept, so the column doesn't move. The page left becomes a picture of itself as last drawn. A press
+on another page opens it rather than drawing on the open one, and nothing switches during a stroke,
+drag or text edit. The host keeps the sessions of the last eight pages opened in the notebook, so
+undo history survives scrolling back and forth. A session is dropped when its page changes elsewhere.
+The sidebar, the page arrows and `PgUp` / `PgDn` jump to a page and fit its width.
 
 ## 5. Search
 

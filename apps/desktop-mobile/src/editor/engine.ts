@@ -6,6 +6,7 @@
 //   live preview    -> screen-space `active` (stable pieces) + `tail` (provisional piece, predicted samples)
 //   committed model -> PageSession (Rust is authoritative; ops persisted in order)
 //   rendered cache  -> PageRenderer page-sized layers, CSS-transformed for pan/zoom
+//   other pages     -> PageStrip pictures around the open page (continuous scrolling)
 import type { Element } from "../generated/Element";
 import type { InkPoint } from "../generated/InkPoint";
 import type { InkStroke } from "../generated/InkStroke";
@@ -40,7 +41,8 @@ import { onMathReady } from "./math";
 import { alignment, SNAP_DISTANCE_PX, type Guide, type TextEdges } from "./snap";
 import { rowPitchOf, snapToRow } from "./templates";
 import { contentHeight, firstBaseline, lineHeight, metrics, TEXT_FONT_FAMILY } from "./textLayout";
-import { backingScale, clampScale, constrain, fitPage, fitWidth, toDoc, zoomAbout, type ViewTransform } from "./viewport";
+import { PageStrip, type StripPage } from "./pageStrip";
+import { backingScale, clampScale, constrain, constrainTo, fitPage, fitWidth, toDoc, zoomAbout, type ViewTransform } from "./viewport";
 
 export type Tool = "pen" | "highlighter" | "eraser" | "select" | "lasso" | "text" | "hand";
 export const DRAW_TOOLS: Tool[] = ["pen", "highlighter", "eraser"];
@@ -100,6 +102,17 @@ export interface EditorCallbacks {
   readAsset?(hash: string): Promise<Uint8Array>;
   /** A link in a text block was tapped: open `url` outside the app. */
   openLink?(url: string): void;
+  /**
+   * Continuous scrolling: another page is now in the middle of the view, or was pressed.
+   * Open it with `setSession(…, { keepView: true })` so that it stays where it is on screen.
+   */
+  onScrollToPage?(pageId: string): void;
+  /**
+   * Continuous scrolling: pages near the view have no picture, or one too coarse for the
+   * zoom. Each wants a canvas `width` pixels wide passed to `setPageImage`. A new call
+   * replaces the previous list, nearest page first.
+   */
+  wantPageImages?(wants: { id: string; width: number }[]): void;
 }
 
 export const ERASER_RADIUS_PX = 8;
@@ -237,6 +250,11 @@ export class InkEditor {
   private nativeEcho = false;
   private overlayBlocked = false;
   private nativeQueue: Promise<unknown> = Promise.resolve();
+  // continuous scrolling
+  private strip = new PageStrip();
+  private continuous = false;
+  /** The page last handed to `onScrollToPage`, until a session opens. */
+  private scrollRequested: string | null = null;
 
   constructor(
     private viewport: HTMLElement,
@@ -251,6 +269,7 @@ export class InkEditor {
     this.world = document.createElement("div");
     this.world.className = "penroam-page absolute left-0 top-0 origin-top-left";
     viewport.appendChild(this.world);
+    viewport.insertBefore(this.strip.el, this.world);
     this.renderer = new PageRenderer(this.world, () => this.session?.page.elements ?? [], viewport);
 
     this.overlay = document.createElement("div");
@@ -404,12 +423,26 @@ export class InkEditor {
 
   // ============================================================ page ==
 
-  /** Opens a page session. The previous session must have been flushed by the caller. */
-  async setSession(session: PageSession, pdfCache: PdfCache | null) {
+  /**
+   * Opens a page session. The previous session must have been flushed by the caller.
+   * The view fits the page's width, unless `keepView` is set in continuous scrolling: then
+   * the page stays where it was in the column, so scrolling onto it doesn't jump.
+   */
+  async setSession(session: PageSession, pdfCache: PdfCache | null, opts: { keepView?: boolean } = {}) {
     this.endTextEdit();
     this.cancelGestures();
     this.clearSelection();
     this.clearMatches();
+    const prev = this.session;
+    let kept: ViewTransform | null = null;
+    if (this.continuous && prev && prev.page.id !== session.page.id) {
+      // the page being left becomes a picture, drawn as it is now, so it never shows blank
+      this.strip.setImage(prev.page.id, this.renderer.snapshot(Math.min(this.renderer.bg.width, this.pictureWidth(this.renderer.width, this.renderer.height))));
+      const to = this.strip.placed.find((p) => p.id === session.page.id);
+      const { scale, ox, oy } = this.transform;
+      if (opts.keepView && to) kept = { scale, ox: ox + to.x * scale, oy: oy + to.y * scale };
+    }
+    this.scrollRequested = null;
     this.session = session;
     this.pdfCache = pdfCache;
     session.events = {
@@ -424,7 +457,8 @@ export class InkEditor {
     this.world.style.width = `${p.size.width}px`;
     this.world.style.height = `${p.size.height}px`;
     this.background = p.background ?? null;
-    this.transform = this.fitTransform("width");
+    this.relayoutStrip();
+    this.transform = kept ? this.constrained(kept) : this.fitTransform("width");
     this.applyTransform(false);
     this.renderer.setResolution(this.wantedRes());
     this.renderer.renderAll(this.visibleDocRect());
@@ -553,7 +587,7 @@ export class InkEditor {
       this.transform = this.fitTransform("width");
       this.applyTransform(false);
     } else if (this.session) {
-      this.transform = constrain(this.transform, this.viewW, this.viewH, this.renderer.width, this.renderer.height);
+      this.transform = this.constrained(this.transform);
       this.applyTransform(false);
     }
     if (this.native && this.nativeMounted) this.nativeCall((n) => n.setBounds(this.surfaceRect()));
@@ -562,7 +596,16 @@ export class InkEditor {
   private fitTransform(mode: "width" | "page"): ViewTransform {
     const f = mode === "width" ? fitWidth : fitPage;
     const margin = this.viewW < 600 ? 8 : 24;
-    return f(Math.max(1, this.viewW), Math.max(1, this.viewH), this.renderer.width, this.renderer.height, margin);
+    const t = f(Math.max(1, this.viewW), Math.max(1, this.viewH), this.renderer.width, this.renderer.height, margin);
+    // a short page centred in the column would leave the page before it half on screen
+    if (this.continuous && mode === "width") t.oy = margin;
+    return t;
+  }
+
+  /** Keeps the page, or in continuous scrolling the column of pages, from leaving the view. */
+  private constrained(t: ViewTransform): ViewTransform {
+    if (this.continuous) return constrainTo(t, this.viewW, this.viewH, this.strip.bounds());
+    return constrain(t, this.viewW, this.viewH, this.renderer.width, this.renderer.height);
   }
 
   fit(mode: "width" | "page" = "width") {
@@ -588,18 +631,119 @@ export class InkEditor {
   }
 
   setTransform(t: ViewTransform, fromNative = false) {
-    this.transform = constrain({ ...t, scale: clampScale(t.scale) }, this.viewW, this.viewH, this.renderer.width, this.renderer.height);
+    this.transform = this.constrained({ ...t, scale: clampScale(t.scale) });
     this.applyTransform(!fromNative);
   }
 
   private applyTransform(notifyNative: boolean) {
     const { scale, ox, oy } = this.transform;
-    this.world.style.transform = `translate(${ox}px, ${oy}px) scale(${scale})`;
+    const css = `translate(${ox}px, ${oy}px) scale(${scale})`;
+    this.world.style.transform = css;
     this.world.style.setProperty("--inv", String(1 / scale));
     this.renderer.setView(this.transform);
     this.emit({ scale });
     if (notifyNative) this.syncNativeTransform();
+    if (this.continuous) {
+      this.strip.el.style.transform = css;
+      this.followScroll();
+    }
     this.scheduleSettle();
+  }
+
+  // ========================================== continuous scrolling ==
+
+  /**
+   * Turns continuous scrolling on or off. On, the other pages of `setPageList` show above
+   * and below the open page, and scrolling onto one opens it. Off, only the open page shows.
+   */
+  setContinuous(on: boolean) {
+    if (on === this.continuous) return;
+    this.continuous = on;
+    this.scrollRequested = null;
+    if (!on) this.strip.hide();
+    this.strip.el.style.display = on ? "" : "none";
+    if (!this.session) return;
+    this.relayoutStrip();
+    this.transform = this.constrained(this.transform);
+    this.applyTransform(true);
+  }
+
+  /** True while continuous scrolling is on. */
+  get isContinuous(): boolean {
+    return this.continuous;
+  }
+
+  /** The notebook's pages in reading order, for continuous scrolling. */
+  setPageList(pages: StripPage[]) {
+    this.strip.setPages(pages);
+    if (!this.session) return;
+    this.relayoutStrip();
+    if (!this.continuous) return;
+    this.transform = this.constrained(this.transform);
+    this.applyTransform(true);
+  }
+
+  /** A rendered picture of another page (see `wantPageImages`). */
+  setPageImage(id: string, canvas: HTMLCanvasElement) {
+    if (id !== this.session?.page.id) this.strip.setImage(id, canvas);
+  }
+
+  /** Forgets the picture of a page whose content changed elsewhere; a new one is asked for. */
+  dropPageImage(id: string) {
+    this.strip.dropImage(id);
+    if (this.continuous) this.scheduleSettle();
+  }
+
+  private relayoutStrip() {
+    const s = this.session;
+    if (s) this.strip.relayout(s.page.id, this.renderer.width, this.renderer.height);
+  }
+
+  /** Shows the pages on screen and opens the one in the middle of the view. */
+  private followScroll() {
+    const s = this.session;
+    if (!s || !this.viewH) return;
+    const vis = this.visibleDocRect();
+    // half a screen of margin so that pages are already there when scrolled onto
+    const h = (vis[3] - vis[1]) / 2;
+    this.strip.update([vis[0], vis[1] - h, vis[2], vis[3] + h], vis);
+    if (this.isBusy()) return;
+    const mid = this.strip.pageNearY((vis[1] + vis[3]) / 2);
+    if (!mid) return;
+    if (mid.id !== s.page.id) this.requestPage(mid.id);
+    else if (this.scrollRequested !== null) {
+      // back on the open page before the one asked for opened: stay here instead
+      this.scrollRequested = null;
+      this.cb.onScrollToPage?.(s.page.id);
+    }
+  }
+
+  /**
+   * Pixel width for a picture of a `w` × `h` page at the current zoom. Pictures get a
+   * quarter of a page layer's pixel budget, since several are kept at once.
+   */
+  private pictureWidth(w: number, h: number): number {
+    return Math.round(w * backingScale(this.transform.scale, this.dpr, w, h, this.settings.maxCanvasPixels / 4));
+  }
+
+  private requestPage(id: string) {
+    if (id === this.scrollRequested) return;
+    this.scrollRequested = id;
+    this.cb.onScrollToPage?.(id);
+  }
+
+  /** Asks the host for pictures of the pages near the view that lack a sharp enough one. */
+  private requestPageImages() {
+    if (!this.continuous || !this.session || !this.cb.wantPageImages) return;
+    const vis = this.visibleDocRect();
+    const h = vis[3] - vis[1];
+    const wants: { id: string; width: number }[] = [];
+    for (const p of this.strip.update([vis[0], vis[1] - h / 2, vis[2], vis[3] + h / 2], [vis[0], vis[1] - h, vis[2], vis[3] + h])) {
+      const width = this.pictureWidth(p.width, p.height);
+      // a coarser picture is fine while zooming out; ask again only once it looks soft
+      if (this.strip.imageWidth(p.id) < width * 0.7) wants.push({ id: p.id, width });
+    }
+    this.cb.wantPageImages(wants);
   }
 
   private wantedRes() {
@@ -612,6 +756,7 @@ export class InkEditor {
       this.settleTimer = null;
       const want = this.wantedRes();
       const cur = this.renderer.targetRes;
+      this.requestPageImages();
       if (Math.abs(want - cur) / cur > 0.08) {
         this.renderer.rescale(want, this.visibleDocRect(), () => {
           if (this.background) void this.renderPdf();
@@ -838,6 +983,12 @@ export class InkEditor {
     if (cls === "navigate" || tool === "hand") return this.beginNavigate(e);
     if (e.pointerType === "touch" && busy) return;
     e.preventDefault();
+    if (this.continuous && !busy) {
+      // a press on one of the other pages opens it; ink there would belong to this page
+      const [x, y] = this.docPoint(e);
+      const hit = this.strip.pageAt(x, y);
+      if (hit && hit.id !== this.session.page.id) return this.requestPage(hit.id);
+    }
     this.capture(e);
     if (e.pointerType === "touch") {
       const [x, y] = this.viewportPoint(e);

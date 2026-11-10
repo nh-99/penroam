@@ -311,6 +311,17 @@ what the script does:
 The session's click coordinates assume the current layout. If a button moves, update
 `session.txt`. It needs Xephyr, ImageMagick and the XTest headers.
 
+On Windows, run `node tools/screenshots/capture-windows.mjs` instead (set `SKIP_BUILD=1` to
+reuse an existing release build). It takes the first two steps above, then starts the release
+app with a remote-debugging port on its WebView2 and replays the same `session.txt` over the
+Chrome DevTools protocol. The viewport is held at the 1280×900 layout and rendered at 1.25×, so
+the shots are 1600 px wide without resizing. The app gets its own WebView2 profile, so the
+session's theme changes don't reach your installed Penroam. The only thing written outside the
+script's temporary folder is the demo library's search index in the app's cache folder, which
+it removes afterwards. Images are copied into `docs/images/` only once every shot was taken. It
+needs Node 22 or later, Python 3 and the WebView2 runtime. Chromium draws text a little
+differently from WebKitGTK, so images from the two scripts aren't pixel-identical.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every branch push. Nearly all of its time goes on compiling, so

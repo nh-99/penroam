@@ -59,6 +59,8 @@ interface Persisted {
   paper: Paper;
   template: TemplateKind;
   sidebarOpen: boolean;
+  /** The editor shows every page in one scrolling column instead of one page at a time. */
+  continuousScroll: boolean;
   epaperChosenAutomatically: boolean;
   /** Check for an update at start-up. Off until the user turns it on: a check is a network request. */
   updateCheck: boolean;
@@ -88,6 +90,7 @@ const defaults: Persisted = {
   paper: "letter",
   template: "ruled",
   sidebarOpen: true,
+  continuousScroll: true,
   epaperChosenAutomatically: false,
   updateCheck: false,
   updateChannel: "stable",

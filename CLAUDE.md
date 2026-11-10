@@ -35,7 +35,8 @@ research do not belong in the repository. The agent-docs playbook asks for
 Developer material goes in `docs/development.md`.
 
 When a user-visible feature lands or changes, update the README's usage section in the same
-change. If the UI changed, also regenerate the screenshots with `tools/screenshots/capture.sh`.
+change. If the UI changed, also regenerate the screenshots with `tools/screenshots/capture.sh`
+(on Windows, `node tools/screenshots/capture-windows.mjs`).
 Never describe features that do not exist yet as available.
 
 ## Code documentation
