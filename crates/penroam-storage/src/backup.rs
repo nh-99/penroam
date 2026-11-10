@@ -485,7 +485,13 @@ impl<R: Read + Seek> BackupReader<R> {
             return;
         }
         let res = unpack_checked(lib, &mut self.zip, &entry).and_then(|(file, _tmp)| {
-            lib.import_archive_with(file, ImportOptions { keep_trash: true })
+            lib.import_archive_with(
+                file,
+                ImportOptions {
+                    keep_trash: true,
+                    keep_folder: true,
+                },
+            )
         });
         match res {
             Ok(r) => {

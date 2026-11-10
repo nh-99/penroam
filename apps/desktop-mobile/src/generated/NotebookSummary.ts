@@ -35,4 +35,9 @@ deletedAt?: number,
 /**
  * First live page, used for the cover thumbnail.
  */
-firstPageId?: string, };
+firstPageId?: string, 
+/**
+ * The folder to show it in; absent at the top level. Already accounts
+ * for deleted folders.
+ */
+folder?: string, };

@@ -109,6 +109,10 @@ pub struct ImportOptions {
     /// Keep trashed pages and the notebook's trash marker (restoring a
     /// backup). Otherwise they are dropped with a warning.
     pub keep_trash: bool,
+    /// Keep the notebook's folder, if this library has it (restoring a
+    /// backup). Otherwise it arrives at the top level: folder ids mean nothing
+    /// outside the library they came from.
+    pub keep_folder: bool,
 }
 
 /// What an archive holds, from [`Library::verify_archive`], which has
@@ -374,7 +378,13 @@ impl Library {
     /// is not changed. Use it for a restore preview or to confirm that a
     /// finished export can be read back.
     pub fn verify_archive<R: Read + Seek>(&self, input: R) -> Result<ArchiveSummary> {
-        let staged = self.stage_archive(input, ImportOptions { keep_trash: true })?;
+        let staged = self.stage_archive(
+            input,
+            ImportOptions {
+                keep_trash: true,
+                keep_folder: true,
+            },
+        )?;
         let _ = fs::remove_dir_all(&staged.stage);
         Ok(staged.summary)
     }
@@ -467,6 +477,9 @@ impl Library {
                 nb.trashed_pages.clear();
             }
             nb.deleted_at = None;
+        }
+        if !options.keep_folder || !nb.folder.is_some_and(|f| self.folders().is_live(f)) {
+            nb.folder = None;
         }
         let trash_kept: HashSet<Uuid> = nb.trashed_pages.iter().map(|t| t.id).collect();
         let exported: HashSet<Uuid> = nb.all_page_ids().collect();

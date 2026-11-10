@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { BookPlus, Import, Settings, Trash, ArchiveArrowUp, NotebookPen, TriangleAlert, ArrowLeft, Search, Cloud, LoaderCircle } from "@lucide/vue";
+import { BookPlus, ChevronRight, FolderPlus, Import, Settings, Trash, ArchiveArrowUp, NotebookPen, TriangleAlert, ArrowLeft, Search, Cloud, LoaderCircle } from "@lucide/vue";
 import logoUrl from "../assets/logo.png";
 import { useLibrary } from "../stores/library";
 import { COVERS } from "../editor/covers";
 import NotebookCard from "../components/NotebookCard.vue";
+import FolderCard from "../components/FolderCard.vue";
+import FolderPickerDialog from "../components/FolderPickerDialog.vue";
 import CloudNotebookCard from "../components/CloudNotebookCard.vue";
 import NewNotebookDialog from "../components/NewNotebookDialog.vue";
 import MoveToVaultDialog from "../components/MoveToVaultDialog.vue";
@@ -24,6 +26,7 @@ import IconBtn from "../components/ui/IconBtn.vue";
 import type { Paper } from "../generated/Paper";
 import type { TemplateKind } from "../generated/TemplateKind";
 import type { NotebookSummary } from "../generated/NotebookSummary";
+import type { Folder } from "../generated/Folder";
 
 defineProps<{ nativeKind: string | null }>();
 const lib = useLibrary();
@@ -33,12 +36,26 @@ const showTrash = ref(false);
 const renaming = ref<NotebookSummary | null>(null);
 const purging = ref<NotebookSummary | null>(null);
 const moving = ref<NotebookSummary | null>(null);
+const showNewFolder = ref(false);
+const filing = ref<NotebookSummary | null>(null);
+const renamingFolder = ref<Folder | null>(null);
+const movingFolder = ref<Folder | null>(null);
+const deletingFolder = ref<Folder | null>(null);
 
-const list = computed(() => (showTrash.value ? lib.trashed : lib.live));
+const list = computed(() => (showTrash.value ? lib.trashed : lib.shelf));
+/** Cloud-only notebooks have no folder until they're downloaded, so they stay at the top level. */
+const cloudHere = computed(() => (lib.openFolder ? [] : sync.cloudNotebooks));
 const search = useSearch();
 const sync = useSync();
 const ui = useUi();
 const mod = modKey();
+
+/** Where a deleted folder's contents go, in words. */
+const deleteFolderMessage = computed(() => {
+  const f = deletingFolder.value;
+  const parent = lib.folders.find((x) => x.id === f?.parent);
+  return `“${f?.name}” will be deleted. Notebooks and folders inside it move to ${parent ? `“${parent.name}”` : "the top level"}; none of them are deleted.`;
+});
 
 // with sync the account keeps a deleted notebook, so this isn't final and the dialog must not say so
 const purgeMessage = computed(() => {
@@ -70,8 +87,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 
 async function create(title: string, paper: Paper, template: TemplateKind, vault?: string) {
   showNew.value = false;
-  await lib.createNotebook(title, paper, { kind: template, spacing: template === "dotted" ? 20 : template === "grid" ? 18 : 24 }, vault);
+  const folder = lib.openFolder?.id;
+  const nb = await lib.createNotebook(title, paper, { kind: template, spacing: template === "dotted" ? 20 : template === "grid" ? 18 : 24 }, vault);
   if (vault) await sync.refreshVaults();
+  // vault notebooks can't be filed; they stay at the top level
+  else if (nb && folder) await lib.fileNotebook(nb.id, folder);
 }
 
 /** The vault a notebook is in: its name, or "a vault" when this device doesn't know it. */
@@ -95,6 +115,7 @@ function recolor(nb: NotebookSummary) {
         <h1 class="mr-auto text-lg font-semibold tracking-tight">Penroam</h1>
         <IconBtn label="Search notebooks" :shortcut="`${mod}+K`" @click="search.panelOpen = true"><Search :size="20" /></IconBtn>
         <Btn variant="primary" @click="showNew = true"><BookPlus :size="18" /><span class="hidden sm:inline">New notebook</span></Btn>
+        <IconBtn label="New folder" @click="showNewFolder = true"><FolderPlus :size="20" /></IconBtn>
         <IconBtn label="Import notebooks and documents" @click="lib.importFiles()"><Import :size="20" /></IconBtn>
         <IconBtn :label="`Trash (${lib.trashed.length + sync.cloudTrash.length})`" @click="showTrash = true"><Trash :size="20" /></IconBtn>
         <IconBtn label="Settings" @click="showSettings = true"><Settings :size="20" /></IconBtn>
@@ -115,8 +136,20 @@ function recolor(nb: NotebookSummary) {
       </div>
 
       <template v-else-if="!showTrash">
-        <VaultBar v-if="sync.status?.phase !== 'revoked'" />
-        <div v-if="lib.loaded && list.length === 0 && sync.cloudNotebooks.length === 0" class="mx-auto mt-16 max-w-md text-center">
+        <VaultBar v-if="sync.status?.phase !== 'revoked' && !lib.openFolder" />
+        <nav v-if="lib.openFolder" class="mb-4 flex flex-wrap items-center gap-1 text-sm" aria-label="Folders">
+          <button class="touch-target rounded-lg px-2 text-muted hover:bg-surface-2" @click="lib.openFolderId = null">All notebooks</button>
+          <template v-for="f in lib.breadcrumb" :key="f.id">
+            <ChevronRight :size="14" class="text-muted" aria-hidden="true" />
+            <button class="touch-target max-w-48 truncate rounded-lg px-2 hover:bg-surface-2" :class="{ 'font-semibold': f.id === lib.openFolder.id }" :aria-current="f.id === lib.openFolder.id ? 'page' : undefined" @click="lib.openFolderId = f.id">{{ f.name }}</button>
+          </template>
+        </nav>
+        <div v-if="lib.subfolders.length" class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <FolderCard v-for="f in lib.subfolders" :key="f.id" :folder="f" :count="lib.folderCount(f.id)"
+            @open="lib.openFolderId = f.id" @rename="renamingFolder = f" @move="movingFolder = f" @delete="deletingFolder = f" />
+        </div>
+        <p v-if="lib.openFolder && list.length === 0 && lib.subfolders.length === 0" class="mt-16 text-center text-sm text-muted">This folder is empty.</p>
+        <div v-else-if="lib.loaded && !lib.openFolder && list.length === 0 && lib.subfolders.length === 0 && cloudHere.length === 0" class="mx-auto mt-16 max-w-md text-center">
           <NotebookPen :size="40" class="mx-auto mb-4 text-muted" />
           <h2 class="text-lg font-semibold">Your shelf is empty</h2>
           <p class="mt-2 text-sm leading-relaxed text-muted">Create a notebook to start writing by hand or typing on the same page. Everything stays on this device; nothing needs an account.</p>
@@ -125,12 +158,13 @@ function recolor(nb: NotebookSummary) {
             <Btn variant="outline" @click="lib.importFiles()"><Import :size="18" />Import</Btn>
           </div>
         </div>
-        <div v-else class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+        <div v-else-if="list.length > 0 || cloudHere.length > 0" class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           <NotebookCard v-for="nb in list" :key="nb.id" :nb="nb" :cover="lib.covers[nb.id]"
             :vault-name="vaultName(nb.id)" :can-move-to-vault="sync.openVaults.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-vault="moving = nb"
+            :can-move-to-folder="lib.folders.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-folder="filing = nb"
             @open="lib.open(nb.id)" @rename="renaming = nb" @recolor="recolor(nb)"
             @export="lib.exportNotebook(nb.id, nb.title)" @export-pdf="lib.exportPdf(nb.id, nb.title)" @print="lib.printNotebook(nb.id)" @trash="lib.trash(nb.id)" />
-          <CloudNotebookCard v-for="nb in sync.cloudNotebooks" :key="nb.notebookId" :nb="nb"
+          <CloudNotebookCard v-for="nb in cloudHere" :key="nb.notebookId" :nb="nb"
             :downloading="sync.downloading.includes(nb.notebookId)" @download="download(nb.notebookId)" />
         </div>
       </template>
@@ -163,6 +197,16 @@ function recolor(nb: NotebookSummary) {
 
     <NewNotebookDialog v-if="showNew" @close="showNew = false" @create="create" />
     <MoveToVaultDialog v-if="moving" :notebook="moving" @close="moving = null" />
+    <FolderPickerDialog v-if="filing" :title="`Move “${filing.title}” to a folder`" :current="filing.folder ?? null"
+      @close="filing = null" @choose="(f) => { lib.fileNotebook(filing!.id, f); filing = null; }" />
+    <FolderPickerDialog v-if="movingFolder" :title="`Move “${movingFolder.name}” to a folder`" :current="movingFolder.parent ?? null" :moving="movingFolder.id"
+      @close="movingFolder = null" @choose="(f) => { lib.moveFolder(movingFolder!.id, f); movingFolder = null; }" />
+    <PromptDialog v-if="showNewFolder" title="New folder" label="Name" value="" confirm="Create"
+      @close="showNewFolder = false" @submit="(n) => { lib.createFolder(n); showNewFolder = false; }" />
+    <PromptDialog v-if="renamingFolder" title="Rename folder" label="Name" :value="renamingFolder.name" confirm="Rename"
+      @close="renamingFolder = null" @submit="(n) => { lib.renameFolder(renamingFolder!.id, n); renamingFolder = null; }" />
+    <ConfirmDialog v-if="deletingFolder" title="Delete folder?" danger confirm="Delete folder" :message="deleteFolderMessage"
+      @close="deletingFolder = null" @confirm="() => { lib.deleteFolder(deletingFolder!.id); deletingFolder = null; }" />
     <SettingsDialog v-if="showSettings" :native-kind="nativeKind" @close="showSettings = false" />
     <SearchPanel v-if="search.panelOpen" @close="search.panelOpen = false" @open="openHit" />
     <PromptDialog v-if="renaming" title="Rename notebook" label="Title" :value="renaming.title" confirm="Rename"

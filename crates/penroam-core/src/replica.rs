@@ -23,7 +23,13 @@
 //! * Element order = (z, element id).
 //! * Retried operations (same id, same body) are no-ops; an id reused with a
 //!   different body is rejected. Newer schemas are refused, not dropped.
+//! * The reserved library stream ([`crate::folder::LIBRARY_STREAM_ID`]) holds
+//!   folders instead of a notebook. Their names, parents and deletions are
+//!   registers too, and so is the folder a notebook is filed in. Concurrent
+//!   writes to those show the highest operation id and raise no conflict: a
+//!   folder's name isn't worth interrupting anyone for.
 
+use crate::folder::{Folder, FolderSet};
 use crate::model::*;
 use crate::operation::*;
 use serde::{Deserialize, Serialize};
@@ -140,6 +146,20 @@ struct NotebookState {
     deleted_at: HashMap<OperationId, Timestamp>,
     /// The `alive` writes that were purges rather than moves to the trash.
     purges: HashSet<OperationId>,
+    /// The folder it's filed in; `None` until it is first filed.
+    folder: Option<Register<Option<Uuid>>>,
+}
+
+#[derive(Debug, Clone)]
+struct FolderState {
+    /// Create operation whose `created_at` is used: the highest id among the
+    /// creates.
+    creator: OperationId,
+    created_at: Timestamp,
+    name: Register<String>,
+    parent: Register<Option<Uuid>>,
+    alive: Register<bool>,
+    deleted_at: HashMap<OperationId, Timestamp>,
 }
 
 /// Where a conflict is.
@@ -274,6 +294,8 @@ pub struct Replica {
     assets: BTreeMap<String, Asset>,
     /// Every page ever created (trashed pages stay, with `alive = false`).
     pages: BTreeMap<Uuid, PageState>,
+    /// Every folder ever created; only the library stream has any.
+    folders: BTreeMap<Uuid, FolderState>,
     /// Latest `at` of any applied operation (informational).
     updated_at: Timestamp,
 }
@@ -296,6 +318,7 @@ impl Replica {
             notebook: None,
             assets: BTreeMap::new(),
             pages: BTreeMap::new(),
+            folders: BTreeMap::new(),
             updated_at: 0,
         }
     }
@@ -406,7 +429,10 @@ impl Replica {
         *f = (*f).max(op.local_sequence);
         self.applied.insert(op.id, (key, fp.0, fp.1));
         self.by_key.insert(key, op.id);
-        self.updated_at = self.updated_at.max(op.at);
+        // filing isn't a change to the notebook, as on the local path
+        if !matches!(op.body, DocumentOperation::NotebookFiled { .. }) {
+            self.updated_at = self.updated_at.max(op.at);
+        }
         Ok(Applied::New)
     }
 
@@ -422,7 +448,15 @@ impl Replica {
             // copy, or one archive imported on two devices) is merged, not
             // rejected: rejecting would make the result depend on which create
             // a replica happened to apply first.
-            NotebookCreated { .. } => return Ok(()),
+            NotebookCreated { .. } | FolderCreated { .. } => return Ok(()),
+            FolderRenamed { folder_id, .. }
+            | FolderMoved { folder_id, .. }
+            | FolderDeleted { folder_id } => {
+                if !self.folders.contains_key(folder_id) {
+                    return pre(format!("folder {folder_id} does not exist"));
+                }
+                return Ok(());
+            }
             _ if self.notebook.is_none() => return Err(OpError::NoNotebook(self.notebook_id)),
             PageCreated { background, .. } => {
                 // a repeated create merges (see NotebookCreated above)
@@ -476,6 +510,7 @@ impl Replica {
                 }
             }
             NotebookRenamed { .. }
+            | NotebookFiled { .. }
             | NotebookCoverChanged { .. }
             | NotebookDeleted { .. }
             | NotebookRestored { .. }
@@ -517,7 +552,61 @@ impl Replica {
                     alive: Register::new(w.of(true)),
                     deleted_at: HashMap::new(),
                     purges: HashSet::new(),
+                    folder: None,
                 });
+            }
+            NotebookFiled { folder, .. } => {
+                let nb = self.nb();
+                match nb.folder.as_mut() {
+                    Some(r) => r.write(w.of(*folder)),
+                    None => nb.folder = Some(Register::new(w.of(*folder))),
+                }
+            }
+            FolderCreated {
+                folder_id,
+                name,
+                parent,
+            } => match self.folders.get_mut(folder_id) {
+                // repeated create (a device seeding its copy again): merged,
+                // like a repeated notebook create
+                Some(f) => {
+                    f.name.write(w.of(name.trim().to_string()));
+                    f.parent.write(w.of(*parent));
+                    f.alive.write(w.of(true));
+                    if w.id > f.creator {
+                        f.creator = w.id;
+                        f.created_at = at;
+                    }
+                }
+                None => {
+                    self.folders.insert(
+                        *folder_id,
+                        FolderState {
+                            creator: w.id,
+                            created_at: at,
+                            name: Register::new(w.of(name.trim().to_string())),
+                            parent: Register::new(w.of(*parent)),
+                            alive: Register::new(w.of(true)),
+                            deleted_at: HashMap::new(),
+                        },
+                    );
+                }
+            },
+            FolderRenamed { folder_id, name } => {
+                if let Some(f) = self.folders.get_mut(folder_id) {
+                    f.name.write(w.of(name.trim().to_string()));
+                }
+            }
+            FolderMoved { folder_id, parent } => {
+                if let Some(f) = self.folders.get_mut(folder_id) {
+                    f.parent.write(w.of(*parent));
+                }
+            }
+            FolderDeleted { folder_id } => {
+                if let Some(f) = self.folders.get_mut(folder_id) {
+                    f.alive.write(w.of(false));
+                    f.deleted_at.insert(w.id, at);
+                }
             }
             NotebookRenamed { title, .. } => {
                 self.nb().title.write(w.of(title.trim().to_string()));
@@ -704,7 +793,30 @@ impl Replica {
             }
         }
         nb.assets = self.assets.values().cloned().collect();
+        nb.folder = s.folder.as_ref().and_then(|r| r.winner().value);
         Some(nb)
+    }
+
+    /// The merged folders, deleted ones included. Empty on any stream but the
+    /// library's.
+    pub fn folders(&self) -> FolderSet {
+        FolderSet(
+            self.folders
+                .iter()
+                .map(|(id, f)| {
+                    let alive = f.alive.alive_winner();
+                    let folder = Folder {
+                        id: *id,
+                        name: f.name.winner().value.clone(),
+                        parent: f.parent.winner().value,
+                        created_at: f.created_at,
+                        deleted_at: (!alive.value)
+                            .then(|| f.deleted_at.get(&alive.id).copied().unwrap_or(0)),
+                    };
+                    (*id, folder)
+                })
+                .collect(),
+        )
     }
 
     /// Whether the notebook is permanently deleted: no device should keep a

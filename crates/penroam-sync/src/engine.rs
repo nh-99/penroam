@@ -65,6 +65,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use penroam_core::folder::LIBRARY_STREAM_ID;
 use penroam_core::operation::{DocumentOperation, LocalOperation, OperationRef};
 use penroam_core::replica::{Conflict, ConflictTarget, Replica};
 use penroam_core::{Element, Notebook, OpKind, OperationBatch, Page, PageOperation};
@@ -315,6 +316,8 @@ pub struct ReconcileReport {
     pub erased_notebooks: Vec<Uuid>,
     /// Envelopes quarantined during this reconcile.
     pub quarantined: usize,
+    /// Merged library folders were installed.
+    pub folders_changed: bool,
 }
 
 /// The sync engine for one library and one sync device. Single writer: run
@@ -1278,6 +1281,48 @@ impl<T: SyncTransport> SyncEngine<T> {
                 None,
             )?;
         }
+        if nb.folder.is_some() {
+            n += self.append_local(
+                Uuid::new_v4(),
+                nb.updated_at,
+                DocumentOperation::NotebookFiled {
+                    notebook_id: nb.id,
+                    folder: nb.folder,
+                },
+                None,
+            )?;
+        }
+        Ok(n)
+    }
+
+    /// Synthesizes creation operations for the library's folders, deleted ones
+    /// included so that notebooks inside them still find the right ancestor.
+    /// Folders belong to the account: a vault's engine has none.
+    fn seed_folders(&mut self, lib: &Library) -> Result<usize> {
+        if self.scope != Scope::Account {
+            return Ok(0);
+        }
+        let mut n = 0;
+        for f in lib.folders().0.values().cloned().collect::<Vec<_>>() {
+            n += self.append_local(
+                Uuid::new_v4(),
+                f.created_at,
+                DocumentOperation::FolderCreated {
+                    folder_id: f.id,
+                    name: f.name,
+                    parent: f.parent,
+                },
+                None,
+            )?;
+            if let Some(at) = f.deleted_at {
+                n += self.append_local(
+                    Uuid::new_v4(),
+                    at,
+                    DocumentOperation::FolderDeleted { folder_id: f.id },
+                    None,
+                )?;
+            }
+        }
         Ok(n)
     }
 
@@ -1299,6 +1344,7 @@ impl<T: SyncTransport> SyncEngine<T> {
                 n += self.seed_notebook(lib, nb_id)?;
             }
         }
+        n += self.seed_folders(lib)?;
         self.store.state.seeded = true;
         self.store.state.ingested_lib_seq = at_seq;
         self.store.save()?;
@@ -2539,6 +2585,13 @@ impl<T: SyncTransport> SyncEngine<T> {
             }
         }
         for nb in dirty {
+            if nb == LIBRARY_STREAM_ID {
+                let folders = self.replica(nb)?.folders();
+                lib.install_folders(folders)?;
+                self.store.state.dirty.remove(&nb);
+                report.folders_changed = true;
+                continue;
+            }
             // The account decides, not this library's purges: those fade with
             // the journal, and a restore elsewhere has to overrule them.
             if self.replica(nb)?.is_purged() {

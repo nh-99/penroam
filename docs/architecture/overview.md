@@ -93,6 +93,12 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   visible winner (highest op id) with every alternate retained as a conflict, tombstones,
   add-wins restore, fractional page order keys. The sync engine applies operations to it with
   `apply_delivered` after delivering them in causal order across the whole account.
+* **Folders.** Library folders (`penroam_core::folder`) have no notebook to live in, so their
+  operations use a reserved stream id. The journal, routing, keys and causal delivery treat it like
+  any notebook, and `Replica` holds the folders instead of a notebook. Each notebook stores its own
+  folder. Deleted folders stay as tombstones and cycles from concurrent moves are cut when reading,
+  so neither needs a repair write and a notebook can't be stranded. Only the main account has
+  folders: the stream belongs to no vault, and notebooks in a vault can't be filed.
 * **Sync contract.** `penroam-sync-protocol` defines the wire format (envelope header, canonical
   signing/AEAD bytes, `PRSB` batch framing, DTOs, errors, retry policy). `penroam-sync-testkit`
   is the development test server (in memory or persisted to a folder, with an HTTP front end

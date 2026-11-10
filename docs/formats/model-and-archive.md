@@ -36,12 +36,25 @@ TypeScript types are generated from them (`apps/desktop-mobile/src/generated`).
   "defaults": { "paper": "letter", "template": { "kind": "ruled", "spacing": 24 } },
   "cover": "#3b5b7a",
   "assets": [{ "sha256": "…64 hex…", "mediaType": "application/pdf", "byteSize": 123456, "originalName": "slides.pdf" }],
+  "folder": "…folder uuid…",                    // present only when filed in a library folder
   "metadata": {}
 }
 ```
 
 `paper`: `letter` (612×792), `a4` (595.276×841.89), `custom`, `pdf`. `pageOrder` is always
 sorted by (order key, page id); see [`penroam-binary-v1.md`](penroam-binary-v1.md) §10.
+
+`folder` was added without a schema change; older builds keep it as an unknown field. Folder ids
+mean nothing outside their library, so importing a `.penroam` file clears it. Restoring a
+`.penroam-backup` keeps it.
+
+Folders themselves are in `<library>/folders.json` and in a backup's `extras/folders.json`, never
+in a single-notebook archive. The file is an object keyed by folder id and includes deleted folders:
+
+```jsonc
+{ "…folder uuid…": { "id": "…", "name": "School", "parent": "…optional folder uuid…",
+                     "createdAt": 1793630000000, "deletedAt": 1793630100000 /* only if deleted */ } }
+```
 
 ## 3. Page (logical model; stored as binary `pages/<uuid>.prp`)
 

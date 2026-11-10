@@ -86,6 +86,13 @@ pub struct Notebook {
     /// Immutable content-addressed attachments (original PDFs, images).
     #[serde(default)]
     pub assets: Vec<Asset>,
+    /// The library folder this notebook was filed in, if any (see
+    /// [`crate::folder`]). It may name a folder since deleted; the library
+    /// resolves that when listing. Added without a schema bump: older builds
+    /// keep it in `extra`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub folder: Option<Uuid>,
     /// Application metadata (free-form, preserved).
     #[serde(default, skip_serializing_if = "is_empty_map")]
     #[ts(type = "Record<string, unknown>", optional)]
@@ -653,6 +660,7 @@ impl Notebook {
             defaults,
             cover,
             assets: Vec::new(),
+            folder: None,
             metadata: Extra::new(),
             extra: Extra::new(),
         }

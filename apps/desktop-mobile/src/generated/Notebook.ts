@@ -60,6 +60,13 @@ cover: string,
  */
 assets: Array<Asset>, 
 /**
+ * The library folder this notebook was filed in, if any (see
+ * [`crate::folder`]). It may name a folder since deleted; the library
+ * resolves that when listing. Added without a schema bump: older builds
+ * keep it in `extra`.
+ */
+folder?: string, 
+/**
  * Application metadata (free-form, preserved).
  */
 metadata?: Record<string, unknown>, };

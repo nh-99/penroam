@@ -2,6 +2,7 @@
 // store only mirrors the latest results for the views.
 import { defineStore } from "pinia";
 import { computed, ref, shallowRef } from "vue";
+import type { Folder } from "../generated/Folder";
 import type { Notebook } from "../generated/Notebook";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import type { Paper } from "../generated/Paper";
@@ -67,7 +68,26 @@ export const useLibrary = defineStore("library", () => {
   /** notebookId -> object URL of its first page */
   const covers = ref<Record<string, string>>({});
 
+  const folders = ref<Folder[]>([]);
+  /** The folder being browsed; `null` is the top level. */
+  const openFolderId = ref<string | null>(null);
+  /** The folder being browsed, or `null` once it's gone (deleted on another device, say). */
+  const openFolder = computed(() => folders.value.find((f) => f.id === openFolderId.value) ?? null);
+  /** From the top-most folder down to the one being browsed. */
+  const breadcrumb = computed(() => {
+    const chain: Folder[] = [];
+    for (let f = openFolder.value; f; f = folders.value.find((x) => x.id === f!.parent) ?? null) chain.unshift(f);
+    return chain;
+  });
+  const subfolders = computed(() => folders.value.filter((f) => (f.parent ?? null) === (openFolder.value?.id ?? null)));
+
   const live = computed(() => notebooks.value.filter((n) => n.deletedAt == null));
+  /** The live notebooks in the folder being browsed. */
+  const shelf = computed(() => live.value.filter((n) => (n.folder ?? null) === (openFolder.value?.id ?? null)));
+  /** How many notebooks and subfolders are directly inside a folder. */
+  function folderCount(id: string): number {
+    return live.value.filter((n) => n.folder === id).length + folders.value.filter((f) => f.parent === id).length;
+  }
   const trashed = computed(() => notebooks.value.filter((n) => n.deletedAt != null));
   const pageIndex = computed(() => (current.value && currentPageId.value ? current.value.pageOrder.indexOf(currentPageId.value) : -1));
 
@@ -78,7 +98,7 @@ export const useLibrary = defineStore("library", () => {
 
   async function refresh() {
     try {
-      notebooks.value = await api.listNotebooks();
+      [notebooks.value, folders.value] = await Promise.all([api.listNotebooks(), api.listFolders()]);
       loadError.value = null;
       if (!recovery.value) {
         recovery.value = await api.libraryStatus();
@@ -211,6 +231,52 @@ export const useLibrary = defineStore("library", () => {
       await refresh();
     } catch (e) {
       fail(e, "Could not change the cover");
+    }
+  }
+
+  async function createFolder(name: string) {
+    try {
+      await api.createFolder(name, openFolder.value?.id ?? null);
+      await refresh();
+    } catch (e) {
+      fail(e, "Could not create the folder");
+    }
+  }
+
+  async function renameFolder(id: string, name: string) {
+    try {
+      await api.renameFolder(id, name);
+      await refresh();
+    } catch (e) {
+      fail(e, "Could not rename the folder");
+    }
+  }
+
+  async function moveFolder(id: string, parent: string | null) {
+    try {
+      await api.moveFolder(id, parent);
+      await refresh();
+    } catch (e) {
+      fail(e, "Could not move the folder");
+    }
+  }
+
+  async function deleteFolder(id: string) {
+    try {
+      await api.deleteFolder(id);
+      await refresh();
+    } catch (e) {
+      fail(e, "Could not delete the folder");
+    }
+  }
+
+  async function fileNotebook(id: string, folder: string | null) {
+    try {
+      const nb = await api.fileNotebook(id, folder);
+      if (current.value?.id === id) current.value = nb;
+      await refresh();
+    } catch (e) {
+      fail(e, "Could not move the notebook");
     }
   }
 
@@ -498,6 +564,18 @@ export const useLibrary = defineStore("library", () => {
   }
 
   return {
+    folders,
+    openFolderId,
+    openFolder,
+    breadcrumb,
+    subfolders,
+    shelf,
+    folderCount,
+    createFolder,
+    renameFolder,
+    moveFolder,
+    deleteFolder,
+    fileNotebook,
     notebooks,
     live,
     trashed,

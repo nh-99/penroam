@@ -15,6 +15,7 @@
 //! instead of JSON-encoded byte arrays.
 
 use crate::AppState;
+use penroam_core::folder::Folder;
 use penroam_core::*;
 use penroam_storage::{
     ApplyOutcome, ArchiveSummary, ErrorCode, ExportOptions, HistoryPoint, HistoryRetention,
@@ -184,8 +185,14 @@ pub fn move_notebook_to_vault(state: State<'_, AppState>, id: Uuid, vault: Strin
         let mut archive = std::io::Cursor::new(Vec::new());
         lib.export_archive(id, &mut archive, "penroam vault move")?;
         archive.set_position(0);
-        let report =
-            lib.import_archive_with(archive, penroam_storage::ImportOptions { keep_trash: true })?;
+        // the folder stays behind: folders belong to the main account, not to vaults
+        let report = lib.import_archive_with(
+            archive,
+            penroam_storage::ImportOptions {
+                keep_trash: true,
+                keep_folder: false,
+            },
+        )?;
         let copy = report.notebook;
         if copy.id == id {
             return Err(invalid("the notebook could not be copied"));
@@ -206,6 +213,56 @@ pub fn rename_notebook(state: State<'_, AppState>, id: Uuid, title: String) -> R
     state.sync.nudge();
     let nb = lib!(state).rename_notebook(id, &title)?;
     state.search.notebook_changed(id);
+    Ok(nb)
+}
+
+/// The library's folders, for the library view.
+#[tauri::command(async)]
+pub fn list_folders(state: State<'_, AppState>) -> R<Vec<Folder>> {
+    Ok(lib!(state).list_folders())
+}
+
+/// Creates a folder, inside `parent` or at the top level.
+#[tauri::command(async)]
+pub fn create_folder(state: State<'_, AppState>, name: String, parent: Option<Uuid>) -> R<Folder> {
+    state.sync.nudge();
+    Ok(lib!(state).create_folder(&name, parent)?)
+}
+
+/// Renames a folder.
+#[tauri::command(async)]
+pub fn rename_folder(state: State<'_, AppState>, id: Uuid, name: String) -> R<()> {
+    state.sync.nudge();
+    Ok(lib!(state).rename_folder(id, &name)?)
+}
+
+/// Moves a folder under `parent`, or to the top level.
+#[tauri::command(async)]
+pub fn move_folder(state: State<'_, AppState>, id: Uuid, parent: Option<Uuid>) -> R<()> {
+    state.sync.nudge();
+    Ok(lib!(state).move_folder(id, parent)?)
+}
+
+/// Deletes a folder; what was inside moves to its parent.
+#[tauri::command(async)]
+pub fn delete_folder(state: State<'_, AppState>, id: Uuid) -> R<()> {
+    state.sync.nudge();
+    Ok(lib!(state).delete_folder(id)?)
+}
+
+/// Files a notebook in a folder, or at the top level. Vault notebooks can't
+/// be filed: folders sync through the main account, and a vault's contents
+/// must not depend on it.
+#[tauri::command(async)]
+pub fn file_notebook(state: State<'_, AppState>, id: Uuid, folder: Option<Uuid>) -> R<Notebook> {
+    let nb = {
+        let mut lib = lib!(state);
+        if crate::sync::in_vault(lib.root(), id)? {
+            return Err(invalid("notebooks in a vault can't be put in folders"));
+        }
+        lib.file_notebook(id, folder)?
+    };
+    state.sync.nudge();
     Ok(nb)
 }
 

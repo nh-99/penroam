@@ -34,6 +34,8 @@ type R<T> = Result<T, CmdError>;
 const KEEP_BACKUPS: usize = 7;
 /// Backup entry holding search corrections.
 const CORRECTIONS: &str = "extras/search-corrections.json";
+/// Backup entry with the library's folders.
+const FOLDERS: &str = "extras/folders.json";
 /// Keychain entry with the WebDAV password.
 const WEBDAV_SECRET: &str = "webdav-password";
 
@@ -105,6 +107,8 @@ fn build(app: &AppHandle, state: &State<'_, AppState>) -> R<(StagedFile, BackupM
         // a fresh lock per notebook: an open editor keeps saving in between
         w.add_notebook(&mut *lock(state)?, *id).map_err(storage)?;
     }
+    let folders = serde_json::to_vec(lock(state)?.folders()).map_err(|e| invalid(e.to_string()))?;
+    w.add_extra(FOLDERS, &folders).map_err(storage)?;
     let corrections = state.search.all_corrections();
     if !corrections.is_empty() {
         let json = serde_json::to_vec(&corrections).map_err(|e| invalid(e.to_string()))?;
@@ -209,6 +213,12 @@ pub fn restore_backup(
     let mut r = BackupReader::open(f).map_err(storage)?;
     let total = r.manifest().notebooks.len();
     let mut out = RestoreReport::default();
+    // before the notebooks, which keep their folder only if it exists by then
+    if let Ok(Some(bytes)) = r.extra(FOLDERS) {
+        if let Ok(folders) = serde_json::from_slice(&bytes) {
+            lock(&state)?.restore_folders(&folders).map_err(storage)?;
+        }
+    }
     for i in 0..total {
         report(&app, "Restoring notebooks", i, total);
         r.restore(&mut *lock(&state)?, i, &options, &mut out);

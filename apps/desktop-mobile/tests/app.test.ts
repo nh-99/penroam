@@ -12,6 +12,7 @@ vi.mock("../src/platform/ipc", () => {
     CommandError: class extends Error {},
     api: {
       listNotebooks: vi.fn(async () => store.notebooks.map((n: any) => ({ id: n.id, title: n.title, cover: n.cover, pageCount: n.pageOrder.length, createdAt: 1, updatedAt: 1, firstPageId: "pg-1" }))),
+      listFolders: vi.fn(async () => []),
       libraryStatus: vi.fn(async () => ({ removedTempFiles: 0, orphanedFiles: 0, truncatedJournals: 0, replayedBatches: 0, warnings: [] })),
       createNotebook: vi.fn(async (title: string) => {
         const n = nb(title);

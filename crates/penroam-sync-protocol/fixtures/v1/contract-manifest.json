@@ -6,7 +6,7 @@
   "envelope_version": 1,
   "op_schema": {
     "min": 1,
-    "max": 2
+    "max": 3
   },
   "formats": {
     "file_format": 1,

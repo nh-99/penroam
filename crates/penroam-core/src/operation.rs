@@ -1,4 +1,4 @@
-//! Sync-ready semantic operations (operation schema version 1).
+//! Sync-ready semantic operations (operation schema version 3).
 //!
 //! Every persisted change to a notebook is a [`LocalOperation`]: a stable
 //! random id (retries reuse it), the device that made it, that device's
@@ -20,6 +20,7 @@
 //! [`OpError::UnsupportedSchema`] so callers can pause (`upgrade_required`)
 //! and keep the bytes.
 
+use crate::folder::LIBRARY_STREAM_ID;
 use crate::model::*;
 use crate::ops::{self, ApplyError, OpKind, OperationBatch};
 use crate::validate::{validate_element, validate_page, validate_template, validate_title};
@@ -28,7 +29,7 @@ use uuid::Uuid;
 
 /// Newest [`DocumentOperation`] encoding and semantics this build can read.
 /// Independent of the file format and model schema versions.
-pub const OP_SCHEMA_VERSION: u16 = 2;
+pub const OP_SCHEMA_VERSION: u16 = 3;
 
 /// The schema an operation is written with: the oldest that means the same
 /// thing, so that a device on an older version only stops syncing once it
@@ -37,9 +38,17 @@ pub const OP_SCHEMA_VERSION: u16 = 2;
 /// Version 2 is a `notebookPurged` that syncs. Without its own version an older
 /// client would take one for a forged payload and raise an integrity alert;
 /// this way it parks the operation and asks to be updated.
+///
+/// Version 3 is library folders and filing a notebook in one.
 pub fn op_schema_for(body: &DocumentOperation) -> u16 {
+    use DocumentOperation::*;
     match body {
-        DocumentOperation::NotebookPurged { .. } => 2,
+        FolderCreated { .. }
+        | FolderRenamed { .. }
+        | FolderMoved { .. }
+        | FolderDeleted { .. }
+        | NotebookFiled { .. } => 3,
+        NotebookPurged { .. } => 2,
         _ => 1,
     }
 }
@@ -258,14 +267,62 @@ pub enum DocumentOperation {
         /// The asset (bytes are stored separately, by hash).
         asset: Asset,
     },
+    /// Files a notebook in a library folder, or at the top level. Does not
+    /// count as a change to the notebook: its `updated_at` stays put, so
+    /// tidying the library doesn't reshuffle it.
+    #[serde(rename_all = "camelCase")]
+    NotebookFiled {
+        /// Target notebook.
+        notebook_id: Uuid,
+        /// The folder, or `None` for the top level.
+        folder: Option<Uuid>,
+    },
+    /// Creates a library folder (see [`crate::folder`]).
+    #[serde(rename_all = "camelCase")]
+    FolderCreated {
+        /// New folder.
+        folder_id: Uuid,
+        /// Name (trimmed when applied).
+        name: String,
+        /// Containing folder, or `None` for the top level.
+        parent: Option<Uuid>,
+    },
+    /// Sets a folder's name.
+    #[serde(rename_all = "camelCase")]
+    FolderRenamed {
+        /// Target folder.
+        folder_id: Uuid,
+        /// New name (trimmed when applied).
+        name: String,
+    },
+    /// Moves a folder under another one, or to the top level.
+    #[serde(rename_all = "camelCase")]
+    FolderMoved {
+        /// Target folder.
+        folder_id: Uuid,
+        /// New containing folder, or `None` for the top level.
+        parent: Option<Uuid>,
+    },
+    /// Deletes a folder. What was inside moves up; no notebook is touched.
+    #[serde(rename_all = "camelCase")]
+    FolderDeleted {
+        /// Target folder.
+        folder_id: Uuid,
+    },
 }
 
 impl DocumentOperation {
-    /// The notebook this operation belongs to.
+    /// The stream this operation belongs to: its notebook, or
+    /// [`LIBRARY_STREAM_ID`] for folder operations.
     pub fn notebook_id(&self) -> Uuid {
         use DocumentOperation::*;
         match self {
+            FolderCreated { .. }
+            | FolderRenamed { .. }
+            | FolderMoved { .. }
+            | FolderDeleted { .. } => LIBRARY_STREAM_ID,
             NotebookCreated { notebook_id, .. }
+            | NotebookFiled { notebook_id, .. }
             | NotebookRenamed { notebook_id, .. }
             | NotebookCoverChanged { notebook_id, .. }
             | NotebookDeleted { notebook_id }
@@ -281,6 +338,16 @@ impl DocumentOperation {
             | ElementsReplaced { notebook_id, .. }
             | AssetReferenced { notebook_id, .. } => *notebook_id,
         }
+    }
+
+    /// Whether this is an operation on the library's folders, rather than on
+    /// a notebook.
+    pub fn is_folder_op(&self) -> bool {
+        use DocumentOperation::*;
+        matches!(
+            self,
+            FolderCreated { .. } | FolderRenamed { .. } | FolderMoved { .. } | FolderDeleted { .. }
+        )
     }
 
     /// The page whose *content* this operation edits (element and template
@@ -315,6 +382,11 @@ impl DocumentOperation {
             ElementsRemoved { .. } => "elementsRemoved",
             ElementsReplaced { .. } => "elementsReplaced",
             AssetReferenced { .. } => "assetReferenced",
+            NotebookFiled { .. } => "notebookFiled",
+            FolderCreated { .. } => "folderCreated",
+            FolderRenamed { .. } => "folderRenamed",
+            FolderMoved { .. } => "folderMoved",
+            FolderDeleted { .. } => "folderDeleted",
         }
     }
 
@@ -509,7 +581,18 @@ pub fn validate_body(body: &DocumentOperation) -> Result<(), OpError> {
     let v = |r: Result<(), crate::validate::ValidationError>| {
         r.map_err(|e| OpError::Apply(ApplyError::Invalid(e)))
     };
+    if body.notebook_id() == LIBRARY_STREAM_ID && !body.is_folder_op() {
+        return Err(OpError::Precondition(
+            "operation targets the reserved library stream".into(),
+        ));
+    }
     match body {
+        FolderCreated { name, .. } | FolderRenamed { name, .. } => v(validate_title(name))?,
+        FolderMoved { folder_id, parent } if *parent == Some(*folder_id) => {
+            return Err(OpError::Precondition(
+                "a folder cannot contain itself".into(),
+            ));
+        }
         NotebookCreated {
             title,
             cover,
@@ -573,6 +656,9 @@ pub fn validate_body(body: &DocumentOperation) -> Result<(), OpError> {
         NotebookDeleted { .. }
         | NotebookRestored { .. }
         | NotebookPurged { .. }
+        | NotebookFiled { .. }
+        | FolderMoved { .. }
+        | FolderDeleted { .. }
         | PageDeleted { .. }
         | PageRestored { .. }
         | ElementsRemoved { .. } => {}
@@ -598,6 +684,19 @@ pub fn apply_to_notebook(
     let at = op.at;
     let changed = match &op.body {
         NotebookCreated { .. } | NotebookPurged { .. } => false,
+        NotebookFiled { folder, .. } => {
+            // deliberately leaves `updated_at` alone; see the operation's docs
+            return Ok(if set(&mut nb.folder, *folder) {
+                NotebookEffect::Changed
+            } else {
+                NotebookEffect::Unchanged
+            });
+        }
+        FolderCreated { .. } | FolderRenamed { .. } | FolderMoved { .. } | FolderDeleted { .. } => {
+            return Err(OpError::Precondition(
+                "folder operations are applied to the folder set".into(),
+            ))
+        }
         NotebookRenamed { title, .. } => {
             validate_title(title).map_err(|e| OpError::Apply(e.into()))?;
             set(&mut nb.title, title.trim().to_string())

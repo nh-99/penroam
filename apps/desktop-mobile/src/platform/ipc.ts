@@ -18,6 +18,7 @@ import type { RenderedMath } from "../generated/RenderedMath";
 import type { ExportReport } from "../generated/ExportReport";
 import type { ImportReport } from "../generated/ImportReport";
 import type { Notebook } from "../generated/Notebook";
+import type { Folder } from "../generated/Folder";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import type { OperationBatch } from "../generated/OperationBatch";
 import type { Page } from "../generated/Page";
@@ -91,6 +92,12 @@ export const api = {
     call<NotebookAndPage>("create_notebook", { title, paper, template, cover, vault }),
   moveNotebookToVault: (id: string, vault: string) => call<Notebook>("move_notebook_to_vault", { id, vault }),
   renameNotebook: (id: string, title: string) => call<Notebook>("rename_notebook", { id, title }),
+  listFolders: () => call<Folder[]>("list_folders"),
+  createFolder: (name: string, parent: string | null) => call<Folder>("create_folder", { name, parent }),
+  renameFolder: (id: string, name: string) => call<void>("rename_folder", { id, name }),
+  moveFolder: (id: string, parent: string | null) => call<void>("move_folder", { id, parent }),
+  deleteFolder: (id: string) => call<void>("delete_folder", { id }),
+  fileNotebook: (id: string, folder: string | null) => call<Notebook>("file_notebook", { id, folder }),
   setNotebookCover: (id: string, cover: string) => call<Notebook>("set_notebook_cover", { id, cover }),
   deleteNotebook: (id: string) => call<Notebook>("delete_notebook", { id }),
   restoreNotebook: (id: string) => call<Notebook>("restore_notebook", { id }),

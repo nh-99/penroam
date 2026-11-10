@@ -71,7 +71,7 @@ fn versions_are_independent() {
     assert_eq!(FILE_FORMAT_VERSION, 1);
     assert_eq!(PAGE_SCHEMA_VERSION, 1);
     assert_eq!(NOTEBOOK_SCHEMA_VERSION, 2);
-    assert_eq!(operation::OP_SCHEMA_VERSION, 2);
+    assert_eq!(operation::OP_SCHEMA_VERSION, 3);
     // a page whose *model* schema is newer is refused even inside a v1 file
     let mut p = sample_page();
     p.schema_version = 2;

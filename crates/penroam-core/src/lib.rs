@@ -20,6 +20,7 @@
 #![warn(missing_docs)]
 
 pub mod binary;
+pub mod folder;
 pub mod geometry;
 pub mod markdown;
 pub mod migrate;

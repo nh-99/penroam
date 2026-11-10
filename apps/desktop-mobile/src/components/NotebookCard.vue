@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { EllipsisVertical, SquarePen, Download, FileDown, Printer, Trash, Palette, Lock } from "@lucide/vue";
+import { EllipsisVertical, SquarePen, Download, FileDown, FolderInput, Printer, Trash, Palette, Lock } from "@lucide/vue";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import Menu from "./ui/Menu.vue";
 import MenuItem from "./ui/MenuItem.vue";
@@ -12,8 +12,10 @@ const props = defineProps<{
   vaultName?: string;
   /** Offer moving it into a vault. */
   canMoveToVault?: boolean;
+  /** Offer filing it in a folder. */
+  canMoveToFolder?: boolean;
 }>();
-const emit = defineEmits<{ open: []; rename: []; export: []; exportPdf: []; print: []; trash: []; recolor: []; moveToVault: [] }>();
+const emit = defineEmits<{ open: []; rename: []; export: []; exportPdf: []; print: []; trash: []; recolor: []; moveToVault: []; moveToFolder: [] }>();
 const updated = computed(() => {
   const d = new Date(props.nb.updatedAt);
   const days = Math.floor((Date.now() - d.getTime()) / 86400000);
@@ -55,6 +57,7 @@ const updated = computed(() => {
         <MenuItem @click="emit('export')"><Download :size="16" />Export .penroam…</MenuItem>
         <MenuItem @click="emit('exportPdf')"><FileDown :size="16" />Export annotated PDF…</MenuItem>
         <MenuItem @click="emit('print')"><Printer :size="16" />Print…</MenuItem>
+        <MenuItem v-if="canMoveToFolder" @click="emit('moveToFolder')"><FolderInput :size="16" />Move to folder…</MenuItem>
         <MenuItem v-if="canMoveToVault" @click="emit('moveToVault')"><Lock :size="16" />Move to vault…</MenuItem>
         <MenuItem danger @click="emit('trash')"><Trash :size="16" />Move to trash</MenuItem>
       </Menu>

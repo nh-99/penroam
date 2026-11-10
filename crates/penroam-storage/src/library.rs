@@ -7,6 +7,7 @@
 //! <root>/journal/<seq>.pjl                  device operation journal (durability source)
 //! <root>/checkpoint.json (+ .prev.json)     checkpoint manifest (what the snapshots cover)
 //! <root>/outbox.json                        sync outbox counters (derivable)
+//! <root>/folders.json                       library folders, with deleted ones (atomic writes)
 //! <root>/notebooks/<nb>/notebook.json       notebook snapshot (schema 2, atomic writes)
 //! <root>/notebooks/<nb>/pages/<page>.prp    page snapshot, binary (atomic writes)
 //! <root>/notebooks/<nb>/pages/<page>.prp.prev  previous page snapshot (fallback)
@@ -57,6 +58,7 @@ use crate::fsutil::{self, write_atomic, TMP_MARKER};
 use crate::history::{self, ChainMeta, Structure};
 use crate::journal::{Journal, JournalError, Txn, TxnTarget};
 use crate::state::*;
+use penroam_core::folder::{apply_folder_op, Folder, FolderSet, LIBRARY_STREAM_ID};
 use penroam_core::migrate::{notebook_from_slice, page_from_slice};
 use penroam_core::operation::*;
 use penroam_core::validate::{validate_notebook, validate_page, validate_title};
@@ -102,6 +104,10 @@ pub struct NotebookSummary {
     /// First live page, used for the cover thumbnail.
     #[ts(optional)]
     pub first_page_id: Option<Uuid>,
+    /// The folder to show it in; absent at the top level. Already accounts
+    /// for deleted folders.
+    #[ts(optional)]
+    pub folder: Option<Uuid>,
 }
 
 /// An attachment for [`Library::create_notebook_with`].
@@ -226,7 +232,10 @@ pub struct Library {
     /// Page content transactions not in any snapshot, for pages not loaded yet.
     pending: HashMap<(Uuid, Uuid), Vec<Txn>>,
     /// Notebooks whose `notebook.json` lags the journal (first unsaved seq).
+    /// [`LIBRARY_STREAM_ID`] stands for `folders.json`.
     dirty_notebooks: HashMap<Uuid, u64>,
+    /// The library's folders, deleted ones included.
+    folders: FolderSet,
     /// Lowest sequence of journal data for notebooks that could not be
     /// opened; the checkpoint floor never passes it (nothing is discarded).
     held_seq: Option<u64>,
@@ -363,6 +372,7 @@ impl Library {
             outbox,
             pending: HashMap::new(),
             dirty_notebooks: HashMap::new(),
+            folders: FolderSet::default(),
             held_seq: None,
             recent_batches: HashMap::new(),
             recent_order: Default::default(),
@@ -379,6 +389,7 @@ impl Library {
         };
         lib.installed = lib.manifest.installed.clone();
         lib.load_notebooks()?;
+        lib.load_folders();
         lib.replay(txns)?;
         lib.outbox.enqueued_through = lib.last_seq;
         if marker_version != Some(LIBRARY_FORMAT_VERSION) {
@@ -462,6 +473,24 @@ impl Library {
             self.load_notebook_dir(&path, id);
         }
         Ok(())
+    }
+
+    /// Reads `folders.json`. A damaged file is set aside and reported rather
+    /// than overwritten by the next save.
+    fn load_folders(&mut self) {
+        let path = self.root.join("folders.json");
+        let Ok(raw) = fs::read(&path) else {
+            return; // never had any
+        };
+        match serde_json::from_slice(&raw) {
+            Ok(folders) => self.folders = folders,
+            Err(e) => {
+                let _ = fs::rename(&path, self.root.join("folders.json.damaged"));
+                self.recovery
+                    .warnings
+                    .push(format!("folders could not be read and were set aside: {e}"));
+            }
+        }
     }
 
     /// Loads one notebook folder into memory. A notebook that can't be read is reported in
@@ -596,6 +625,7 @@ impl Library {
                                 op.body.name()
                             ));
                             if !self.notebooks.contains_key(notebook_id)
+                                && *notebook_id != LIBRARY_STREAM_ID
                                 && !matches!(op.body, DocumentOperation::NotebookPurged { .. })
                             {
                                 self.hold(first, format!("notebook {notebook_id}"));
@@ -608,6 +638,11 @@ impl Library {
                             self.recovery
                                 .warnings
                                 .push(format!("notebook {notebook_id}: {e}"));
+                        }
+                    } else if *notebook_id == LIBRARY_STREAM_ID {
+                        if let Err(e) = self.save_folders() {
+                            self.dirty_notebooks.entry(*notebook_id).or_insert(first);
+                            self.recovery.warnings.push(format!("folders: {e}"));
                         }
                     }
                 }
@@ -773,6 +808,10 @@ impl Library {
     /// (page creation, purge). Idempotent (also used by replay).
     fn apply_notebook_op(&mut self, op: &LocalOperation, replay: bool) -> Result<()> {
         let nb_id = op.body.notebook_id();
+        if op.body.is_folder_op() {
+            apply_folder_op(&mut self.folders, op)?;
+            return Ok(());
+        }
         match &op.body {
             DocumentOperation::NotebookCreated { .. } => {
                 if self.notebooks.contains_key(&nb_id) {
@@ -909,6 +948,7 @@ impl Library {
                 updated_at: n.updated_at,
                 deleted_at: n.deleted_at,
                 first_page_id: n.page_order.first().copied(),
+                folder: self.folders.shown_folder(n.folder),
             })
             .collect();
         v.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.title.cmp(&b.title)));
@@ -1049,6 +1089,166 @@ impl Library {
             self.apply_page_operations(id, page.id, &batch)?;
         }
         Ok(())
+    }
+
+    // ------------------------------------------------------------- folders --
+
+    /// The folders as shown: live ones only, each under the parent to show it
+    /// in, sorted by name.
+    pub fn list_folders(&self) -> Vec<Folder> {
+        self.folders.tree()
+    }
+
+    /// The raw folder state, deleted folders included. Sync seeds from this,
+    /// and backups carry it.
+    pub fn folders(&self) -> &FolderSet {
+        &self.folders
+    }
+
+    /// Fails unless `id` is a live folder.
+    fn require_folder(&self, id: Uuid) -> Result<()> {
+        if self.folders.is_live(id) {
+            Ok(())
+        } else {
+            Err(StorageError::NotFound(format!("folder {id}")))
+        }
+    }
+
+    fn save_folders(&mut self) -> Result<()> {
+        write_atomic(
+            &self.root.join("folders.json"),
+            &serde_json::to_vec_pretty(&self.folders).map_err(ioerr)?,
+        )?;
+        self.dirty_notebooks.remove(&LIBRARY_STREAM_ID);
+        Ok(())
+    }
+
+    /// Validates, journals and applies one folder operation. Durable when it
+    /// returns; a failed write of `folders.json` is retried at the next flush
+    /// and meanwhile holds the journal back.
+    fn commit_folder_op(&mut self, body: DocumentOperation) -> Result<()> {
+        let at = now_ms();
+        let id = self.new_id();
+        let ops = self.make_ops(vec![(id, body)], at);
+        let mut probe = self.folders.clone();
+        for op in &ops {
+            validate_body(&op.body)?;
+            apply_folder_op(&mut probe, op)?;
+        }
+        let txn = Txn {
+            target: TxnTarget::Notebook {
+                notebook_id: LIBRARY_STREAM_ID,
+            },
+            ops,
+        };
+        self.journal_txn(&txn)?;
+        self.folders = probe;
+        if let Err(e) = self.save_folders() {
+            self.dirty_notebooks
+                .entry(LIBRARY_STREAM_ID)
+                .or_insert(txn.first_seq());
+            self.recovery
+                .warnings
+                .push(format!("folders snapshot deferred: {e}"));
+        }
+        Ok(())
+    }
+
+    /// Creates a folder, inside `parent` or at the top level.
+    pub fn create_folder(&mut self, name: &str, parent: Option<Uuid>) -> Result<Folder> {
+        validate_title(name)?;
+        if let Some(p) = parent {
+            self.require_folder(p)?;
+        }
+        let folder_id = self.new_id();
+        self.commit_folder_op(DocumentOperation::FolderCreated {
+            folder_id,
+            name: name.trim().to_string(),
+            parent,
+        })?;
+        Ok(self.folders.0[&folder_id].clone())
+    }
+
+    /// Renames a folder (the name is validated and trimmed).
+    pub fn rename_folder(&mut self, id: Uuid, name: &str) -> Result<()> {
+        validate_title(name)?;
+        self.require_folder(id)?;
+        self.commit_folder_op(DocumentOperation::FolderRenamed {
+            folder_id: id,
+            name: name.trim().to_string(),
+        })
+    }
+
+    /// Moves a folder under `parent`, or to the top level. `Invalid` if that
+    /// would put it inside itself.
+    pub fn move_folder(&mut self, id: Uuid, parent: Option<Uuid>) -> Result<()> {
+        self.require_folder(id)?;
+        if let Some(p) = parent {
+            self.require_folder(p)?;
+            if self.folders.would_cycle(id, p) {
+                return Err(StorageError::Invalid(
+                    "a folder cannot be moved inside itself".into(),
+                ));
+            }
+        }
+        self.commit_folder_op(DocumentOperation::FolderMoved {
+            folder_id: id,
+            parent,
+        })
+    }
+
+    /// Deletes a folder. Its notebooks and subfolders aren't touched; they
+    /// show in its parent from now on.
+    pub fn delete_folder(&mut self, id: Uuid) -> Result<()> {
+        self.require_folder(id)?;
+        self.commit_folder_op(DocumentOperation::FolderDeleted { folder_id: id })
+    }
+
+    /// Files a notebook in a folder, or at the top level with `None`. Doesn't
+    /// count as changing the notebook, so it keeps its place in the list.
+    pub fn file_notebook(&mut self, id: Uuid, folder: Option<Uuid>) -> Result<Notebook> {
+        self.notebook(id)?;
+        if let Some(f) = folder {
+            self.require_folder(f)?;
+        }
+        self.commit_notebook_ops(
+            id,
+            vec![DocumentOperation::NotebookFiled {
+                notebook_id: id,
+                folder,
+            }],
+        )?;
+        Ok(self.notebook(id)?.clone())
+    }
+
+    /// Adds folders from a backup that this library doesn't have. They go
+    /// through the journal like any new folder, so sync picks them up. Call
+    /// before restoring notebooks, so those find their folders.
+    pub fn restore_folders(&mut self, folders: &FolderSet) -> Result<()> {
+        for f in folders.0.values() {
+            if self.folders.0.contains_key(&f.id) {
+                continue;
+            }
+            self.commit_folder_op(DocumentOperation::FolderCreated {
+                folder_id: f.id,
+                name: f.name.clone(),
+                parent: f.parent,
+            })?;
+            if f.deleted_at.is_some() {
+                self.commit_folder_op(DocumentOperation::FolderDeleted { folder_id: f.id })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Installs the merged folders produced by the sync engine. As with
+    /// [`Library::install_merged`], every local folder operation must already
+    /// be part of them.
+    pub fn install_folders(&mut self, folders: FolderSet) -> Result<()> {
+        self.folders = folders;
+        self.save_folders()?;
+        self.installed.insert(LIBRARY_STREAM_ID, self.last_seq);
+        self.write_checkpoint()
     }
 
     /// Renames a notebook (the title is validated and trimmed).
@@ -1814,6 +2014,11 @@ impl Library {
                 if let Err(e) = self.save_notebook_snapshot(nb) {
                     first_err.get_or_insert(e);
                 }
+            }
+        }
+        if self.dirty_notebooks.contains_key(&LIBRARY_STREAM_ID) {
+            if let Err(e) = self.save_folders() {
+                first_err.get_or_insert(e);
             }
         }
         if let Err(e) = self.write_checkpoint() {

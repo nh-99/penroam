@@ -2119,7 +2119,7 @@ fn announce(app: &AppHandle, report: &penroam_sync::ReconcileReport) {
     for (nb, page) in &report.installed_pages {
         state.search.page_changed(*nb, *page);
     }
-    if !changed.is_empty() {
+    if !changed.is_empty() || report.folders_changed {
         let _ = app.emit(
             "sync://changed",
             Changed {
@@ -2386,6 +2386,12 @@ pub fn require_open_vault(root: &Path, vault: &str) -> Result<(), CmdError> {
     } else {
         Err(err("unlock this vault on this device first"))
     }
+}
+
+/// Whether a notebook belongs to a vault.
+pub fn in_vault(root: &Path, notebook: Uuid) -> Result<bool, CmdError> {
+    let owners = NotebookOwners::load(root).map_err(|e| err(e.to_string()))?;
+    Ok(owners.owner(&notebook).is_some())
 }
 
 /// Assigns a notebook to a vault. Call with the library lock held, in the same critical section

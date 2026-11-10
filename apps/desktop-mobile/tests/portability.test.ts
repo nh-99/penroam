@@ -21,6 +21,7 @@ vi.mock("../src/platform/ipc", () => ({
     importNotebook: (...a: unknown[]) => importNotebook(...a),
     importDocument: (...a: unknown[]) => importDocument(...a),
     listNotebooks: () => listNotebooks(),
+    listFolders: async () => [],
     libraryStatus: async () => ({ replayedBatches: 0, truncatedJournals: 0, warnings: [] }),
     exportNotebookText: (...a: unknown[]) => exportNotebookText(...a),
   },

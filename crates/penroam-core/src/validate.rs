@@ -219,6 +219,9 @@ pub fn validate_notebook(n: &Notebook) -> Result<(), ValidationError> {
             n.schema_version
         ));
     }
+    if n.id == crate::folder::LIBRARY_STREAM_ID {
+        return err("notebook uses the reserved library stream id");
+    }
     validate_title(&n.title)?;
     validate_template(&n.defaults.template)?;
     if !is_color(&n.cover) {

@@ -85,6 +85,12 @@ Building the Android app needs the Android SDK and NDK. See
 style. To rename, recolour or delete a notebook, open the **⋮** menu on its card. Deleted
 notebooks go to the **Trash**, where you can restore them or delete them for good.
 
+**Folders.** Click the folder button at the top of the library to make a folder, then open a
+notebook's **⋮** menu and choose **Move to folder…**. Folders can hold other folders, and a new
+notebook goes in the folder you have open. Deleting a folder doesn't delete anything inside it:
+its notebooks and folders move up one level. Folders sync with your account. Notebooks in a vault
+stay outside folders.
+
 With sync on, deleting a notebook for good removes it from all your devices, but it stays in
 your account: the Trash keeps it, and **Restore** brings it back everywhere. A notebook that's
 in your account but not on this device shows on the shelf as a card with a cloud icon. Click it
