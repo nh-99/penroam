@@ -44,7 +44,7 @@ import {
 import { newId } from "./ids";
 import { classifyPointer, PALM_CONTACT_PX, PENCIL_CURVE, penErases, pressureArrived, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
 import { PdfCache, PdfPageRenderer, renderPdfPage } from "./pdf";
-import { drawText, elementBounds, linkAt, PageRenderer, paintOf, pdfPageKey, taskAt, textBounds, type Ink, type Text } from "./renderer";
+import { drawText, elementBounds, linkAt, PageRenderer, paintOf, pdfPageKey, shownColor, taskAt, textBounds, type Ink, type Text } from "./renderer";
 import type { PageSession, SaveState } from "./session";
 import { rowsFor, toggledTask, type TaskBox } from "./markdown";
 import { MarkdownEditor } from "./markdownEditor";
@@ -88,6 +88,8 @@ export interface ToolSettings {
 export interface EditorSettings {
   penOnly: PenOnlyMode;
   mono: boolean;
+  /** Dark theme: the page is shown inverted (see `RenderOptions.dark`). */
+  dark: boolean;
   /** max backing pixels per page layer */
   maxCanvasPixels: number;
   useNativeInk: boolean;
@@ -245,7 +247,7 @@ export class InkEditor {
     textFreePlacement: false,
     pressure: true,
   };
-  settings: EditorSettings = { penOnly: "auto", mono: false, maxCanvasPixels: 16_000_000, useNativeInk: true, palmContactPx: PALM_CONTACT_PX, pencilCurve: false, detailWhenZoomed: false };
+  settings: EditorSettings = { penOnly: "auto", mono: false, dark: false, maxCanvasPixels: 16_000_000, useNativeInk: true, palmContactPx: PALM_CONTACT_PX, pencilCurve: false, detailWhenZoomed: false };
   selection = new Set<string>();
   penSeen = false;
 
@@ -539,6 +541,7 @@ export class InkEditor {
       if (p.background) this.renderer.underlay = { type: "image", id: "page-background", z: -Infinity, x: 0, y: 0, ...p.size, assetHash: p.background.assetHash, pdfPage: p.background };
     } else this.renderer.setPage(p.size.width, p.size.height, p.template);
     this.renderer.opts.mono = this.settings.mono;
+    this.renderer.opts.dark = this.settings.dark;
     this.wasColumn = this.column;
     // a column is a page on the desk; a free canvas is paper everywhere
     this.viewport.classList.toggle("penroam-canvas-view", this.unbounded);
@@ -596,8 +599,19 @@ export class InkEditor {
     this.cb.onPageEdited();
   }
 
+  /** The page's ink for the native layer, in the colours it is shown in. */
   private inkElements(): InkStroke[] {
-    return (this.session?.page.elements ?? []).filter((e): e is Ink => e.type === "ink");
+    return (this.session?.page.elements ?? []).filter((e): e is Ink => e.type === "ink").map((e) => this.nativeShown(e));
+  }
+
+  /**
+   * Stroke `s` with its colour swapped between stored and shown (`shownColor` is its own
+   * inverse), both ways across the native layer: it draws what it is given and hands back
+   * strokes in the colours it drew them in.
+   */
+  private nativeShown<T extends { color: string }>(s: T): T {
+    const color = shownColor(s.color, this.settings.dark);
+    return color === s.color ? s : { ...s, color };
   }
 
   private async renderPdf() {
@@ -617,6 +631,25 @@ export class InkEditor {
   setMono(mono: boolean) {
     this.settings.mono = mono;
     this.renderer.opts.mono = mono;
+    this.redrawLook();
+  }
+
+  /** Shows the page inverted for the dark theme, or as it is. */
+  setDark(dark: boolean) {
+    this.settings.dark = dark;
+    this.renderer.opts.dark = dark;
+    this.redrawLook();
+    // the native layer draws ink in the colours it was given
+    if (this.native && this.nativeMounted) {
+      if (this.native.ownsCommittedInk) this.nativeCall((n) => n.loadCommittedInk(this.inkElements()));
+      if (this.nativeVisible) this.nativeCall((n) => n.setTool(this.nativeTool()));
+    }
+  }
+
+  /** Draws everything again after a change in how pages look. */
+  private redrawLook() {
+    // the other pages' pictures were drawn the old way
+    this.strip.dropImages();
     if (this.session) {
       this.renderer.renderAll();
       this.scheduleSettle();
@@ -625,8 +658,10 @@ export class InkEditor {
 
   setSettings(s: Partial<EditorSettings>) {
     const monoChanged = s.mono !== undefined && s.mono !== this.settings.mono;
+    const darkChanged = s.dark !== undefined && s.dark !== this.settings.dark;
     this.settings = { ...this.settings, ...s };
     if (monoChanged) this.setMono(this.settings.mono);
+    if (darkChanged) this.setDark(this.settings.dark);
     this.updateNative();
   }
 
@@ -1648,7 +1683,7 @@ export class InkEditor {
   }
 
   private drawActive(a: ActiveStroke) {
-    const s = this.renderer.opts.mono && a.stroke.tool === "highlighter" ? { ...a.stroke, color: "#9a9a9a", opacity: 0.45 } : a.stroke;
+    const s = this.renderer.strokeStyleFor(a.stroke);
     const n = s.points.length;
     this.clearScreen(this.tctx);
     this.screenCtx(this.tctx);
@@ -2029,11 +2064,11 @@ export class InkEditor {
     for (const id of this.selection) {
       const e = this.session!.elementById(id);
       if (!e) continue;
-      if (d.kind === "resize" && e.type === "text") drawText(ctx, { ...e, width: d.width, height: d.height });
+      if (d.kind === "resize" && e.type === "text") drawText(ctx, { ...e, width: d.width, height: d.height }, this.renderer.textColorFor(e));
       else if (d.kind === "move") {
         const m = this.movedCopy(e, d.dx, d.dy);
-        if (m.type === "ink") drawStroke(ctx, m);
-        else if (m.type === "text") drawText(ctx, m);
+        if (m.type === "ink") drawStroke(ctx, this.renderer.strokeStyleFor(m));
+        else if (m.type === "text") drawText(ctx, m, this.renderer.textColorFor(m));
       }
     }
     if (d.kind === "move" && d.guides.length) {
@@ -2383,7 +2418,7 @@ export class InkEditor {
       const rm = c.removed.filter((e) => e.type === "ink").map((e) => e.id);
       const add = c.added.filter((e): e is Ink => e.type === "ink");
       if (rm.length) this.nativeCall((n) => n.removeStrokes(rm));
-      if (add.length) this.nativeCall((n) => n.addStrokes(add));
+      if (add.length) this.nativeCall((n) => n.addStrokes(add.map((e) => this.nativeShown(e))));
     }
     if (this.selection.size) this.updateSelectionBox();
     if (this.editedTimer) clearTimeout(this.editedTimer);
@@ -2419,8 +2454,8 @@ export class InkEditor {
 
   private nativeTool(): NativeTool {
     const t = this.tool;
-    if (t === "highlighter") return { tool: "highlighter", color: this.tools.highlighterColor, width: this.tools.highlighterWidth, pressure: false, opacity: HIGHLIGHTER_OPACITY };
-    return { tool: t === "eraser" ? "eraser" : "pen", color: this.tools.penColor, width: this.tools.penWidth, pressure: this.tools.pressure, opacity: 1 };
+    if (t === "highlighter") return this.nativeShown({ tool: "highlighter", color: this.tools.highlighterColor, width: this.tools.highlighterWidth, pressure: false, opacity: HIGHLIGHTER_OPACITY });
+    return this.nativeShown({ tool: t === "eraser" ? "eraser" : "pen", color: this.tools.penColor, width: this.tools.penWidth, pressure: this.tools.pressure, opacity: 1 });
   }
 
   private surfaceRect() {
@@ -2513,7 +2548,8 @@ export class InkEditor {
     this.pan = null;
   }
 
-  private onNativeStroke(stroke: InkStroke) {
+  private onNativeStroke(shown: InkStroke) {
+    const stroke = this.nativeShown(shown);
     this.markPenSeen(); // surfaces that only report finished strokes (BOOX)
     const s = this.session;
     if (!s) return;

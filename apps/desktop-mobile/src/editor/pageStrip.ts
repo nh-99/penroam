@@ -195,6 +195,12 @@ export class PageStrip {
     if (slot) this.fill(slot, id);
   }
 
+  /** Forgets every page's picture (pages now look different); placeholders show until new ones arrive. */
+  dropImages() {
+    this.images.clear();
+    for (const [id, slot] of this.slots) this.fill(slot, id);
+  }
+
   /** Removes every page element; pictures are kept. */
   hide() {
     for (const slot of this.slots.values()) slot.remove();
@@ -211,13 +217,17 @@ export class PageStrip {
   private fill(slot: HTMLDivElement, id: string) {
     const img = this.images.get(id);
     if (img) {
-      slot.style.backgroundImage = "";
       slot.replaceChildren(img);
       return;
     }
+    // the saved thumbnail, in its own element so the dark theme can invert it like the page
     slot.replaceChildren();
     const url = this.pages.find((p) => p.id === id)?.placeholder;
-    slot.style.backgroundImage = url ? `url("${url}")` : "";
+    if (!url) return;
+    const ph = document.createElement("div");
+    ph.className = "penroam-strip-placeholder absolute inset-0";
+    ph.style.backgroundImage = `url("${url}")`;
+    slot.appendChild(ph);
   }
 
   /** Keeps the pictures of the pages nearest the open page (and any on screen). */

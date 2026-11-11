@@ -26,6 +26,11 @@
 // the origin. The engine moves and grows it as the view moves; everything here draws in
 // document coordinates offset by `org`, so a sheet is simply an extent at the origin.
 //
+// The dark theme draws the page as its negative (`RenderOptions.dark`): the paper and any PDF
+// pages are inverted, and black, white and grey ink and text swap lightness (`shownColor`).
+// Coloured ink and raster images are left as they are. This is display only: the page keeps
+// its colours, and exports and saved thumbnails are drawn with `dark` off.
+//
 // A PDF page placed as an element (an image with `pdfPage`) is drawn from `pdfPages`, bitmaps
 // the engine renders at a resolution that suits how close the page is to the view.
 //
@@ -207,6 +212,34 @@ const contains = (o: Rect, i: Rect) => o[0] <= i[0] && o[1] <= i[1] && o[2] >= i
 export interface RenderOptions {
   /** ePaper: grey highlighter, no colour templates */
   mono: boolean;
+  /** Dark theme: inverted paper and PDF pages, black and white ink swapped (`shownColor`). */
+  dark?: boolean;
+}
+
+/** Most difference between the channels of a colour that still counts as grey. */
+const GREY_SPREAD = 24;
+
+/**
+ * The colour ink or text of colour `color` (`#rrggbb`) is shown in. On a dark page black,
+ * white and greys are inverted, so dark ink stays readable on the inverted paper; any other
+ * colour, or any colour with `dark` off, is returned unchanged. Applying it twice gives the
+ * colour back, which lets native ink layers be handed shown colours and return stored ones.
+ */
+export function shownColor(color: string, dark: boolean): string {
+  if (!dark || !/^#[0-9a-fA-F]{6}$/.test(color)) return color;
+  const n = parseInt(color.slice(1), 16);
+  const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255];
+  if (Math.max(r, g, b) - Math.min(r, g, b) > GREY_SPREAD) return color;
+  return `#${(0xffffff - n).toString(16).padStart(6, "0")}`;
+}
+
+/** Inverts a rectangle of `ctx` (in its current transform), which must be opaque there. */
+function invertRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+  ctx.save();
+  ctx.globalCompositeOperation = "difference";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
 }
 
 export class PageRenderer {
@@ -248,7 +281,7 @@ export class PageRenderer {
    */
   underlay: Extract<Element, { type: "image" }> | null = null;
   hidden = new Set<string>();
-  opts: RenderOptions = { mono: false };
+  opts: RenderOptions = { mono: false, dark: false };
   /** last full ink redraw duration (ms, flushed) */
   lastFullRedrawMs = 0;
   /** last synchronous (visible-first) part of a progressive redraw (ms, flushed) */
@@ -531,7 +564,7 @@ export class PageRenderer {
     this.clip(ctx, r, d.res, true, [d.rect[0], d.rect[1]]);
     for (const e of this.elements()) {
       if (e.type !== "text" || this.hidden.has(e.id) || !rectsIntersect(r, textBounds(e))) continue;
-      drawText(ctx, e, this.opts.mono && e.color.toLowerCase() !== "#000000" ? "#000000" : undefined);
+      drawText(ctx, e, this.textColorFor(e));
     }
     ctx.restore();
   }
@@ -691,9 +724,12 @@ export class PageRenderer {
       if (b) c.drawImage(this.pdfBitmap, (b[0] - ox) * r, (b[1] - oy) * r, (b[2] - b[0]) * r, (b[3] - b[1]) * r);
       else c.drawImage(this.pdfBitmap, 0, 0, this.bg.width, this.bg.height);
     }
+    // the paper and the PDF on it are opaque, so the whole layer can be inverted at once
+    if (this.opts.dark) invertRect(c, 0, 0, this.bg.width, this.bg.height);
     this.prep(c);
-    if (this.canvas) drawCanvasTemplate(c, this.template, this.extent, this.res, this.opts.mono, this.pageWidth);
-    else drawTemplate(c, this.template, this.width, this.height, this.opts.mono);
+    const look = this.opts.mono ? "mono" : this.opts.dark ? "dark" : "light";
+    if (this.canvas) drawCanvasTemplate(c, this.template, this.extent, this.res, look, this.pageWidth);
+    else drawTemplate(c, this.template, this.width, this.height, look);
   }
 
   private clip(ctx: CanvasRenderingContext2D, rect: Rect | null, res = this.res, clear = true, org: [number, number] = this.org) {
@@ -716,9 +752,18 @@ export class PageRenderer {
     this.prep(ctx, res, org);
   }
 
-  private strokeStyleFor(s: InkStroke): InkStroke {
+  /** Stroke `s` as this page shows it: the ePaper highlighter, or dark theme colours. */
+  strokeStyleFor(s: InkStroke): InkStroke {
     if (this.opts.mono && s.tool === "highlighter") return { ...s, color: "#9a9a9a", opacity: 0.45 };
-    return s;
+    const color = shownColor(s.color, !!this.opts.dark);
+    return color === s.color ? s : { ...s, color };
+  }
+
+  /** The colour this page shows text `t` in, or undefined for its own. */
+  textColorFor(t: TextBlock): string | undefined {
+    if (this.opts.mono) return t.color.toLowerCase() !== "#000000" ? "#000000" : undefined;
+    const color = shownColor(t.color, !!this.opts.dark);
+    return color === t.color ? undefined : color;
   }
 
   /** Redraws ink inside `rect` (doc pt) or everything when rect is null. */
@@ -749,7 +794,7 @@ export class PageRenderer {
     for (const e of this.elements()) {
       if (e.type !== "text" || this.hidden.has(e.id)) continue;
       if (rect && !rectsIntersect(rect, textBounds(e))) continue;
-      drawText(ctx, e, this.opts.mono && e.color.toLowerCase() !== "#000000" ? "#000000" : undefined);
+      drawText(ctx, e, this.textColorFor(e));
     }
     if (rect) ctx.restore();
     this.renderDetailText(rect);
@@ -778,7 +823,9 @@ export class PageRenderer {
         ctx.imageSmoothingQuality = "high";
         ctx.drawImage(pdf.canvas, e.x, e.y, e.width, e.height);
       }
-      ctx.strokeStyle = "#d4d4d8";
+      // the white fill makes the rect opaque, so only the PDF page is inverted
+      if (this.opts.dark) invertRect(ctx, e.x, e.y, e.width, e.height);
+      ctx.strokeStyle = this.opts.dark ? "#3f3f46" : "#d4d4d8";
       ctx.lineWidth = 0.75;
       ctx.strokeRect(e.x, e.y, e.width, e.height);
       ctx.restore();

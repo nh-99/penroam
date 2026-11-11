@@ -40,7 +40,9 @@ account, a server or a subscription.
   tells you exactly what came across and what didn't.
 - **Go back in time.** Every page keeps its earlier versions, and you can bring back a page or
   a whole notebook without losing what you have now.
-- **Light, dark and ePaper themes**, with layouts for desktop, tablet and phone.
+- **Light, dark and ePaper themes**, with layouts for desktop, tablet and phone. The dark
+  theme shows pages as black paper with black and white ink swapped; exports and printing stay
+  as written. Pick a theme in **Settings**.
 
 | Your library | Annotating a PDF |
 |---|---|
@@ -48,7 +50,7 @@ account, a server or a subscription.
 
 | Dark theme | ePaper theme |
 |---|---|
-| ![A packing list with checkboxes, a typed itinerary and a sketch, in the dark theme](docs/images/dark-theme.png) | ![The same notebook in the high-contrast ePaper theme](docs/images/epaper-theme.png) |
+| ![A packing list with checkboxes, a typed itinerary and a sketch, on black paper in the dark theme](docs/images/dark-theme.png) | ![The same notebook in the high-contrast ePaper theme](docs/images/epaper-theme.png) |
 
 ## Install
 

@@ -202,7 +202,8 @@ pre,
 }
 /* an infinite canvas has no sheet: the paper is the whole view, and the layers draw on it */
 .penroam-page.penroam-canvas,
-:root[data-theme="epaper"] .penroam-page.penroam-canvas {
+:root[data-theme="epaper"] .penroam-page.penroam-canvas,
+:root[data-theme="dark"] .penroam-page.penroam-canvas {
   background: transparent;
   box-shadow: none;
   outline: none;
@@ -212,11 +213,29 @@ pre,
 }
 /* the other pages in continuous scrolling: pictures that look like the live page */
 .penroam-strip-page {
-  background: #ffffff no-repeat center / 100% 100%;
+  background: #ffffff;
   box-shadow: var(--pr-shadow);
+}
+.penroam-strip-placeholder {
+  background: no-repeat center / 100% 100%;
 }
 :root[data-theme="epaper"] .penroam-strip-page {
   outline: 1px solid #000;
+}
+/* Dark theme: the page is drawn inverted (editor/renderer.ts, RenderOptions.dark), so the
+   paper is black. A thin edge keeps a sheet apart from the desk. Saved thumbnails are of the
+   page as it is, so a placeholder is inverted to match (the hue turn keeps colours roughly
+   their own, as the renderer does). */
+:root[data-theme="dark"] .penroam-page,
+:root[data-theme="dark"] .penroam-strip-page {
+  background: #000000;
+  outline: 1px solid var(--pr-line);
+}
+:root[data-theme="dark"] .penroam-canvas-view {
+  background: #000000;
+}
+:root[data-theme="dark"] .penroam-strip-placeholder {
+  filter: invert(1) hue-rotate(180deg);
 }
 .penroam-selection {
   border: calc(1.5px * var(--inv, 1)) dashed #2563eb;

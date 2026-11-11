@@ -45,6 +45,10 @@ release notes and stops if the version has no entry.
   text boxes. New text is handwritten by default; existing text stays formatted. Bullets,
   numbered lists, checkboxes (sketched by hand in handwritten text), links, bold and italic all
   work in both, and PDF and SVG exports include the handwritten font. Older versions show handwritten text in the formatted font.
+* The dark theme now shows pages dark too: the paper and PDF pages are inverted, and black, white
+  and grey ink and text swap, so black writing shows white on black paper. Coloured ink and
+  pictures keep their colours. Only the screen changes: exports, printing and page thumbnails
+  stay as written.
 
 ## 0.1.0-beta.6
 

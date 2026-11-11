@@ -81,6 +81,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     e.setSettings({
       penOnly: s.penOnly,
       mono: settings.effectiveTheme() === "epaper",
+      dark: settings.effectiveTheme() === "dark",
       useNativeInk: s.useNativeInk,
       // iPad fingertips exceed the size limit; palms are rejected by the Pencil-down rules instead
       palmContactPx: isIOS() ? Infinity : PALM_CONTACT_PX,
@@ -105,8 +106,9 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     const e = editor.value;
     const pid = session?.page.id;
     if (!e || !pid || !session) return;
-    // the layers of a canvas cover the view, not the drawing: picture the drawing instead
-    const png = e.isCanvas ? await renderPagePng(session.page, 240, { paper: true }) : await e.renderer.thumbnail(240);
+    // The layers of a canvas cover the view, not the drawing: picture the drawing instead.
+    // Thumbnails are saved, so they show the page as it is, not as the dark theme shows it.
+    const png = e.isCanvas || e.renderer.opts.dark ? await renderPagePng(session.page, 240, { paper: true }) : await e.renderer.thumbnail(240);
     if (png && session?.page.id === pid) await lib.saveThumb(pid, png);
   }
 
@@ -116,6 +118,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   /**
    * Renders any page, including a past version, to a PNG `width` pixels wide. The PDF
    * behind it is drawn at that resolution from the original, so `width` sets the detail.
+   * PNGs are exports, thumbnails and history previews, so they are never in dark colours.
    */
   async function renderPagePng(page: Page, width: number, opts: { paper?: boolean } = {}): Promise<Uint8Array | null> {
     const c = await renderPageCanvas(page, width, opts);
@@ -132,9 +135,10 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
    * Like `renderPagePng`, but keeps the picture as a canvas (continuous scrolling). On an
    * infinite canvas the picture is of the drawing, cut the way exports cut it (or, with
    * `paper`, at least a page in the page's shape, for previews), and may come out narrower
-   * than `width` when the drawing is too long for a canvas that wide.
+   * than `width` when the drawing is too long for a canvas that wide. With `asShown` the page
+   * is drawn the way the editor shows it in the dark theme.
    */
-  async function renderPageCanvas(page: Page, width: number, opts: { paper?: boolean } = {}): Promise<HTMLCanvasElement> {
+  async function renderPageCanvas(page: Page, width: number, opts: { paper?: boolean; asShown?: boolean } = {}): Promise<HTMLCanvasElement> {
     const host = document.createElement("div");
     const r = new PageRenderer(host, () => page.elements);
     const canvas = !!lib.current?.infiniteCanvas;
@@ -146,6 +150,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       if (page.background) r.pdfBox = [0, 0, page.size.width, page.size.height];
     } else r.setPage(w, h, page.template);
     r.opts.mono = settings.effectiveTheme() === "epaper";
+    r.opts.dark = !!opts.asShown && settings.effectiveTheme() === "dark";
     const res = canvas ? width / w : Math.min(Math.max(2, width / w), (2 * width) / w);
     r.setResolution(res);
     if (page.background && pdfCache) {
@@ -212,7 +217,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
           const page = await api.loadPage(nb.id, want.id);
           if (lib.current?.id !== nb.id || editor.value !== e) break;
           noteSize(nb.id, page);
-          const canvas = await renderPageCanvas(page, want.width);
+          const canvas = await renderPageCanvas(page, want.width, { asShown: true });
           if (lib.current?.id === nb.id) e.setPageImage(want.id, canvas);
         } catch (err) {
           console.warn("page picture", want.id, err);

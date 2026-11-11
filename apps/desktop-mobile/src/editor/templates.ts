@@ -14,14 +14,34 @@ export const TEMPLATE_COLORS = {
   dot: "rgb(154,167,181)",
 };
 
+/**
+ * The template colours on a dark theme's inverted paper: as faint against black as the light
+ * ones are against white, in the same hues. Display only; exports use `TEMPLATE_COLORS`.
+ */
+export const DARK_TEMPLATE_COLORS: typeof TEMPLATE_COLORS = {
+  ruled: "rgb(50,60,72)",
+  margin: "rgb(112,52,52)",
+  grid: "rgb(42,50,60)",
+  dot: "rgb(86,98,112)",
+};
+
+/** How templates are coloured: as printed, on a dark theme's paper, or ePaper grey. */
+export type TemplateLook = "light" | "dark" | "mono";
+
+/** The colour `look` gives the template part `part`. */
+function lineColor(look: TemplateLook, part: keyof typeof TEMPLATE_COLORS): string {
+  if (look === "mono") return "rgb(170,170,170)";
+  return (look === "dark" ? DARK_TEMPLATE_COLORS : TEMPLATE_COLORS)[part];
+}
+
 /** Draws `t` in document coordinates (ctx carries the doc->px transform). */
-export function drawTemplate(ctx: CanvasRenderingContext2D, t: Template, w: number, h: number, mono = false): void {
+export function drawTemplate(ctx: CanvasRenderingContext2D, t: Template, w: number, h: number, look: TemplateLook = "light"): void {
   const sp = t.spacing;
   ctx.save();
   ctx.lineCap = "butt";
-  const c = (col: string) => (mono ? "rgb(170,170,170)" : col);
+  const c = (part: keyof typeof TEMPLATE_COLORS) => lineColor(look, part);
   if (t.kind === "ruled") {
-    ctx.strokeStyle = c(TEMPLATE_COLORS.ruled);
+    ctx.strokeStyle = c("ruled");
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     for (let y = sp * 3; y <= h - sp; y += sp) {
@@ -29,14 +49,14 @@ export function drawTemplate(ctx: CanvasRenderingContext2D, t: Template, w: numb
       ctx.lineTo(w, y);
     }
     ctx.stroke();
-    ctx.strokeStyle = c(TEMPLATE_COLORS.margin);
+    ctx.strokeStyle = c("margin");
     ctx.lineWidth = 0.6;
     ctx.beginPath();
     ctx.moveTo(sp * 3, 0);
     ctx.lineTo(sp * 3, h);
     ctx.stroke();
   } else if (t.kind === "grid") {
-    ctx.strokeStyle = c(TEMPLATE_COLORS.grid);
+    ctx.strokeStyle = c("grid");
     ctx.lineWidth = 0.4;
     ctx.beginPath();
     for (let x = sp; x < w; x += sp) {
@@ -49,7 +69,7 @@ export function drawTemplate(ctx: CanvasRenderingContext2D, t: Template, w: numb
     }
     ctx.stroke();
   } else if (t.kind === "dotted") {
-    ctx.fillStyle = c(TEMPLATE_COLORS.dot);
+    ctx.fillStyle = c("dot");
     for (let y = sp; y < h; y += sp) {
       for (let x = sp; x < w; x += sp) {
         ctx.beginPath();
@@ -79,17 +99,17 @@ export function isCanvasColumn(t: Template): boolean {
  * wash, so it isn't drawn. Ruled paper is drawn as a column `pageWidth` wide from the origin,
  * with the header rows and margin line of a sheet and rules all the way down.
  */
-export function drawCanvasTemplate(ctx: CanvasRenderingContext2D, t: Template, r: readonly [number, number, number, number], res: number, mono = false, pageWidth = 0): void {
+export function drawCanvasTemplate(ctx: CanvasRenderingContext2D, t: Template, r: readonly [number, number, number, number], res: number, look: TemplateLook = "light", pageWidth = 0): void {
   const sp = t.spacing;
   if (t.kind === "blank" || sp * res < MIN_PATTERN_PX) return;
   const [x0, y0, x1, y1] = r;
   const first = (v: number) => Math.ceil(v / sp) * sp;
-  const c = (col: string) => (mono ? "rgb(170,170,170)" : col);
+  const c = (part: keyof typeof TEMPLATE_COLORS) => lineColor(look, part);
   ctx.save();
   ctx.lineCap = "butt";
   if (t.kind === "ruled") {
     const right = Math.min(x1, pageWidth);
-    ctx.strokeStyle = c(TEMPLATE_COLORS.ruled);
+    ctx.strokeStyle = c("ruled");
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     for (let y = Math.max(first(y0), sp * 3); y <= y1; y += sp) {
@@ -98,7 +118,7 @@ export function drawCanvasTemplate(ctx: CanvasRenderingContext2D, t: Template, r
     }
     ctx.stroke();
     if (x0 <= sp * 3 && sp * 3 <= x1 && y1 > 0) {
-      ctx.strokeStyle = c(TEMPLATE_COLORS.margin);
+      ctx.strokeStyle = c("margin");
       ctx.lineWidth = 0.6;
       ctx.beginPath();
       ctx.moveTo(sp * 3, Math.max(0, y0));
@@ -106,7 +126,7 @@ export function drawCanvasTemplate(ctx: CanvasRenderingContext2D, t: Template, r
       ctx.stroke();
     }
   } else if (t.kind === "grid") {
-    ctx.strokeStyle = c(TEMPLATE_COLORS.grid);
+    ctx.strokeStyle = c("grid");
     ctx.lineWidth = 0.4;
     ctx.beginPath();
     for (let y = first(y0); y <= y1; y += sp) {
@@ -119,7 +139,7 @@ export function drawCanvasTemplate(ctx: CanvasRenderingContext2D, t: Template, r
     }
     ctx.stroke();
   } else if (t.kind === "dotted") {
-    ctx.fillStyle = c(TEMPLATE_COLORS.dot);
+    ctx.fillStyle = c("dot");
     // one path per row: a fill per dot is far too slow over a large canvas
     for (let y = first(y0); y <= y1; y += sp) {
       ctx.beginPath();
