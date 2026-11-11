@@ -53,5 +53,17 @@ export const useTour = defineStore("tour", () => {
     start("editor");
   }
 
-  return { active, start, stop, offerAtStartup, offerInEditor };
+  /**
+   * Runs the first-start onboarding again, whatever the library holds: the
+   * library tour now and the editor tour when a notebook next opens. Developer
+   * mode uses this to check the flow without wiping the library. Call it from
+   * the library view, since the library tour points at its controls.
+   */
+  function replayOnboarding() {
+    settings.s.tourOffered = true;
+    settings.s.editorTourPending = true;
+    start("library");
+  }
+
+  return { active, start, stop, offerAtStartup, offerInEditor, replayOnboarding };
 });

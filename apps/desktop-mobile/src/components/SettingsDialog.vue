@@ -36,6 +36,12 @@ function takeTour() {
   emit("close");
   tour.start(lib.current ? "editor" : "library");
 }
+
+/** Developer mode: closes Settings and replays the first-start onboarding (library view only). */
+function replayOnboarding() {
+  emit("close");
+  tour.replayOnboarding();
+}
 const tabs = computed(() => [
   { id: "general", label: "General" },
   ...(hasHost() ? [{ id: "search", label: "Search" }] : []),
@@ -162,6 +168,10 @@ function versionTapped() {
           </p>
         </section>
         <AboutDetails v-if="hasHost()" :ink-path="inkPath?.label ?? null" />
+        <section v-if="sync.devBuild && settings.s.developerMode" class="flex items-center justify-between gap-4 rounded-xl border border-line p-3">
+          <span><span class="block text-sm">Onboarding (developer mode)</span><span class="block text-xs text-muted">{{ lib.current ? "Go back to the library to replay the first-start tours" : "Replay the first-start tours: the library now, the notebook view on the next open" }}</span></span>
+          <Btn variant="outline" class="shrink-0" :disabled="!!lib.current" @click="replayOnboarding">Replay onboarding</Btn>
+        </section>
         <p v-if="version" class="text-center text-xs text-muted">
           <button type="button" class="select-none px-2 py-1" @click="versionTapped">Penroam {{ version }}<template v-if="sync.devBuild && settings.s.developerMode"> · developer mode</template></button>
         </p>
