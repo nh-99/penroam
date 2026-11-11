@@ -72,6 +72,10 @@ interface Persisted {
   updateChannel: UpdateChannel;
   /** Developer mode (debug builds only): choose another sync server. */
   developerMode: boolean;
+  /** The first start has happened, so the guided tour no longer starts by itself (see stores/tour.ts). */
+  tourOffered: boolean;
+  /** The editor tour runs the next time a notebook opens (set by a first start on an empty library). */
+  editorTourPending: boolean;
 }
 
 const defaults: Persisted = {
@@ -102,6 +106,8 @@ const defaults: Persisted = {
   updateCheck: false,
   updateChannel: "stable",
   developerMode: false,
+  tourOffered: false,
+  editorTourPending: false,
 };
 
 /** A saved palette held to its invariants. Always a new array, so edits can't reach the built-in lists. */

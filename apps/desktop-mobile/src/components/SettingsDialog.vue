@@ -20,6 +20,8 @@ import type { PenOnlyMode } from "../editor/input";
 import { hasHost } from "../platform/ipc";
 import { tapCounter } from "../platform/sync";
 import { useUi } from "../stores/ui";
+import { useTour } from "../stores/tour";
+import Btn from "./ui/Btn.vue";
 
 const props = defineProps<{ nativeKind: string | null }>();
 const emit = defineEmits<{ close: [] }>();
@@ -27,6 +29,13 @@ const settings = useSettings();
 const lib = useLibrary();
 const sync = useSync();
 const search = useSearch();
+const tour = useTour();
+
+/** Closes Settings and shows the tour for the view underneath. */
+function takeTour() {
+  emit("close");
+  tour.start(lib.current ? "editor" : "library");
+}
 const tabs = computed(() => [
   { id: "general", label: "General" },
   ...(hasHost() ? [{ id: "search", label: "Search" }] : []),
@@ -82,6 +91,10 @@ function versionTapped() {
     <Tabs v-model="tab" :tabs="tabs" label="Settings sections" class="mb-4" />
     <div :id="`settings-panel-${tab}`" role="tabpanel" :aria-labelledby="`settings-tab-${tab}`" class="h-[min(34rem,calc(100dvh-12rem))] overflow-y-auto pr-1">
       <div v-if="tab === 'general'" class="space-y-6">
+        <section class="flex items-center justify-between gap-4 rounded-xl border border-line p-3">
+          <span><span class="block text-sm">Tour</span><span class="block text-xs text-muted">A short walk through {{ lib.current ? "the notebook view" : "your library" }}</span></span>
+          <Btn variant="outline" class="shrink-0" @click="takeTour">Take the tour</Btn>
+        </section>
         <section>
           <h3 class="mb-2 text-sm font-medium">Appearance</h3>
           <div class="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Theme">

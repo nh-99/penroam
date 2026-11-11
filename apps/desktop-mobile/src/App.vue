@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import LibraryView from "./views/LibraryView.vue";
 import EditorView from "./views/EditorView.vue";
 import Toasts from "./components/Toasts.vue";
+import Tour from "./components/Tour.vue";
 import ImportResultsDialog from "./components/ImportResultsDialog.vue";
 import PlaintextExportDialog from "./components/PlaintextExportDialog.vue";
 import UpgradeDialog from "./components/UpgradeDialog.vue";
@@ -13,6 +14,7 @@ import { useSettings } from "./stores/settings";
 import { useUi } from "./stores/ui";
 import { useSync } from "./stores/sync";
 import { useSearch } from "./stores/search";
+import { useTour } from "./stores/tour";
 import { api, hasHost } from "./platform/ipc";
 import { flushEverything } from "./platform/lifecycle";
 import { startAutoBackup, watchProgress } from "./platform/backup";
@@ -26,6 +28,7 @@ const settings = useSettings();
 const ui = useUi();
 const sync = useSync();
 const search = useSearch();
+const tour = useTour();
 const nativeKind = ref<string | null>(null);
 let unlisten: UnlistenFn | null = null;
 
@@ -46,6 +49,14 @@ onMounted(async () => {
   await lib.refresh();
   if (!hasHost()) return;
   console.info("startup: library loaded");
+  // a new user's first start: show them around (stores/tour.ts)
+  tour.offerAtStartup(!lib.notebooks.length && !lib.folders.length && !lib.trashed.length);
+  watch(
+    () => lib.current?.id,
+    (id) => {
+      if (id) tour.offerInEditor();
+    },
+  );
   void search.init();
   // sync: one query at start-up; nothing more unless a backend reports it available
   void sync.init().then(() => {
@@ -126,6 +137,7 @@ onBeforeUnmount(() => {
   <EditorView v-if="lib.current" :key="lib.current.id" />
   <LibraryView v-else :native-kind="nativeKind" />
   <Toasts />
+  <Tour v-if="tour.active" :key="tour.active" :name="tour.active" />
   <PlaintextExportDialog v-if="lib.plaintextQuestion" @answer="(ok) => lib.plaintextQuestion?.(ok)" />
   <ImportResultsDialog v-if="lib.importResults" :results="lib.importResults" @close="lib.importResults = null" />
   <UpgradeDialog v-if="sync.upgradeOpen" />

@@ -1,3 +1,6 @@
+# a first start on an empty library opens the guided tour; Escape closes it (and does nothing otherwise)
+key Escape
+sleep 500
 move 1037 32
 down 1
 up 1
