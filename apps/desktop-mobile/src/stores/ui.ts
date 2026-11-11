@@ -26,11 +26,18 @@ export const useUi = defineStore("ui", () => {
     toasts.value = toasts.value.filter((t) => t.id !== id);
   }
 
+  /** Replaces a toast's text in place, e.g. to report progress; no-op once it's dismissed. */
+  function retext(id: number, text: string) {
+    const t = toasts.value.find((t) => t.id === id);
+    if (t) t.text = text;
+  }
+
   return {
     toasts,
     overlays,
     toast,
     dismiss,
+    retext,
     info: (t: string) => toast("info", t),
     success: (t: string) => toast("success", t),
     error: (t: string, action?: Toast["action"]) => toast("error", t, { action }),

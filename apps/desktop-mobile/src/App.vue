@@ -17,7 +17,7 @@ import { api, hasHost } from "./platform/ipc";
 import { flushEverything } from "./platform/lifecycle";
 import { startAutoBackup, watchProgress } from "./platform/backup";
 import { detectNativeInk } from "./platform/nativeInk";
-import { checkAtStartup } from "./platform/updates";
+import { checkAtStartup, installFromToast } from "./platform/updates";
 
 const lib = useLibrary();
 watchProgress(lib);
@@ -68,7 +68,12 @@ onMounted(async () => {
     });
   });
   void checkAtStartup(settings.s.updateCheck, settings.s.updateChannel).then((offer) => {
-    if (offer) ui.success(`Penroam ${offer.version} is available. Install it from Settings → About.`);
+    if (!offer) return;
+    // stays until dismissed: a start-up offer is easy to miss in a toast that times out
+    ui.toast("success", `Penroam ${offer.version} is available.`, {
+      sticky: true,
+      action: { label: "Update", run: () => void installFromToast(ui, settings.s.updateChannel, offer.version) },
+    });
   });
   const bench = await withTimeout(api.autobenchRequested(), 5000, "autobench query").catch((e) => {
     console.error("autobench query failed", e);

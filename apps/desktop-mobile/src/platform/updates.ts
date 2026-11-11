@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { hasHost } from "./ipc";
 import { flushEverything } from "./lifecycle";
+import type { useUi } from "../stores/ui";
 
 export type UpdateChannel = "stable" | "beta";
 
@@ -29,6 +30,25 @@ export const updatesApi = {
   },
   onProgress: (fn: (p: UpdateProgress) => void): Promise<UnlistenFn> => listen<UpdateProgress>("updates://progress", (e) => fn(e.payload)),
 };
+
+/**
+ * Installs `version` from a toast: shows download progress in a sticky toast and reports a
+ * failure as an error toast. On success the app restarts, so nothing after `install` runs.
+ */
+export async function installFromToast(ui: ReturnType<typeof useUi>, channel: UpdateChannel, version: string): Promise<void> {
+  const id = ui.toast("info", `Downloading Penroam ${version}…`, { sticky: true });
+  const stop = await updatesApi.onProgress((p) => {
+    if (p.total) ui.retext(id, `Downloading Penroam ${version}: ${Math.round((p.received / p.total) * 100)}%`);
+  });
+  try {
+    await updatesApi.install(channel);
+  } catch (e: any) {
+    ui.error(`The update could not be installed: ${e?.message ?? e}`);
+  } finally {
+    stop();
+    ui.dismiss(id);
+  }
+}
 
 /**
  * The start-up check. Returns the offer, or null when the setting is off, this build can't update,

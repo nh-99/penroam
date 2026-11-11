@@ -412,8 +412,9 @@ no notes, file names or account details.
 
 **Updates.** Builds that can update themselves have an **Updates** section under
 **Settings → About**, where you can check for a new version, choose the stable or beta channel, and
-turn on a check at start-up. It's off unless you turn it on. Your notes are saved before an update
-installs, and they're stored apart from the app.
+turn on a check at start-up. It's off unless you turn it on. When the start-up check finds a new
+version, a notice with an **Update** button stays at the bottom of the window until you install or
+close it. Your notes are saved before an update installs, and they're stored apart from the app.
 
 **Privacy.** Penroam has no analytics or telemetry. [Privacy](docs/policies/privacy.md) lists every
 case in which the app uses the network. See also [accessibility](docs/policies/accessibility.md).
