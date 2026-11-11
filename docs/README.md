@@ -105,7 +105,7 @@ User-facing documentation also lives here, and changes with the app:
 * [manual/](manual/README.md): the user manual. When a user-visible feature lands or changes,
   update the chapter that covers it, and the README if the feature is one of its highlights.
 * [support.md](support.md) and [known-issues.md](known-issues.md): help and current problems.
-* [policies/privacy.md](policies/privacy.md) and
+* [policies/privacy.md](policies/privacy.md), [policies/delete-account.md](policies/delete-account.md) and
   [policies/accessibility.md](policies/accessibility.md).
 
 The screenshots in the README and the manual are generated: see

@@ -39,7 +39,8 @@ there. Penroam keeps the latest 20.
 
 Delete a notebook from the Trash to remove it from this device. Uninstalling the app can leave your
 library behind, so you can reinstall without losing it; delete the app's data folder to remove it.
-With sync on, what has been synced stays in your account until the account is deleted.
+With sync on, what has been synced stays in your account until the account is deleted. See
+[deleting your Penroam Cloud account](delete-account.md) for how, and what is kept.
 
 ## Exporting your data
 

@@ -33,5 +33,7 @@ new, start with [Getting started](getting-started.md). The other chapters can be
 * [Getting help](../support.md): reporting a problem and answers to common questions.
 * [Known issues](../known-issues.md): problems we know about, with workarounds.
 * [Privacy](../policies/privacy.md): every case in which Penroam uses the network.
+* [Deleting your account](../policies/delete-account.md): how to delete a Penroam Cloud account and
+  what is kept.
 * [Accessibility](../policies/accessibility.md): what works today and what doesn't yet.
 * [Which devices Penroam runs on](../platforms/release-matrix.md).
