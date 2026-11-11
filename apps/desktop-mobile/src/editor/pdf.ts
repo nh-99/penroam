@@ -2,9 +2,13 @@
 // immutable asset store; pages are rendered at the page canvas resolution and
 // re-rendered when the zoom settles. All PDF.js data files are bundled
 // (public/pdfjs) so nothing is fetched from the network.
-import * as pdfjs from "pdfjs-dist";
+//
+// This uses PDF.js's legacy build. The modern build calls JavaScript built-ins
+// such as `Uint8Array.prototype.toHex` (Chromium 140+), which older Android
+// System WebViews don't have; the legacy build polyfills them, in the worker too.
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
-import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import type { PdfBackgroundRef } from "../generated/PdfBackgroundRef";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
