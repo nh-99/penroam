@@ -155,6 +155,7 @@ pub fn run() {
             commands::get_notebook,
             commands::create_notebook,
             commands::rename_notebook,
+            commands::duplicate_notebook,
             commands::list_folders,
             commands::create_folder,
             commands::rename_folder,

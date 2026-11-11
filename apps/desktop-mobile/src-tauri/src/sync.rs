@@ -2388,6 +2388,12 @@ pub fn require_open_vault(root: &Path, vault: &str) -> Result<(), CmdError> {
     }
 }
 
+/// The vault a notebook belongs to, or `None` for the main account.
+pub fn vault_of(root: &Path, notebook: Uuid) -> Result<Option<String>, CmdError> {
+    let owners = NotebookOwners::load(root).map_err(|e| err(e.to_string()))?;
+    Ok(owners.owner(&notebook).map(str::to_string))
+}
+
 /// Whether a notebook belongs to a vault.
 pub fn in_vault(root: &Path, notebook: Uuid) -> Result<bool, CmdError> {
     let owners = NotebookOwners::load(root).map_err(|e| err(e.to_string()))?;

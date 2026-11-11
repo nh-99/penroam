@@ -3,6 +3,12 @@
 User-visible changes for each release. The release workflow copies a version's section into its
 release notes and stops if the version has no entry.
 
+## 0.1.0-beta.9
+
+* New: duplicate a notebook with **Duplicate** in the **⋮** menu on its card. The copy is called
+  "*title* (copy)" and goes in the same folder, or the same vault. It has every page and
+  attachment, but starts with an empty trash and no version history.
+
 ## 0.1.0-beta.8
 
 * Fixed: in the dark theme, text you were typing or editing showed black on the black paper.

@@ -178,7 +178,7 @@ function recolor(nb: NotebookSummary) {
           <NotebookCard v-for="nb in list" :key="nb.id" :nb="nb" :cover="lib.covers[nb.id]"
             :vault-name="vaultName(nb.id)" :can-move-to-vault="sync.openVaults.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-vault="moving = nb"
             :can-move-to-folder="lib.folders.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-folder="filing = nb"
-            @open="lib.open(nb.id)" @rename="renaming = nb" @recolor="recolor(nb)"
+            @open="lib.open(nb.id)" @rename="renaming = nb" @duplicate="lib.duplicate(nb.id)" @recolor="recolor(nb)"
             @export="lib.exportNotebook(nb.id, nb.title)" @export-pdf="lib.exportPdf(nb.id, nb.title)" @print="lib.printNotebook(nb.id)" @trash="lib.trash(nb.id)" />
           <CloudNotebookCard v-for="nb in cloudHere" :key="nb.notebookId" :nb="nb"
             :downloading="sync.downloading.includes(nb.notebookId)" @download="download(nb.notebookId)" />

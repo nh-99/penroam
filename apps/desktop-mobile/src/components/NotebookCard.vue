@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { EllipsisVertical, SquarePen, Download, FileDown, FolderInput, Printer, Trash, Palette, Lock } from "@lucide/vue";
+import { EllipsisVertical, SquarePen, Download, FileDown, FolderInput, Printer, Trash, Palette, Lock, Copy } from "@lucide/vue";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import Menu from "./ui/Menu.vue";
 import MenuItem from "./ui/MenuItem.vue";
@@ -15,7 +15,7 @@ const props = defineProps<{
   /** Offer filing it in a folder. */
   canMoveToFolder?: boolean;
 }>();
-const emit = defineEmits<{ open: []; rename: []; export: []; exportPdf: []; print: []; trash: []; recolor: []; moveToVault: []; moveToFolder: [] }>();
+const emit = defineEmits<{ open: []; rename: []; duplicate: []; export: []; exportPdf: []; print: []; trash: []; recolor: []; moveToVault: []; moveToFolder: [] }>();
 const updated = computed(() => {
   const d = new Date(props.nb.updatedAt);
   const days = Math.floor((Date.now() - d.getTime()) / 86400000);
@@ -53,6 +53,7 @@ const updated = computed(() => {
           </button>
         </template>
         <MenuItem @click="emit('rename')"><SquarePen :size="16" />Rename</MenuItem>
+        <MenuItem @click="emit('duplicate')"><Copy :size="16" />Duplicate</MenuItem>
         <MenuItem @click="emit('recolor')"><Palette :size="16" />Change cover colour</MenuItem>
         <MenuItem @click="emit('export')"><Download :size="16" />Export .penroam…</MenuItem>
         <MenuItem @click="emit('exportPdf')"><FileDown :size="16" />Export annotated PDF…</MenuItem>

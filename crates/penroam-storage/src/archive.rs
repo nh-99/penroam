@@ -374,6 +374,71 @@ impl Library {
         })
     }
 
+    /// Makes a copy of a notebook under a new id, titled "`<title>` (copy)",
+    /// in the same folder. The copy has the notebook's live pages, their
+    /// attachments, cover and page settings; it starts with an empty trash
+    /// and without the original's version history.
+    ///
+    /// It is an export to an archive followed by an import, so the copy goes
+    /// through the same checks and lands in the library atomically: a failure
+    /// leaves no partial notebook behind. Page ids are kept (they only need
+    /// to be unique within a notebook), so cached page thumbnails are copied
+    /// across too. `Conflict` if the notebook is in the trash.
+    pub fn duplicate_notebook(&mut self, id: Uuid) -> Result<Notebook> {
+        let nb = self.notebook(id)?;
+        if nb.deleted_at.is_some() {
+            return Err(StorageError::Conflict(
+                "this notebook is in the trash; restore it first".into(),
+            ));
+        }
+        let title: String = format!("{} (copy)", nb.title)
+            .chars()
+            .take(penroam_core::validate::limits::MAX_TITLE_CHARS)
+            .collect();
+        // Spooled through a file in the staging area rather than memory:
+        // notebooks with large PDFs can be bigger than RAM is comfortable with.
+        fs::create_dir_all(self.staging_dir())?;
+        let spool = self
+            .staging_dir()
+            .join(format!("duplicate-{}.penroam", Uuid::new_v4()));
+        let res = (|| -> Result<ImportReport> {
+            let mut file = fs::File::options()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&spool)?;
+            self.export_archive(id, &mut file, "penroam duplicate")?;
+            file.rewind()?;
+            self.import_archive_with(
+                std::io::BufReader::new(file),
+                ImportOptions {
+                    keep_trash: false,
+                    keep_folder: true,
+                },
+            )
+        })();
+        let _ = fs::remove_file(&spool);
+        let report = res?;
+        let copy = report.notebook.id;
+        if copy == id {
+            return Err(StorageError::Conflict(
+                "the notebook could not be copied".into(),
+            ));
+        }
+        // thumbnails are derived data and not in archives; best effort only
+        let (from, to) = (
+            self.nb_dir(id).join("thumbs"),
+            self.nb_dir(copy).join("thumbs"),
+        );
+        if let Ok(entries) = fs::read_dir(&from) {
+            let _ = fs::create_dir_all(&to);
+            for e in entries.flatten() {
+                let _ = fs::copy(e.path(), to.join(e.file_name()));
+            }
+        }
+        self.rename_notebook(copy, &title)
+    }
+
     /// Runs every import check on an archive and describes it. The library
     /// is not changed. Use it for a restore preview or to confirm that a
     /// finished export can be read back.

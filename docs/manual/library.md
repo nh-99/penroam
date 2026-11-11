@@ -11,10 +11,13 @@ its cover colour and a preview of its first page, newest first.
 
 * **Create** a notebook with **New notebook**. See [Getting started](getting-started.md#your-first-notebook).
 * **Open** a notebook by clicking its card.
-* **Rename, recolour, export, print or delete** a notebook from the **⋮** menu on its card:
-  **Rename**, **Change cover colour**, **Export .penroam…**, **Export annotated PDF…**,
-  **Print…** and **Move to trash**. You can also rename an open notebook by clicking its title in
-  the top bar.
+* **Rename, duplicate, recolour, export, print or delete** a notebook from the **⋮** menu on its
+  card: **Rename**, **Duplicate**, **Change cover colour**, **Export .penroam…**,
+  **Export annotated PDF…**, **Print…** and **Move to trash**. You can also rename an open
+  notebook by clicking its title in the top bar.
+* **Duplicate** makes a copy called "*title* (copy)" in the same folder, or the same
+  [vault](sync-and-vaults.md#vaults). It has every page and attachment, but not the original's
+  trash or [version history](backups-and-history.md#version-history).
 
 On a phone, the folder, import and trash buttons are in the **⋮** menu at the top of the library.
 

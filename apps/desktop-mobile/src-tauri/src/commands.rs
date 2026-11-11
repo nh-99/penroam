@@ -211,6 +211,29 @@ pub fn move_notebook_to_vault(state: State<'_, AppState>, id: Uuid, vault: Strin
     Ok(copy)
 }
 
+/// Makes a copy of a notebook, titled "`<title>` (copy)", in the same folder. The copy of a vault
+/// notebook stays in that vault.
+#[tauri::command(async)]
+pub fn duplicate_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
+    let copy = {
+        let mut lib = lib!(state);
+        let root = lib.root().to_path_buf();
+        let vault = crate::sync::vault_of(&root, id)?;
+        if let Some(v) = &vault {
+            crate::sync::require_open_vault(&root, v)?;
+        }
+        let copy = lib.duplicate_notebook(id)?;
+        // assigned before the library lock is released, so the main engine never uploads it
+        if let Some(v) = &vault {
+            crate::sync::assign_to_vault(&root, copy.id, v)?;
+        }
+        copy
+    };
+    state.sync.nudge();
+    state.search.notebook_changed(copy.id);
+    Ok(copy)
+}
+
 /// Renames a notebook.
 #[tauri::command(async)]
 pub fn rename_notebook(state: State<'_, AppState>, id: Uuid, title: String) -> R<Notebook> {
@@ -1310,10 +1333,13 @@ pub fn export_annotated_pdf(
 #[serde(rename_all = "camelCase")]
 pub enum PrintStatus {
     /// The document reached the print system.
+    #[cfg(any(target_os = "linux", mobile))]
     Sent,
     /// The user closed the print dialog.
+    #[cfg(any(target_os = "linux", mobile))]
     Cancelled,
     /// The system print UI took over and does not report back.
+    #[cfg(any(target_os = "linux", mobile))]
     SystemDialog,
     /// The PDF opened in the default viewer, to be printed from there.
     #[cfg(not(any(target_os = "linux", mobile)))]

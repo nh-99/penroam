@@ -95,6 +95,7 @@ export const api = {
   setInfiniteCanvas: (id: string, infinite: boolean, collapse = false) => call<Notebook>("set_infinite_canvas", { id, infinite, collapse }),
   moveNotebookToVault: (id: string, vault: string) => call<Notebook>("move_notebook_to_vault", { id, vault }),
   renameNotebook: (id: string, title: string) => call<Notebook>("rename_notebook", { id, title }),
+  duplicateNotebook: (id: string) => call<Notebook>("duplicate_notebook", { id }),
   listFolders: () => call<Folder[]>("list_folders"),
   createFolder: (name: string, parent: string | null) => call<Folder>("create_folder", { name, parent }),
   renameFolder: (id: string, name: string) => call<void>("rename_folder", { id, name }),

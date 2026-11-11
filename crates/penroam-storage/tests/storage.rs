@@ -752,3 +752,53 @@ fn collapsing_pages_stacks_them_on_the_first_page() {
     lib.restore_page(nb.id, pages[0].id).unwrap();
     assert_eq!(lib.load_page(nb.id, pages[0].id).unwrap().elements.len(), 1);
 }
+
+#[test]
+fn duplicate_copies_live_pages_into_the_same_folder() {
+    let (d, mut lib) = new_lib();
+    let folder = lib.create_folder("Courses", None).unwrap();
+    let (nb, p0) = lib
+        .create_notebook("Physics", PageDefaults::default(), Some("#3366ff".into()))
+        .unwrap();
+    lib.apply_page_operations(nb.id, p0.id, &add(p0.revision, vec![text(1, "F = ma")]))
+        .unwrap();
+    let (_, p1) = lib.create_page(nb.id, None, None, None).unwrap();
+    lib.delete_page(nb.id, p1.id).unwrap();
+    lib.file_notebook(nb.id, Some(folder.id)).unwrap();
+
+    let copy = lib.duplicate_notebook(nb.id).unwrap();
+    assert_ne!(copy.id, nb.id);
+    assert_eq!(copy.title, "Physics (copy)");
+    assert_eq!(copy.cover, "#3366ff");
+    assert_eq!(copy.folder, Some(folder.id));
+    assert_eq!(copy.page_order, vec![p0.id]);
+    assert!(
+        copy.trashed_pages.is_empty(),
+        "the copy starts with an empty trash"
+    );
+    let page = lib.load_page(copy.id, p0.id).unwrap();
+    assert!(matches!(&page.elements[..], [Element::Text(t)] if t.text == "F = ma"));
+
+    // the copy is independent of the original
+    let el = page.elements[0].id();
+    lib.apply_page_operations(copy.id, p0.id, &remove(page.revision, vec![el]))
+        .unwrap();
+    assert_eq!(lib.load_page(nb.id, p0.id).unwrap().elements.len(), 1);
+    assert_eq!(lib.notebook(nb.id).unwrap().title, "Physics");
+
+    // and survives a reopen
+    drop(lib);
+    let mut lib = Library::open(d.path().join("library")).unwrap();
+    assert_eq!(lib.notebook(copy.id).unwrap().title, "Physics (copy)");
+    assert_eq!(lib.list_notebooks().len(), 2);
+
+    lib.delete_notebook(nb.id).unwrap();
+    assert!(
+        matches!(
+            lib.duplicate_notebook(nb.id),
+            Err(StorageError::Conflict(_))
+        ),
+        "a notebook in the trash can't be duplicated"
+    );
+    assert!(fs::read_dir(lib.staging_dir()).map_or(true, |mut d| d.next().is_none()));
+}

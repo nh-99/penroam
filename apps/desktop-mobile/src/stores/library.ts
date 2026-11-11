@@ -306,6 +306,20 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
+  /** Makes a copy of a notebook next to it, titled "<title> (copy)". */
+  async function duplicate(id: string) {
+    busy.value = "Duplicating…";
+    try {
+      await api.duplicateNotebook(id);
+      await refresh();
+      ui.toast("info", "Notebook duplicated.");
+    } catch (e) {
+      fail(e, "Could not duplicate the notebook");
+    } finally {
+      busy.value = null;
+    }
+  }
+
   /** Moves a notebook into a vault; the copy has a new id. */
   async function moveToVault(id: string, vault: string) {
     try {
@@ -640,6 +654,7 @@ export const useLibrary = defineStore("library", () => {
     refresh,
     createNotebook,
     moveToVault,
+    duplicate,
     open,
     close,
     rename,
