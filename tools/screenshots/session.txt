@@ -8,7 +8,7 @@ move 2472 64
 down 1
 up 1
 sleep 1200
-move 1176 603
+move 1176 766
 down 1
 up 1
 sleep 600
@@ -18,6 +18,14 @@ up 1
 sleep 800
 
 # open every notebook once so the library shows page thumbnails
+move 2320 420
+down 1
+up 1
+sleep 5000
+move 52 48
+down 1
+up 1
+sleep 2000
 move 1904 420
 down 1
 up 1
@@ -68,7 +76,124 @@ up 1
 sleep 4000
 move 2300 1650
 sleep 700
-shot library
+shot library 0 0 2560 896
+
+# search: one query that finds handwriting, typed text and PDF text
+key C-k
+sleep 1500
+type questions
+sleep 4000
+move 2300 1650
+sleep 700
+shot search
+key Escape
+sleep 1000
+
+# the lab write-up (Markdown, a formula and a spreadsheet table) on page 4 of Physics
+move 240 420
+down 1
+up 1
+sleep 5000
+move 132 1136
+down 1
+up 1
+sleep 2500
+key C-minus
+sleep 2500
+move 2300 1650
+sleep 700
+shot spreadsheet
+move 52 48
+down 1
+up 1
+sleep 3000
+
+# the infinite canvas notebook opens fitted to everything on it
+move 2320 420
+down 1
+up 1
+sleep 6000
+move 2300 1650
+sleep 700
+shot infinite-canvas
+move 52 48
+down 1
+up 1
+sleep 3000
+
+# manual: the guided tour, started from Settings -> General (the demo library isn't empty,
+# so it doesn't start by itself); the second step points at New notebook
+move 2472 64
+down 1
+up 1
+sleep 1200
+move 1504 534
+down 1
+up 1
+sleep 1500
+key Right
+sleep 1200
+move 2300 1650
+sleep 500
+shot tour-library
+key Escape
+sleep 800
+
+# manual: the New notebook dialog
+move 1976 64
+down 1
+up 1
+sleep 1500
+move 2300 1650
+sleep 500
+shot new-notebook 820 340 920 1120
+key Escape
+sleep 800
+
+# manual: Settings on the General tab
+move 2472 64
+down 1
+up 1
+sleep 1500
+shot settings 820 196 920 1408
+key Escape
+sleep 800
+
+# manual: the editor tour's first step, and version history, in Physics
+move 240 420
+down 1
+up 1
+sleep 5000
+move 2508 48
+down 1
+up 1
+sleep 1200
+move 1504 534
+down 1
+up 1
+sleep 1500
+move 2300 1650
+sleep 500
+shot tour-editor
+key Escape
+sleep 800
+move 2424 48
+down 1
+up 1
+sleep 2000
+move 820 780
+down 1
+up 1
+sleep 2000
+move 2300 1650
+sleep 500
+shot history 596 252 1368 1296
+key Escape
+sleep 800
+move 52 48
+down 1
+up 1
+sleep 3000
 
 # Trip notebook in the dark theme, then the ePaper theme
 move 1072 420
@@ -79,7 +204,7 @@ move 2506 48
 down 1
 up 1
 sleep 1200
-move 1382 603
+move 1382 766
 down 1
 up 1
 sleep 600
@@ -94,7 +219,7 @@ move 2506 48
 down 1
 up 1
 sleep 1200
-move 1590 603
+move 1590 766
 down 1
 up 1
 sleep 600

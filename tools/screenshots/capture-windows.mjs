@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Regenerates the README screenshots in docs/images/ on Windows.
+// Regenerates the README and user manual screenshots in docs/images/ on Windows.
 //
 // The Windows counterpart of capture.sh. It builds the same demo library, opens it in the
 // release app and replays the same session.txt. Instead of an X display and XTest, it drives
@@ -38,7 +38,6 @@ const SESSION_SCALE = 2;
 /** 1280 × 1.25 = the 1600 px the README images are stored at. */
 const SHOT_SCALE = 1.25;
 const SETTLE_MS = Number(process.env.E2E_SETTLE ?? 6) * 1000;
-const SHOTS = ["editor", "library", "pdf-annotation", "dark-theme", "epaper-theme"];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -189,10 +188,10 @@ class Driver {
     }
   }
 
-  async shot(name) {
-    const clip = name === "library"
-      ? // the library only fills its top rows (capture.sh crops to 1600x560)
-        { x: 0, y: 0, width: VIEW.width, height: 560 / SHOT_SCALE, scale: 1 }
+  /** `shot NAME [X Y W H]`: the whole window, or that area in session coordinates. */
+  async shot(name, area) {
+    const clip = area
+      ? { x: area[0] / SESSION_SCALE, y: area[1] / SESSION_SCALE, width: area[2] / SESSION_SCALE, height: area[3] / SESSION_SCALE, scale: 1 }
       : { x: 0, y: 0, width: VIEW.width, height: VIEW.height, scale: 1 };
     const { data } = await this.dt.send("Page.captureScreenshot", { format: "png", clip });
     writeFileSync(join(this.shots, `${name}.png`), Buffer.from(data, "base64"));
@@ -221,7 +220,7 @@ class Driver {
       case "key": return this.key(a[0]);
       case "type": return this.type(line.slice(5));
       case "sleep": return sleep(n[0]);
-      case "shot": return this.shot(a[0]);
+      case "shot": return this.shot(a[0], a.length >= 5 ? n.slice(1, 5) : null);
       case "quit": return this.app.quit();
       default: throw new Error(`session command not supported on Windows: ${line}`);
     }
@@ -292,11 +291,13 @@ async function main() {
     await dt.send("Emulation.setDeviceMetricsOverride", { ...VIEW, deviceScaleFactor: SHOT_SCALE, mobile: false, screenWidth: VIEW.width, screenHeight: VIEW.height });
     await sleep(SETTLE_MS);
 
+    const session = readFileSync(SESSION, "utf8").split(/\r?\n/).map((l) => l.trim());
+    // every image the session takes, in order
+    const SHOTS = session.filter((l) => l.startsWith("shot ")).map((l) => l.split(/\s+/)[1]);
     const shots = join(work, "shots");
     mkdirSync(shots);
     const drive = new Driver(dt, app, shots);
-    for (const raw of readFileSync(SESSION, "utf8").split(/\r?\n/)) {
-      const line = raw.trim();
+    for (const line of session) {
       if (line && !line.startsWith("#")) await drive.line(line);
     }
     // all or nothing, so a failed run never leaves the README with a mix of old and new images

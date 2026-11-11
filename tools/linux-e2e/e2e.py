@@ -7,7 +7,7 @@ screenshots. Coordinates in commands are relative to the window content.
 
 Script lines: any xdrive command (move/down/up/drag/key/type/sleep) with
 window-relative coordinates, plus:
-    shot NAME        save <outdir>/NAME.png
+    shot NAME [X Y W H]  save <outdir>/NAME.png, optionally only that window-relative area
     quit             close the window (exercises flush-on-close)
     kill             SIGKILL the app (crash simulation)
     start            (re)launch the app on the same library
@@ -49,8 +49,9 @@ class App:
                 out.append(c)
         subprocess.run([XDRIVE], input="\n".join(out) + "\n", text=True, check=True)
 
-    def shot(self, name):
-        subprocess.run(["import", "-window", self.win, os.path.join(self.outdir, name + ".png")], check=True)
+    def shot(self, name, area=None):
+        crop = ["-crop", "{2}x{3}+{0}+{1}".format(*area), "+repage"] if area else []
+        subprocess.run(["import", "-window", self.win, *crop, os.path.join(self.outdir, name + ".png")], check=True)
 
     def quit(self):
         """Polite close (WM_DELETE_WINDOW): the app flushes, then exits."""
@@ -79,7 +80,8 @@ def main():
                 app.drive(batch)
                 batch = []
             if word == "shot":
-                app.shot(line.split()[1])
+                p = line.split()
+                app.shot(p[1], [int(v) for v in p[2:6]] if len(p) >= 6 else None)
             elif word == "kill":
                 app.kill()
             elif word == "quit":

@@ -1,6 +1,7 @@
 //! Builds a demo library for the README screenshots: handwriting (drawn
 //! from the Hershey script stroke font with pressure and jitter), typed text,
-//! highlights, sketches and an annotated PDF.
+//! highlights, sketches, an annotated PDF, a lab write-up with a formula and a
+//! spreadsheet table, and an infinite canvas.
 //!
 //! ```sh
 //! python3 tools/screenshots/make_pdf.py /tmp/reading.pdf
@@ -482,6 +483,142 @@ fn physics(lib: &mut Library, pen: &mut Pen) {
     );
     e.extend(pen.write("f = mu N", 86.0, ruled(4), 6.0, INK, 2.0).0);
     add(lib, nb, p3.id, e);
+
+    // page 4: a lab write-up with a heading, a display formula and a table
+    // that works as a spreadsheet, next to a hand-drawn pendulum
+    let (_, p4) = lib.create_page(nb, None, None, None).expect("page");
+    let mut e = Vec::new();
+    e.extend(pen.write("Pendulum lab", 86.0, ruled(1), 8.5, BLUE, 2.2).0);
+    let mut lab = pen.text(
+        86.0,
+        72.0 + 24.0 * 2.0,
+        300.0,
+        312.0,
+        "## Measuring g with a pendulum\n\n\
+         $$g = \\frac{4\\pi^2 L}{T^2}$$\n\n\
+         | L (m) | T (s) | g (m/s²) | Done |\n\
+         |---:|---:|---:|:---:|\n\
+         | 0.25 | 1.00 | =ROUND(39.478*A2/B2^2, 2) | [x] |\n\
+         | 0.50 | 1.42 | =ROUND(39.478*A3/B3^2, 2) | [x] |\n\
+         | 0.75 | 1.74 | =ROUND(39.478*A4/B4^2, 2) | [x] |\n\
+         | 1.00 | 2.01 | =ROUND(39.478*A5/B5^2, 2) | [ ] |\n\
+         | **Mean** | | =ROUND(AVERAGE(C2:C5), 2) | |\n\n\
+         - [x] Time 10 swings, divide by 10\n\
+         - [ ] Repeat with a heavier bob",
+        12.0,
+        INK,
+    );
+    if let Element::Text(t) = &mut lab {
+        t.row_pitch = Some(24.0);
+    }
+    e.push(lab);
+    // the pendulum beside the table: a support, the string at an angle, the
+    // bob and the arc it swings along
+    let (sx, sy) = (460.0, ruled(8));
+    e.push(pen.line(&[(sx - 50.0, sy), (sx + 50.0, sy)], INK, 2.2));
+    for i in 0..5 {
+        let x = sx - 44.0 + i as f64 * 20.0;
+        e.push(pen.line(&[(x, sy), (x + 9.0, sy - 9.0)], INK, 1.0));
+    }
+    let (bx, by) = (sx + 45.0, sy + 133.0);
+    e.push(pen.line(&[(sx, sy), (bx, by)], INK, 1.6));
+    e.push(pen.ellipse(bx + 4.0, by + 11.0, 11.0, 11.0, ORANGE, 2.2));
+    e.push(pen.line(&[(sx, sy), (sx, sy + 150.0)], "#9ca3af", 1.0));
+    let arc: Vec<(f64, f64)> = (0..=24)
+        .map(|i| {
+            let a = -0.45 + 0.9 * i as f64 / 24.0;
+            (sx + 160.0 * a.sin(), sy + 160.0 * a.cos())
+        })
+        .collect();
+    e.push(pen.line(&arc, PURPLE, 1.4));
+    e.extend(pen.write("L", sx + 28.0, sy + 72.0, 6.0, INK, 1.8).0);
+    e.extend(
+        pen.write("swing", sx + 62.0, sy + 172.0, 5.5, PURPLE, 1.8)
+            .0,
+    );
+    e.extend(
+        pen.write("close to 9.81!", 262.0, ruled(13), 6.0, GREEN, 2.0)
+            .0,
+    );
+    add(lib, nb, p4.id, e);
+}
+
+/// An infinite canvas with a mind map that spreads well beyond one sheet.
+fn ideas(lib: &mut Library, pen: &mut Pen) {
+    let defaults = PageDefaults {
+        paper: Paper::Letter,
+        template: Template {
+            kind: TemplateKind::Dotted,
+            spacing: 20.0,
+        },
+    };
+    let (nb, p) = lib
+        .create_notebook("Science fair ideas", defaults, Some("#2f6f73".into()))
+        .expect("notebook");
+    lib.set_infinite_canvas(nb.id, true).expect("canvas");
+    let mut e = Vec::new();
+    let (cx, cy) = (520.0, 420.0);
+    e.push(pen.ellipse(cx, cy, 120.0, 52.0, BLUE, 2.6));
+    e.extend(
+        pen.write("Science fair", cx - 84.0, cy + 8.0, 9.0, BLUE, 2.4)
+            .0,
+    );
+    let branches: [(f64, f64, &str, &str); 5] = [
+        (-380.0, -230.0, "solar oven", ORANGE),
+        (360.0, -250.0, "water filter", BLUE),
+        (440.0, 120.0, "bridge loads", RED),
+        (-60.0, 300.0, "plant growth + light", GREEN),
+        (-460.0, 140.0, "paper planes", PURPLE),
+    ];
+    for (dx, dy, label, color) in branches {
+        let (x, y) = (cx + dx, cy + dy);
+        let w = label.len() as f64 * 8.0 + 40.0;
+        // connect the edge of the centre bubble to the branch
+        let len = (dx * dx + dy * dy).sqrt();
+        e.push(pen.line(
+            &[
+                (cx + dx / len * 120.0, cy + dy / len * 52.0),
+                (x - dx / len * w * 0.55, y - dy / len * 26.0),
+            ],
+            INK,
+            1.6,
+        ));
+        e.push(pen.ellipse(x, y, w * 0.58, 30.0, color, 2.2));
+        e.extend(pen.write(label, x - w * 0.4, y + 5.0, 6.5, color, 2.2).0);
+    }
+    e.push(pen.text(
+        cx + 270.0,
+        cy - 180.0,
+        230.0,
+        110.0,
+        "**Water filter**\n- sand, gravel, charcoal\n- test cloudiness before and after\n- *cheap to build*",
+        12.0,
+        INK,
+    ));
+    e.push(pen.text(
+        cx - 560.0,
+        cy - 150.0,
+        220.0,
+        90.0,
+        "**Solar oven**\nPizza box, foil and cling film. Measure the inside temperature every 5 min.",
+        12.0,
+        INK,
+    ));
+    e.extend(
+        pen.write("favourite!", cx + 330.0, cy - 300.0, 6.0, RED, 2.0)
+            .0,
+    );
+    e.push(pen.highlight(cx + 326.0, cx + 400.0, cy - 304.0, YELLOW, 14.0));
+    e.extend(
+        pen.write("due Dec 12", cx - 100.0, cy + 420.0, 7.0, ORANGE, 2.2)
+            .0,
+    );
+    e.push(pen.line(
+        &[(cx - 104.0, cy + 428.0), (cx + 30.0, cy + 426.0)],
+        ORANGE,
+        1.6,
+    ));
+    add(lib, nb.id, p.id, e);
 }
 
 fn trip(lib: &mut Library, pen: &mut Pen) {
@@ -808,7 +945,9 @@ fn main() {
         z: 0,
         ids: 0xdeed_0000_0000_0000_0000_0000_0000_0000,
     };
-    // created oldest first: the library lists the most recent first
+    // created oldest first: the library lists the most recent first, so the
+    // canvas notebook sits after the five that the screenshot session opens
+    ideas(&mut lib, &mut pen);
     meeting(&mut lib, &mut pen);
     sketchbook(&mut lib, &mut pen);
     trip(&mut lib, &mut pen);
