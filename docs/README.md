@@ -109,4 +109,5 @@ User-facing documentation also lives here, and changes with the app:
   [policies/accessibility.md](policies/accessibility.md).
 
 The screenshots in the README and the manual are generated: see
-[README and manual screenshots](development.md#readme-and-manual-screenshots).
+[README and manual screenshots](development.md#readme-and-manual-screenshots). So are the Google
+Play store screenshots: see [Google Play screenshots](development.md#google-play-screenshots).

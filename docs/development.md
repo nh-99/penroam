@@ -351,6 +351,43 @@ it removes afterwards. Images are copied into `docs/images/` only once every sho
 needs Node 22 or later, Python 3 and the WebView2 runtime. Chromium draws text a little
 differently from WebKitGTK, so images from the two scripts aren't pixel-identical.
 
+## Google Play screenshots
+
+`node tools/screenshots/capture-android.mjs` makes the store listing's screenshots for a phone, a
+7-inch tablet and a 10-inch tablet. Name devices to capture only some of them (`phone`,
+`tablet7`, `tablet10`), and add `--show` to watch the emulators. For each device the script:
+
+1. boots an emulator made for the job (`penroam-shots-phone`, `-tablet7`, `-tablet10`, created
+   on first use from `system-images;android-36;google_apis;x86_64`, or `arm64-v8a` on ARM hosts)
+   with its data wiped, so every run starts from a fresh install;
+2. turns animations and rotation off, and puts the status bar in SystemUI demo mode (fixed
+   clock, full battery and signal, no notifications);
+3. installs a release APK built with `--features tauri/devtools` and copies the demo library from
+   the steps above into the app's data folder (as root, which Google APIs images allow and Play
+   Store images don't);
+4. drives the app over the Chrome DevTools protocol. Unlike `session.txt` it finds controls by
+   their accessible names (`Open Physics: mechanics`, `Next page`, `Search notebooks`) and waits
+   for the page to settle, so one walkthrough works on every screen size. If a control is renamed,
+   the run stops with its selector.
+
+| Device | Display | Layout | Folder |
+| --- | --- | --- | --- |
+| `phone` | 1080×1920, 420 dpi | 411×731 dp, portrait | `phoneScreenshots/` |
+| `tablet7` | 1080×1920, 320 dpi | 600×1067 dp, portrait | `sevenInchScreenshots/` |
+| `tablet10` | 2560×1440, 280 dpi | 1463×823 dp, landscape | `tenInchScreenshots/` |
+
+Every display is exactly 9:16 or 16:9, as Play asks, and each capture is checked against it.
+The shots go to `target/play-screenshots/` (or `PLAY_SHOTS_OUT`), in the folder names
+`fastlane supply` reads. A device's folder is replaced only when all of its shots were taken.
+The walkthrough is the `scenes` function in the script; the file names carry the store order.
+
+`SKIP_BUILD=1` reuses the last APK, and `PENROAM_APK` installs a given one, which must have the
+inspector compiled in. That APK is signed with the debug key: don't upload it. The search shot's
+handwriting result needs the handwriting model, which the emulator downloads on first start, so
+it needs a network connection. The script needs the Android SDK (`ANDROID_HOME`) with the
+emulator, command-line tools and the system image, hardware acceleration for the emulator, Node
+22 or later, Python 3 and the Android build toolchain.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every branch push. Nearly all of its time goes on compiling, so

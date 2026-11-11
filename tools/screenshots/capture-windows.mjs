@@ -25,6 +25,7 @@ import { copyFileSync, existsSync, mkdtempSync, mkdirSync, openSync, readdirSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DevTools } from "./devtools.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = join(ROOT, "docs/images");
@@ -44,56 +45,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { stdio: "inherit", cwd: ROOT, shell: process.platform === "win32", ...opts });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed (${r.status ?? r.error})`);
-}
-
-// --------------------------------------------------------------- DevTools --
-
-/** A minimal Chrome DevTools protocol client over the built-in WebSocket. */
-class DevTools {
-  constructor(ws) {
-    this.ws = ws;
-    this.next = 0;
-    this.waiting = new Map();
-    ws.addEventListener("message", (m) => {
-      const msg = JSON.parse(m.data);
-      const w = this.waiting.get(msg.id);
-      if (!w) return;
-      this.waiting.delete(msg.id);
-      if (msg.error) w.reject(new Error(`${w.method}: ${msg.error.message}`));
-      else w.resolve(msg.result);
-    });
-  }
-
-  static async connect(port) {
-    for (let i = 0; i < 150; i++) {
-      try {
-        const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-        const page = targets.find((t) => t.type === "page" && !t.url.startsWith("devtools:"));
-        if (page) {
-          const ws = new WebSocket(page.webSocketDebuggerUrl);
-          await new Promise((res, rej) => {
-            ws.addEventListener("open", res, { once: true });
-            ws.addEventListener("error", () => rej(new Error("could not connect to the webview")), { once: true });
-          });
-          return new DevTools(ws);
-        }
-      } catch {
-        /* not listening yet */
-      }
-      await sleep(200);
-    }
-    throw new Error(`the app's webview did not open a DevTools port on ${port}`);
-  }
-
-  send(method, params = {}) {
-    const id = ++this.next;
-    this.ws.send(JSON.stringify({ id, method, params }));
-    return new Promise((resolve, reject) => this.waiting.set(id, { resolve, reject, method }));
-  }
-
-  close() {
-    this.ws.close();
-  }
 }
 
 // ------------------------------------------------------------------ input --
