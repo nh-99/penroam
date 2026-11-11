@@ -3,6 +3,13 @@
 User-visible changes for each release. The release workflow copies a version's section into its
 release notes and stops if the version has no entry.
 
+## 0.1.0-beta.8
+
+* Fixed: in the dark theme, text you were typing or editing showed black on the black paper.
+  It now shows in the same colours as the rest of the page.
+* Fixed: in the dark theme, selected text and a table's selected cells were tinted almost black.
+  They now get a lighter tint that stands out on the black paper.
+
 ## 0.1.0-beta.7
 
 * New: infinite canvases. A canvas is a page with no edges: write, type and pan in any direction

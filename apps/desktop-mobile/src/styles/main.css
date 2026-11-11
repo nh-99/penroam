@@ -237,6 +237,17 @@ pre,
 :root[data-theme="dark"] .penroam-strip-placeholder {
   filter: invert(1) hue-rotate(180deg);
 }
+/* Selections over the black paper: the faint tints made for white paper would be near black
+   there, so selected text and a table's selected cells get a lighter, stronger tint. */
+:root[data-theme="dark"] .penroam-textedit ::selection {
+  background: rgba(125, 164, 236, 0.45);
+}
+:root[data-theme="dark"] .cm-sheet-cell.in-range {
+  background: color-mix(in srgb, var(--pr-brand) 32%, transparent);
+}
+:root[data-theme="dark"] .cm-sheet-cell.is-active {
+  background: color-mix(in srgb, var(--pr-brand) 20%, transparent);
+}
 .penroam-selection {
   border: calc(1.5px * var(--inv, 1)) dashed #2563eb;
   border-radius: calc(3px * var(--inv, 1));

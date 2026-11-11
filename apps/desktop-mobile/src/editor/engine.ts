@@ -639,6 +639,8 @@ export class InkEditor {
     this.settings.dark = dark;
     this.renderer.opts.dark = dark;
     this.redrawLook();
+    // a text box being edited is drawn by the browser, in the shown colour
+    this.layoutTextEditor();
     // the native layer draws ink in the colours it was given
     if (this.native && this.nativeMounted) {
       if (this.native.ownsCommittedInk) this.nativeCall((n) => n.loadCommittedInk(this.inkElements()));
@@ -2301,7 +2303,8 @@ export class InkEditor {
       // as on the canvas: the layout has no kerning or ligatures for the handwritten font
       fontKerning: font === "handwritten" ? "none" : "",
       fontVariantLigatures: font === "handwritten" ? "none" : "",
-      color: d.color,
+      // the box's ink as the page shows it, so dark-theme text isn't black on black paper
+      color: shownColor(d.color, this.settings.dark),
       textAlign: d.align,
     });
     const h = Math.max(this.textEditor?.height || contentHeight(d.text, fs, d.width, lh), lh);
