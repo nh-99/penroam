@@ -28,7 +28,7 @@
 use crate::query::{self, ParsedQuery};
 use crate::recognize::{RecognitionCandidate, Recognizer, RecognizerInfo};
 use crate::segment::{self, Rect};
-use penroam_core::{Element, Notebook, Page};
+use penroam_core::{Element, Notebook, Page, PdfBackgroundRef};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -285,6 +285,42 @@ CREATE TABLE corrections (
   PRIMARY KEY (notebook, page, region)
 );
 "#;
+
+/// The PDF pages a page shows, with an entry key for each and the area it
+/// covers: its background (the whole page), then the PDF page elements of an
+/// infinite canvas. Keys start `pdf:<asset>:<page index>`, which scrubbing
+/// relies on; an element's id follows, since one PDF page can be placed twice.
+fn pdf_sources(page: &Page) -> Vec<(String, &PdfBackgroundRef, Rect)> {
+    let mut out = Vec::new();
+    if let Some(bg) = &page.background {
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: page.size.width,
+            h: page.size.height,
+        };
+        out.push((
+            format!("pdf:{}:{}", bg.asset_hash, bg.page_index),
+            bg,
+            bounds,
+        ));
+    }
+    for e in &page.elements {
+        if let Element::Image(i) = e {
+            if let Some(bg) = &i.pdf_page {
+                let bounds = Rect {
+                    x: i.x,
+                    y: i.y,
+                    w: i.width,
+                    h: i.height,
+                };
+                let key = format!("pdf:{}:{}:{}", bg.asset_hash, bg.page_index, i.id);
+                out.push((key, bg, bounds));
+            }
+        }
+    }
+    out
+}
 
 impl SearchIndex {
     /// Opens the index at `path` for writing, creating it if needed. `library_id` names the
@@ -714,10 +750,13 @@ impl SearchIndex {
                 }
             }
         }
-        let pdf = match &page.background {
-            Some(bg) => self.pdf_page_text(&bg.asset_hash, bg.page_index)?,
-            None => None,
-        };
+        // the page's PDF background, and PDF pages placed on it (infinite canvases)
+        let mut pdf = Vec::new();
+        for (key, bg, bounds) in pdf_sources(page) {
+            if let Some(text) = self.pdf_page_text(&bg.asset_hash, bg.page_index)? {
+                pdf.push((key, text, bounds));
+            }
+        }
         let corrections = self.corrections_for(&nb_s, &page_s)?;
 
         let tx = self.conn.transaction()?;
@@ -793,13 +832,12 @@ impl SearchIndex {
                 serde_json::to_string(words).expect("words serialize"),
             ])?;
         }
-        if let (Some(text), Some(bg)) = (pdf, &page.background) {
-            let size = page.size;
+        for (key, text, bounds) in pdf {
             ins.execute(params![
                 nb_s,
                 page_s,
                 EntryKind::Pdf.as_str(),
-                format!("pdf:{}:{}", bg.asset_hash, bg.page_index),
+                key,
                 Option::<String>::None,
                 "[]",
                 text,
@@ -808,12 +846,7 @@ impl SearchIndex {
                 Option::<f64>::None,
                 Option::<String>::None,
                 rev,
-                rect_json(&Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    w: size.width,
-                    h: size.height
-                }),
+                rect_json(&bounds),
                 Option::<String>::None,
             ])?;
         }

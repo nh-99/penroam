@@ -786,15 +786,26 @@ impl Worker {
             let nb = lib.notebook(nb_id).ok()?.clone();
             let idx = nb.page_order.iter().position(|p| *p == page_id)?;
             let page = lib.read_page_detached(nb_id, page_id).ok()?;
-            let pdf = page
+            // PDFs whose text isn't cached yet: the background's, and those of PDF pages
+            // placed on an infinite canvas
+            let mut hashes: Vec<&str> = page
                 .background
-                .as_ref()
-                .filter(|bg| !has_pdf(ix, &bg.asset_hash))
-                .and_then(|bg| {
-                    lib.read_asset(nb_id, &bg.asset_hash)
-                        .ok()
-                        .map(|b| (bg.asset_hash.clone(), b))
-                });
+                .iter()
+                .map(|bg| bg.asset_hash.as_str())
+                .collect();
+            hashes.extend(page.elements.iter().filter_map(|e| match e {
+                penroam_core::Element::Image(i) if i.pdf_page.is_some() => {
+                    Some(i.asset_hash.as_str())
+                }
+                _ => None,
+            }));
+            hashes.sort_unstable();
+            hashes.dedup();
+            let pdf: Vec<(String, Vec<u8>)> = hashes
+                .into_iter()
+                .filter(|h| !has_pdf(ix, h))
+                .filter_map(|h| lib.read_asset(nb_id, h).ok().map(|b| (h.to_string(), b)))
+                .collect();
             Some((nb, idx as u32, page, pdf))
         });
         let Some(Some((nb, idx, page, pdf))) = got else {
@@ -806,7 +817,7 @@ impl Worker {
         let Some(ix) = self.indexes.get_mut(&owner) else {
             return;
         };
-        if let Some((hash, bytes)) = pdf {
+        for (hash, bytes) in pdf {
             let texts = penroam_pdf::page_texts(&bytes).unwrap_or_default();
             drop(bytes);
             if let Err(e) = ix.store_pdf(&hash, &texts) {

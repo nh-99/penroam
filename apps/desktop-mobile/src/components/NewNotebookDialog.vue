@@ -8,19 +8,21 @@ import type { TemplateKind } from "../generated/TemplateKind";
 import { useSettings } from "../stores/settings";
 import { useSync } from "../stores/sync";
 
-const emit = defineEmits<{ close: []; create: [title: string, paper: Paper, template: TemplateKind, vault?: string] }>();
+const emit = defineEmits<{ close: []; create: [title: string, paper: Paper, template: TemplateKind, vault: string | undefined, infiniteCanvas: boolean] }>();
 const settings = useSettings();
 const sync = useSync();
 const vault = ref("");
 const title = ref("");
 const paper = ref<Paper>(settings.s.paper === "a4" ? "a4" : "letter");
 const template = ref<TemplateKind>(settings.s.template);
+const infinite = ref(settings.s.infiniteCanvas);
 
 function submit() {
   const t = title.value.trim() || "Untitled notebook";
   settings.s.paper = paper.value;
   settings.s.template = template.value;
-  emit("create", t, paper.value, template.value, vault.value || undefined);
+  settings.s.infiniteCanvas = infinite.value;
+  emit("create", t, paper.value, template.value, vault.value || undefined, infinite.value);
 }
 </script>
 
@@ -45,6 +47,13 @@ function submit() {
         <legend class="mb-1.5 text-sm font-medium">Paper</legend>
         <TemplatePicker v-model="template" />
       </fieldset>
+      <label class="flex items-center justify-between gap-4 rounded-xl border border-line p-3 epaper:border-2">
+        <span>
+          <span class="block text-sm font-medium">Infinite canvas</span>
+          <span class="block text-xs text-muted">Pages have no edges: write in any direction and they grow with you. You can change this later.</span>
+        </span>
+        <input v-model="infinite" type="checkbox" class="h-5 w-5 shrink-0" />
+      </label>
       <label v-if="sync.openVaults.length" class="block">
         <span class="mb-1.5 block text-sm font-medium">Keep in</span>
         <select v-model="vault" class="h-11 w-full rounded-xl border border-line bg-surface px-3 text-base outline-none focus:border-brand epaper:border-2">

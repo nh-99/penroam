@@ -3,13 +3,21 @@
 //! [`crate::markdown`], which applies these wrapping rules to styled text.
 //!
 //! Widths come from `data/text-metrics.json` (the Liberation faces, metric-compatible
-//! with Helvetica and Courier), never from the platform's font rasteriser, so wrapping is
-//! identical on every OS and in exported PDFs. Golden: `tests/fixtures/text-layout-golden.json`.
+//! with Helvetica and Courier, and Excalifont for handwritten text), never from the
+//! platform's font rasteriser, so wrapping is identical on every OS and in exported PDFs.
+//! Golden: `tests/fixtures/text-layout-golden.json`.
+//!
+//! Excalifont has one face. Its bold and italic ([`Face::HandBold`] and friends) are
+//! drawn by thickening and slanting that face, the same way on screen and in PDFs, so
+//! they keep its widths exactly. [`Face::styled`] picks the face for one character: one
+//! the handwritten font has no glyph for is set in the formatted font instead, so the
+//! layout never measures a glyph that a renderer would take from some other font.
 //!
 //! Rules: `\n` forces a break; otherwise greedy wrapping at spaces; a word
 //! wider than the box is broken between characters; trailing spaces of a
 //! wrapped line do not count towards its width.
 
+use crate::model::TextFont;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -37,10 +45,19 @@ pub struct TextMetrics {
     widths: HashMap<String, f64>,
     /// Advances of the other faces (same shape as `widths`).
     faces: FaceWidths,
+    /// The handwritten font.
+    hand: HandMetrics,
     #[serde(skip)]
     by_char: HashMap<char, f64>,
     #[serde(skip)]
-    by_face: [HashMap<char, f64>; 4],
+    by_face: [HashMap<char, f64>; 5],
+}
+
+#[derive(Debug, Deserialize)]
+struct HandMetrics {
+    ascent: f64,
+    descent: f64,
+    widths: HashMap<String, f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,8 +69,9 @@ struct FaceWidths {
     mono: HashMap<String, f64>,
 }
 
-/// A bundled typeface. Each one has a standard PDF font with the same widths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// A bundled typeface. The formatted faces each have a standard PDF font with the
+/// same widths; the handwritten ones are embedded in PDFs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Face {
     /// Liberation Sans Regular / Helvetica.
@@ -66,7 +84,55 @@ pub enum Face {
     BoldItalic,
     /// Liberation Mono / Courier.
     Mono,
+    /// Excalifont.
+    Hand,
+    /// Excalifont, thickened.
+    HandBold,
+    /// Excalifont, slanted.
+    HandItalic,
+    /// Excalifont, thickened and slanted.
+    HandBoldItalic,
 }
+
+impl Face {
+    /// The face for character `c` of text in `font` with the given emphasis.
+    /// Code is always [`Face::Mono`]; handwritten text uses the formatted faces
+    /// for characters Excalifont doesn't have.
+    pub fn styled(font: TextFont, bold: bool, italic: bool, mono: bool, c: char) -> Face {
+        if mono {
+            return Face::Mono;
+        }
+        let m = metrics();
+        let hand = font == TextFont::Handwritten
+            && (m.by_face[4].contains_key(&c) || c == '\t' && m.by_face[4].contains_key(&' '));
+        match (hand, bold, italic) {
+            (false, false, false) => Face::Regular,
+            (false, true, false) => Face::Bold,
+            (false, false, true) => Face::Italic,
+            (false, true, true) => Face::BoldItalic,
+            (true, false, false) => Face::Hand,
+            (true, true, false) => Face::HandBold,
+            (true, false, true) => Face::HandItalic,
+            (true, true, true) => Face::HandBoldItalic,
+        }
+    }
+
+    /// Whether this is one of the handwritten faces.
+    pub fn is_hand(self) -> bool {
+        matches!(
+            self,
+            Face::Hand | Face::HandBold | Face::HandItalic | Face::HandBoldItalic
+        )
+    }
+}
+
+/// Horizontal shear of the slanted handwritten faces: x moves this far right
+/// per unit of height above the baseline.
+pub const HAND_SLANT: f64 = 0.2;
+
+/// Width of the outline stroke that thickens the bold handwritten faces, in em.
+/// Half of it lands outside the glyph.
+pub const HAND_BOLD_STROKE: f64 = 0.045;
 
 /// Size of code relative to the text around it.
 pub const MONO_SCALE: f64 = 0.9;
@@ -94,6 +160,7 @@ pub fn metrics() -> &'static TextMetrics {
             char_map(&m.faces.italic),
             char_map(&m.faces.bold_italic),
             char_map(&m.faces.mono),
+            char_map(&m.hand.widths),
         ];
         m
     })
@@ -115,6 +182,9 @@ impl TextMetrics {
             Face::Italic => &self.by_face[1],
             Face::BoldItalic => &self.by_face[2],
             Face::Mono => &self.by_face[3],
+            Face::Hand | Face::HandBold | Face::HandItalic | Face::HandBoldItalic => {
+                &self.by_face[4]
+            }
         };
         if c == '\t' {
             return self.advance_in(face, ' ') * 4.0;
@@ -124,6 +194,29 @@ impl TextMetrics {
     /// Whether the character has a metric (and a WinAnsi glyph in Helvetica).
     pub fn known(&self, c: char) -> bool {
         self.by_char.contains_key(&c)
+    }
+    /// Whether `face` has a glyph for the character. The formatted faces answer
+    /// as [`TextMetrics::known`]: the PDF's standard fonts share one character set.
+    pub fn known_in(&self, face: Face, c: char) -> bool {
+        if face.is_hand() {
+            self.by_face[4].contains_key(&c)
+        } else {
+            self.known(c)
+        }
+    }
+    /// Ascender height of `font`'s text faces, in font units.
+    pub fn ascent_of(&self, font: TextFont) -> f64 {
+        match font {
+            TextFont::Formatted => self.ascent,
+            TextFont::Handwritten => self.hand.ascent,
+        }
+    }
+    /// Descender depth of `font`'s text faces (negative), in font units.
+    pub fn descent_of(&self, font: TextFont) -> f64 {
+        match font {
+            TextFont::Formatted => self.descent,
+            TextFont::Handwritten => self.hand.descent,
+        }
     }
     /// Line height in points at `font_size`.
     pub fn line_height(&self, font_size: f64) -> f64 {

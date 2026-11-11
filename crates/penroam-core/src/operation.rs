@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 /// Newest [`DocumentOperation`] encoding and semantics this build can read.
 /// Independent of the file format and model schema versions.
-pub const OP_SCHEMA_VERSION: u16 = 3;
+pub const OP_SCHEMA_VERSION: u16 = 4;
 
 /// The schema an operation is written with: the oldest that means the same
 /// thing, so that a device on an older version only stops syncing once it
@@ -40,9 +40,12 @@ pub const OP_SCHEMA_VERSION: u16 = 3;
 /// this way it parks the operation and asks to be updated.
 ///
 /// Version 3 is library folders and filing a notebook in one.
+///
+/// Version 4 is switching a notebook to infinite canvases and back.
 pub fn op_schema_for(body: &DocumentOperation) -> u16 {
     use DocumentOperation::*;
     match body {
+        NotebookCanvasSet { .. } => 4,
         FolderCreated { .. }
         | FolderRenamed { .. }
         | FolderMoved { .. }
@@ -107,9 +110,9 @@ impl LocalOperation {
 pub mod groups {
     /// z, position/size (ink: the points).
     pub const PLACEMENT: u8 = 1;
-    /// text, asset, ink input metadata, unknown fields.
+    /// text, asset (and PDF page), ink input metadata, unknown fields.
     pub const CONTENT: u8 = 2;
-    /// colour, opacity, widths, tool, font size, alignment.
+    /// colour, opacity, widths, tool, font, font size, alignment.
     pub const STYLE: u8 = 4;
     /// Every group.
     pub const ALL: u8 = PLACEMENT | CONTENT | STYLE;
@@ -148,6 +151,15 @@ pub enum DocumentOperation {
         notebook_id: Uuid,
         /// Cover colour `#rrggbb`.
         cover: String,
+    },
+    /// Shows the notebook's pages as infinite canvases, or as sheets again
+    /// (see [`Notebook::infinite_canvas`]).
+    #[serde(rename_all = "camelCase")]
+    NotebookCanvasSet {
+        /// Target notebook.
+        notebook_id: Uuid,
+        /// Infinite canvases on or off.
+        infinite: bool,
     },
     /// Moves the notebook to the trash (tombstone; nothing is erased).
     #[serde(rename_all = "camelCase")]
@@ -325,6 +337,7 @@ impl DocumentOperation {
             | NotebookFiled { notebook_id, .. }
             | NotebookRenamed { notebook_id, .. }
             | NotebookCoverChanged { notebook_id, .. }
+            | NotebookCanvasSet { notebook_id, .. }
             | NotebookDeleted { notebook_id }
             | NotebookRestored { notebook_id }
             | NotebookPurged { notebook_id }
@@ -370,6 +383,7 @@ impl DocumentOperation {
             NotebookCreated { .. } => "notebookCreated",
             NotebookRenamed { .. } => "notebookRenamed",
             NotebookCoverChanged { .. } => "notebookCoverChanged",
+            NotebookCanvasSet { .. } => "notebookCanvasSet",
             NotebookDeleted { .. } => "notebookDeleted",
             NotebookRestored { .. } => "notebookRestored",
             NotebookPurged { .. } => "notebookPurged",
@@ -657,6 +671,7 @@ pub fn validate_body(body: &DocumentOperation) -> Result<(), OpError> {
         | NotebookRestored { .. }
         | NotebookPurged { .. }
         | NotebookFiled { .. }
+        | NotebookCanvasSet { .. }
         | FolderMoved { .. }
         | FolderDeleted { .. }
         | PageDeleted { .. }
@@ -702,6 +717,7 @@ pub fn apply_to_notebook(
             set(&mut nb.title, title.trim().to_string())
         }
         NotebookCoverChanged { cover, .. } => set(&mut nb.cover, cover.to_lowercase()),
+        NotebookCanvasSet { infinite, .. } => set(&mut nb.infinite_canvas, *infinite),
         NotebookDeleted { .. } => set(&mut nb.deleted_at, Some(at)),
         NotebookRestored { .. } => set(&mut nb.deleted_at, None),
         PageCreated {
@@ -881,6 +897,7 @@ pub fn take_group(dst: &mut Element, src: &Element, group: u8) {
                 d.font_size = s.font_size;
                 d.color = s.color.clone();
                 d.align = s.align;
+                d.font = s.font;
             }
             groups::CONTENT => {
                 d.text = s.text.clone();
@@ -898,6 +915,7 @@ pub fn take_group(dst: &mut Element, src: &Element, group: u8) {
             }
             groups::CONTENT => {
                 d.asset_hash = s.asset_hash.clone();
+                d.pdf_page = s.pdf_page.clone();
                 d.extra = s.extra.clone();
             }
             _ => {}

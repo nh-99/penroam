@@ -37,6 +37,7 @@ TypeScript types are generated from them (`apps/desktop-mobile/src/generated`).
   "cover": "#3b5b7a",
   "assets": [{ "sha256": "…64 hex…", "mediaType": "application/pdf", "byteSize": 123456, "originalName": "slides.pdf" }],
   "folder": "…folder uuid…",                    // present only when filed in a library folder
+  "infiniteCanvas": true,                       // present only when the pages are infinite canvases
   "metadata": {}
 }
 ```
@@ -47,6 +48,24 @@ sorted by (order key, page id); see [`penroam-binary-v1.md`](penroam-binary-v1.m
 `folder` was added without a schema change; older builds keep it as an unknown field. Folder ids
 mean nothing outside their library, so importing a `.penroam` file clears it. Restoring a
 `.penroam-backup` keeps it.
+
+`infiniteCanvas` (also added without a schema change) shows every page as an infinite canvas: an
+unbounded surface where elements may sit at any coordinate, negative ones included, instead of a
+sheet of `size`. It only changes how pages are shown and laid out, so turning it off loses
+nothing; elements outside the sheet are then simply not on it. On a canvas of blank, grid or
+dotted paper the template repeats from the origin in every direction. Ruled paper makes a column
+(`Page::is_canvas_column`): the sheet's width from the origin, with its header rows and margin
+line, ruled all the way down. A PDF background stays in the box `0, 0, size`. Exports cut a
+canvas page to a sheet: its content and background with a 36 pt margin, the top-left corner
+moved down to a whole template pitch so the lines stay put; a column is cut to the page's width
+from the origin, down to its content's end plus the margin and at least the page's height,
+widened for any content outside it (`Page::canvas_as_sheet`). PDF export and printing then
+split that sheet top to bottom into pages of the paper's proportions, as wide as the content and
+at least the paper, breaking in a gap between elements in the bottom 40 % of a page where there
+is one (`Page::canvas_as_sheets`). The pages of a column after its first carry
+`penroamContinuedSheet` in their `extra` and are ruled from the top, without the header; that
+key is only on sheets made for export, never on stored pages. Older builds keep
+`infiniteCanvas` as an unknown field and show sheets.
 
 Folders themselves are in `<library>/folders.json` and in a backup's `extras/folders.json`, never
 in a single-notebook archive. The file is an object keyed by folder id and includes deleted folders:
@@ -110,6 +129,7 @@ The page is shown here as JSON — the form used over IPC, in operations, and in
 ```jsonc
 { "type": "text", "id": "…", "z": 13, "x": 72, "y": 120, "width": 280, "height": 40,
   "text": "A **Markdown** note\nsecond line", "fontSize": 16, "color": "#111111", "align": "left",
+  "font": "handwritten",  // optional
   "rowPitch": 24 }  // optional
 ```
 
@@ -123,6 +143,27 @@ shows the note, and search indexes what was typed. Rules for rendering it:
   when they are tapped; exported PDFs have no clickable links. Images show their alt text.
 * Tapping a task's checkbox in the app edits the source: the character between its brackets
   becomes `x`, or a space if it was ticked.
+* A table is a spreadsheet (`penroam_core::sheet`, ported in
+  `apps/desktop-mobile/src/editor/sheet.ts`). Each cell is read from its source text, trimmed
+  and with `\|` unescaped. A cell that starts with `=` is a formula and shows its result; one
+  that is exactly `[ ]`, `[x]` or `[X]` is a checkbox drawn like a task's, and tapping it edits
+  the source the same way. Columns are lettered from `A` and rows numbered from 1, the header
+  row. Formulas have `+ - * / ^` (`^` binds tighter than a sign, which binds tighter than the
+  rest), parentheses, references such as `B2`, ranges such as `B2:C9`, and `SUM`, `AVERAGE`
+  (`AVG`), `MIN`, `MAX`, `COUNT`, `PRODUCT`, `ROUND` and `ABS`, in any case. Numbers are
+  written `1,234.5`, `-3`, `$9.99` (or `€ £ ¥`) or `12%`; `TRUE`, `FALSE` and checkboxes count
+  as 1 and 0 in arithmetic, and aggregates skip text, blanks and checkboxes in ranges. Money
+  may also put its symbol after the digits, with or without a space (`$ 9.99`, `9.99 €`), and
+  `(9.99)` is negative. A cell's value looks through emphasis wrapped around the whole cell
+  (`**$5**` is still 5, `**=SUM(B2:B5)**` still a formula, whose result is then drawn bold). A
+  result keeps the currency (and where its symbol goes), percent and thousands separators of the
+  first number it was made from, shows currency with two decimals and anything else with at most
+  six. Errors are shown as
+  `#ERROR!`, `#NAME?`, `#REF!`, `#VALUE!`, `#DIV/0!`, `#NUM!`, `#CYCLE!` (the formula depends
+  on itself) and `#LIMIT!` (the ranges in a table's formulas cover more than 200,000 cells in
+  all). Formulas are evaluated in dependency order, so the result never depends on cell order.
+  Both ports are checked against `tests/fixtures/sheet-golden.json`. Other Markdown readers
+  show the formula's source.
   Containers nested past 16 levels join their parent.
 * `$…$` is an inline formula: it closes on its line, opens before a non-space, and closes after
   a non-space and not before a digit. `$$…$$` is a display formula on its own line and may span
@@ -132,7 +173,7 @@ shows the note, and search indexes what was typed. Rules for rendering it:
 Layout is deterministic and lives in `penroam_core::markdown`, with a TypeScript port in
 `apps/desktop-mobile/src/editor/markdown.ts`: widths from
 `crates/penroam-core/data/text-metrics.json` (Liberation Sans and Mono = Helvetica and Courier
-metrics); greedy wrapping at spaces; over-long words break between characters; trailing spaces
+metrics, and Excalifont); greedy wrapping at spaces; over-long words break between characters; trailing spaces
 don't count. Line height 1.25 em, first baseline 0.97 em below `y`. `height` is the laid-out
 content height (renderers never clip).
 
@@ -145,19 +186,56 @@ template changes to ruled or dotted paper, locked blocks take its spacing in the
 batch. Without `rowPitch` a block uses the natural line height. A client that predates the field
 keeps it as an unknown key and draws the block with natural line height.
 
+`font` is `"formatted"` (Liberation Sans) or `"handwritten"` (Excalifont). It is written only
+for handwritten blocks: a missing field means formatted, which is what every block written
+before the field existed uses, so their layout doesn't change. A client that predates the field
+keeps it as an unknown key and draws the block formatted. The font applies to text, headings,
+list bullets and numbers. Code, and formulas shown as source, always use the monospace face;
+checkboxes, link underlines, strikethrough, rules and frames are drawn lines. They are the
+same in both fonts except checkboxes, which handwritten text sketches: four slightly bowed
+strokes that overshoot their corners and a tick that flicks past the box, 1.5 times as heavy.
+The strokes are fixed points, not random, so every client and export draws the same marks.
+Rules for handwritten text:
+
+* Excalifont has one face. Bold also strokes the glyph outlines, 0.045 em wide; italic shears
+  them by 0.2 (x moves 0.2 to the right per unit above the baseline). Both keep the regular
+  widths.
+* A character Excalifont has no glyph for is set in the formatted face of the same style, one
+  character at a time. A list label is set in one face: Excalifont if it has every character.
+* No kerning and no ligatures, as in the PDF.
+* Line height and first baseline are the formatted font's. `bottom` reaches Excalifont's
+  descender (0.374 em) below the last baseline.
+
 Goldens: `tests/fixtures/markdown-layout-golden.json` (Markdown) and
 `tests/fixtures/text-layout-golden.json` (plain wrapping).
 
 Formulas aren't stored. MathJax renders them in the webview to outlines in em, for the canvas and
 for each PDF export or print, which passes them to Rust as `RenderedMath` values
 (`apps/desktop-mobile/src/editor/math.ts`, `crates/penroam-pdf`). The PDF exporter uses the
-standard Helvetica and Courier fonts and fills formula outlines as vector paths.
+standard Helvetica and Courier fonts, embeds Excalifont as a TrueType font when an exported page
+has handwritten text, and fills formula outlines as vector paths.
 
 ### Image (minimal)
 
 ```jsonc
 { "type": "image", "id": "…", "z": 3, "x": 0, "y": 0, "width": 100, "height": 80, "assetHash": "…" }
 ```
+
+An image may instead show one page of a PDF asset, stretched over its box. This is how PDF pages
+sit on an infinite canvas, where one page can hold a whole document:
+
+```jsonc
+{ "type": "image", "id": "…", "z": -2, "x": 0, "y": 840, "width": 612, "height": 792,
+  "assetHash": "…sha256…",
+  "pdfPage": { "assetHash": "…same sha256…", "pageIndex": 1,
+               "mediaBox": [0, 0, 612, 792], "cropBox": [0, 0, 612, 792], "rotation": 0 } }
+```
+
+`pdfPage` has the shape of a page `background` and must name the element's own asset. It merges
+with the content field group. The editor and the PDF exporter draw these under the ink, the PDF
+exporter from the source page as vector content; SVG and text exports leave them out with a
+warning. Added without a schema change: older builds keep `pdfPage` as an unknown field and draw
+a placeholder, since the asset is not an image.
 
 ## 4. Operations (journal and IPC)
 

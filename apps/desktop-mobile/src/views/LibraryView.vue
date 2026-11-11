@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { BookPlus, ChevronRight, FolderPlus, Import, Settings, Trash, ArchiveArrowUp, NotebookPen, TriangleAlert, ArrowLeft, Search, Cloud, LoaderCircle } from "@lucide/vue";
+import { BookPlus, ChevronRight, FolderPlus, Import, Settings, Trash, ArchiveArrowUp, NotebookPen, TriangleAlert, ArrowLeft, Search, Cloud, LoaderCircle, EllipsisVertical } from "@lucide/vue";
 import logoUrl from "../assets/logo.png";
 import { useLibrary } from "../stores/library";
 import { COVERS } from "../editor/covers";
@@ -23,6 +23,8 @@ import { highlightRects, type SearchHit } from "../platform/search";
 import { modKey } from "../platform/device";
 import Btn from "../components/ui/Btn.vue";
 import IconBtn from "../components/ui/IconBtn.vue";
+import Menu from "../components/ui/Menu.vue";
+import MenuItem from "../components/ui/MenuItem.vue";
 import type { Paper } from "../generated/Paper";
 import type { TemplateKind } from "../generated/TemplateKind";
 import type { NotebookSummary } from "../generated/NotebookSummary";
@@ -85,10 +87,10 @@ function onKey(e: KeyboardEvent) {
 onMounted(() => window.addEventListener("keydown", onKey));
 onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 
-async function create(title: string, paper: Paper, template: TemplateKind, vault?: string) {
+async function create(title: string, paper: Paper, template: TemplateKind, vault: string | undefined, infiniteCanvas: boolean) {
   showNew.value = false;
   const folder = lib.openFolder?.id;
-  const nb = await lib.createNotebook(title, paper, { kind: template, spacing: template === "dotted" ? 20 : template === "grid" ? 18 : 24 }, vault);
+  const nb = await lib.createNotebook(title, paper, { kind: template, spacing: template === "dotted" ? 20 : template === "grid" ? 18 : 24 }, vault, infiniteCanvas);
   if (vault) await sync.refreshVaults();
   // vault notebooks can't be filed; they stay at the top level
   else if (nb && folder) await lib.fileNotebook(nb.id, folder);
@@ -111,13 +113,27 @@ function recolor(nb: NotebookSummary) {
   <div class="flex h-full flex-col safe-top safe-x">
     <header class="flex items-center gap-2 border-b border-line px-4 py-3 sm:px-6">
       <template v-if="!showTrash">
-        <img :src="logoUrl" alt="" class="h-8 w-8 rounded-lg" aria-hidden="true" />
-        <h1 class="mr-auto text-lg font-semibold tracking-tight">Penroam</h1>
+        <img :src="logoUrl" alt="" class="h-8 w-8 shrink-0 rounded-lg" aria-hidden="true" />
+        <h1 class="mr-auto min-w-0 truncate text-lg font-semibold tracking-tight">Penroam</h1>
         <IconBtn label="Search notebooks" :shortcut="`${mod}+K`" @click="search.panelOpen = true"><Search :size="20" /></IconBtn>
-        <Btn variant="primary" @click="showNew = true"><BookPlus :size="18" /><span class="hidden sm:inline">New notebook</span></Btn>
-        <IconBtn label="New folder" @click="showNewFolder = true"><FolderPlus :size="20" /></IconBtn>
-        <IconBtn label="Import notebooks and documents" @click="lib.importFiles()"><Import :size="20" /></IconBtn>
-        <IconBtn :label="`Trash (${lib.trashed.length + sync.cloudTrash.length})`" @click="showTrash = true"><Trash :size="20" /></IconBtn>
+        <!-- icon-only on phones, so it needs its own name there; max-sm:px-0 keeps it a full square touch target -->
+        <Btn variant="primary" class="shrink-0 max-sm:px-0" aria-label="New notebook" @click="showNew = true"><BookPlus :size="18" /><span class="hidden sm:inline" aria-hidden="true">New notebook</span></Btn>
+        <!-- phones don't have room for every action, so the less frequent ones go in a menu -->
+        <div class="hidden items-center gap-2 sm:flex">
+          <IconBtn label="New folder" @click="showNewFolder = true"><FolderPlus :size="20" /></IconBtn>
+          <IconBtn label="Import notebooks and documents" @click="lib.importFiles()"><Import :size="20" /></IconBtn>
+          <IconBtn :label="`Trash (${lib.trashed.length + sync.cloudTrash.length})`" @click="showTrash = true"><Trash :size="20" /></IconBtn>
+        </div>
+        <Menu label="More library actions" class="sm:hidden">
+          <template #trigger="{ toggle, open }">
+            <button class="touch-target inline-flex shrink-0 items-center justify-center rounded-xl text-ink hover:bg-surface-2" :aria-expanded="open" aria-haspopup="menu" aria-label="More actions" @click="toggle">
+              <EllipsisVertical :size="20" />
+            </button>
+          </template>
+          <MenuItem @click="showNewFolder = true"><FolderPlus :size="16" />New folder</MenuItem>
+          <MenuItem @click="lib.importFiles()"><Import :size="16" />Import…</MenuItem>
+          <MenuItem @click="showTrash = true"><Trash :size="16" />Trash ({{ lib.trashed.length + sync.cloudTrash.length }})</MenuItem>
+        </Menu>
         <IconBtn label="Settings" @click="showSettings = true"><Settings :size="20" /></IconBtn>
       </template>
       <template v-else>

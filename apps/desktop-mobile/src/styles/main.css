@@ -32,6 +32,14 @@
   font-style: italic;
   font-display: block;
 }
+/* Handwritten text. One face: the editor draws its bold and italic itself. */
+@font-face {
+  font-family: "PenroamHand";
+  src: url("../assets/fonts/Excalifont-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
 @font-face {
   font-family: "PenroamMono";
   src: url("../assets/fonts/LiberationMono-Regular.ttf") format("truetype");
@@ -192,6 +200,16 @@ pre,
 :root[data-theme="epaper"] .penroam-page {
   outline: 1px solid #000;
 }
+/* an infinite canvas has no sheet: the paper is the whole view, and the layers draw on it */
+.penroam-page.penroam-canvas,
+:root[data-theme="epaper"] .penroam-page.penroam-canvas {
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+.penroam-canvas-view {
+  background: #ffffff;
+}
 /* the other pages in continuous scrolling: pictures that look like the live page */
 .penroam-strip-page {
   background: #ffffff no-repeat center / 100% 100%;
@@ -236,7 +254,8 @@ pre,
   outline-offset: calc(3px * var(--inv, 1));
   background: transparent;
   resize: none;
-  overflow: hidden;
+  /* a table's spreadsheet bar, menus and row numbers reach outside the box */
+  overflow: visible;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: normal;
@@ -248,6 +267,26 @@ pre,
   -webkit-user-select: text;
   touch-action: manipulation;
 }
+/* A table's spreadsheet controls on ePaper, as the app's own controls are there: solid black
+   when on, heavier borders and bigger targets. The rest of their look is in editor/sheetGrid.ts. */
+:root[data-theme="epaper"] .cm-sheet-tool.is-on,
+:root[data-theme="epaper"] .cm-sheet-col.is-current,
+:root[data-theme="epaper"] .cm-sheet-row.is-current {
+  background: #000;
+  color: #fff;
+}
+:root[data-theme="epaper"] .cm-sheet-bar,
+:root[data-theme="epaper"] .cm-sheet-menu {
+  border-width: 2px;
+}
+:root[data-theme="epaper"] .cm-sheet-tool {
+  min-width: calc(var(--pr-touch) * var(--inv, 1));
+  height: calc(var(--pr-touch) * var(--inv, 1));
+}
+:root[data-theme="epaper"] .cm-sheet-menu-item {
+  min-height: calc(var(--pr-touch) * var(--inv, 1));
+}
+
 /* The grab strip around a box being edited. Sized with --inv to stay the same on screen. */
 .penroam-editframe {
   box-sizing: content-box;

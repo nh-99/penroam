@@ -71,6 +71,35 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 use uuid::Uuid;
 
+/// Space between pages gathered onto one infinite canvas
+/// ([`Library::collapse_pages_into_canvas`]), before rounding up to a whole
+/// row of the paper.
+pub const CANVAS_PAGE_GAP_PT: f64 = 48.0;
+
+/// A PDF page drawn as an element at (`x`, `y`), at its displayed size.
+fn pdf_page_element(id: Uuid, pdf: PdfBackgroundRef, x: f64, y: f64) -> Element {
+    let size = pdf.display_size();
+    Element::Image(ImageElement {
+        id,
+        z: 0,
+        x,
+        y,
+        width: size.width,
+        height: size.height,
+        asset_hash: pdf.asset_hash.clone(),
+        pdf_page: Some(pdf),
+        extra: Default::default(),
+    })
+}
+
+fn set_element_id(e: &mut Element, id: Uuid) {
+    match e {
+        Element::Ink(s) => s.id = id,
+        Element::Text(t) => t.id = id,
+        Element::Image(i) => i.id = id,
+    }
+}
+
 const JOURNAL_MAX_ENTRIES: usize = 512;
 const JOURNAL_MIN_COMPACT_BYTES: u64 = 1 << 20;
 // Pages kept parsed in memory (LRU). Small on purpose: a 10k-stroke page is
@@ -1276,6 +1305,112 @@ impl Library {
             }],
         )?;
         Ok(self.notebook(id)?.clone())
+    }
+
+    /// Shows the notebook's pages as infinite canvases, or as sheets again.
+    /// Nothing on the pages changes either way.
+    pub fn set_infinite_canvas(&mut self, id: Uuid, infinite: bool) -> Result<Notebook> {
+        if self.live_notebook(id)?.infinite_canvas == infinite {
+            return Ok(self.notebook(id)?.clone());
+        }
+        self.commit_notebook_ops(
+            id,
+            vec![DocumentOperation::NotebookCanvasSet {
+                notebook_id: id,
+                infinite,
+            }],
+        )?;
+        Ok(self.notebook(id)?.clone())
+    }
+
+    /// Gathers every live page onto the first one, stacked top to bottom in
+    /// reading order with [`CANVAS_PAGE_GAP_PT`] between them, then moves the
+    /// emptied pages to the notebook's trash (so they can still be restored).
+    /// A page's PDF background comes along as a PDF page element below its
+    /// content. The first page keeps its template; the others' are dropped.
+    ///
+    /// Each step is an ordinary journaled operation: the content is added to
+    /// the first page before any page is trashed, so a failure part way
+    /// through can leave content twice, never lose it. Returns the notebook
+    /// and the first page.
+    pub fn collapse_pages_into_canvas(&mut self, nb_id: Uuid) -> Result<(Notebook, Page)> {
+        let order = self.live_notebook(nb_id)?.page_order.clone();
+        let Some((&first_id, rest)) = order.split_first() else {
+            return Err(StorageError::Invalid("the notebook has no pages".into()));
+        };
+        let first = self.load_page(nb_id, first_id)?;
+        if rest.is_empty() {
+            return Ok((self.notebook(nb_id)?.clone(), first));
+        }
+        // Gaps are whole rows of the first page's paper, so locked text on the
+        // pages below still sits on its rows.
+        let pitch = first.template.spacing;
+        let snap = |y: f64| (y / pitch).ceil() * pitch;
+        let mut y = snap(
+            first
+                .size
+                .height
+                .max(first.content_bounds().map_or(0.0, |b| b[3]))
+                + CANVAS_PAGE_GAP_PT,
+        );
+        let mut pdfs = Vec::new();
+        let mut added = Vec::new();
+        let mut z = first.max_z();
+        for &pid in rest {
+            let page = self.load_page(nb_id, pid)?;
+            // a page that was a canvas already can have content above its top edge
+            let (top, bottom) = page.content_bounds().map_or((0.0, page.size.height), |b| {
+                (b[1].min(0.0), b[3].max(page.size.height))
+            });
+            let dy = y - top;
+            if let Some(bg) = &page.background {
+                pdfs.push(pdf_page_element(self.new_id(), bg.clone(), 0.0, dy));
+            }
+            let mut elements = page.elements.clone();
+            elements.sort_by_key(|e| (e.z(), e.id()));
+            for mut e in elements {
+                e.translate(0.0, dy);
+                z += 1;
+                *e.z_mut() = z;
+                set_element_id(&mut e, self.new_id());
+                added.push(e);
+            }
+            y = snap(dy + bottom + CANVAS_PAGE_GAP_PT);
+        }
+        // PDF pages go underneath everything, so ink written over them shows.
+        let floor = first.min_z();
+        let n = pdfs.len() as i64;
+        for (i, e) in pdfs.iter_mut().enumerate() {
+            *e.z_mut() = floor - n + i as i64;
+        }
+        pdfs.extend(added);
+        if !pdfs.is_empty() {
+            let batch = OperationBatch {
+                batch_id: self.new_id(),
+                base_revision: first.revision,
+                ops: vec![PageOperation {
+                    op_id: self.new_id(),
+                    kind: OpKind::AddElements { elements: pdfs },
+                }],
+            };
+            self.apply_page_operations(nb_id, first_id, &batch)?;
+        }
+        for &pid in rest {
+            self.flush_page(nb_id, pid)?;
+        }
+        self.commit_notebook_ops(
+            nb_id,
+            rest.iter()
+                .map(|&page_id| DocumentOperation::PageDeleted {
+                    notebook_id: nb_id,
+                    page_id,
+                })
+                .collect(),
+        )?;
+        Ok((
+            self.notebook(nb_id)?.clone(),
+            self.load_page(nb_id, first_id)?,
+        ))
     }
 
     /// Moves a notebook to the trash (a tombstone; nothing is erased).

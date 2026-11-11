@@ -67,6 +67,14 @@ assets: Array<Asset>,
  */
 folder?: string, 
 /**
+ * Whether the notebook's pages are infinite canvases: unbounded surfaces
+ * that grow around their content, instead of sheets of [`Page::size`].
+ * It is a way of showing the pages, so turning it off again loses
+ * nothing. Added without a schema bump: older builds keep it in `extra`
+ * and show the pages as sheets.
+ */
+infiniteCanvas?: boolean, 
+/**
  * Application metadata (free-form, preserved).
  */
 metadata?: Record<string, unknown>, };

@@ -177,6 +177,8 @@ pub fn run() {
             commands::save_thumbnail,
             commands::get_thumbnail,
             commands::import_pdf,
+            commands::add_pdf_asset,
+            commands::set_infinite_canvas,
             commands::export_notebook,
             commands::import_notebook,
             commands::export_annotated_pdf,

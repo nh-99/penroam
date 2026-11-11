@@ -3,8 +3,8 @@ import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, type Ref 
 import type { Size } from "../generated/Size";
 import { InkEditor, type EditorState } from "../editor/engine";
 import { PALM_CONTACT_PX } from "../editor/input";
-import { PdfCache, PdfPageRenderer } from "../editor/pdf";
-import { PageRenderer } from "../editor/renderer";
+import { PdfCache, PdfPageRenderer, renderPdfPage } from "../editor/pdf";
+import { canvasSheetRect, PageRenderer, pdfPageKey } from "../editor/renderer";
 import type { Page } from "../generated/Page";
 import { PageSession, errorMessage } from "../editor/session";
 import { api, hasHost } from "../platform/ipc";
@@ -35,7 +35,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     canUndo: false,
     canRedo: false,
     selectionCount: 0,
-    selectionHasText: false, selectionTextFree: true, pageHasRows: false,
+    selectionHasText: false, selectionTextFree: true, selectionTextFont: null, pageHasRows: false,
     editingText: false,
     textFormats: [],
     saveState: "saved",
@@ -96,6 +96,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       textColor: s.textColor,
       textFreePlacement: s.textFreePlacement,
       textSize: s.textSize,
+      textFont: s.textFont,
       pressure: s.pressure,
     });
   }
@@ -103,40 +104,72 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   async function thumbnailNow() {
     const e = editor.value;
     const pid = session?.page.id;
-    if (!e || !pid) return;
-    const png = await e.renderer.thumbnail(240);
+    if (!e || !pid || !session) return;
+    // the layers of a canvas cover the view, not the drawing: picture the drawing instead
+    const png = e.isCanvas ? await renderPagePng(session.page, 240, { paper: true }) : await e.renderer.thumbnail(240);
     if (png && session?.page.id === pid) await lib.saveThumb(pid, png);
   }
 
   /** Renders a page that is not open into a small PNG (detached canvases). */
-  const renderOffscreenThumb = (page: Page) => renderPagePng(page, 240);
+  const renderOffscreenThumb = (page: Page) => renderPagePng(page, 240, { paper: true });
 
   /**
    * Renders any page, including a past version, to a PNG `width` pixels wide. The PDF
    * behind it is drawn at that resolution from the original, so `width` sets the detail.
    */
-  async function renderPagePng(page: Page, width: number): Promise<Uint8Array | null> {
-    const c = await renderPageCanvas(page, width);
+  async function renderPagePng(page: Page, width: number, opts: { paper?: boolean } = {}): Promise<Uint8Array | null> {
+    const c = await renderPageCanvas(page, width, opts);
     const blob: Blob | null = await new Promise((r) => c.toBlob(r, "image/png"));
     return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
   }
 
-  /** Like `renderPagePng`, but keeps the picture as a canvas (continuous scrolling). */
-  async function renderPageCanvas(page: Page, width: number): Promise<HTMLCanvasElement> {
+  /** Most pixels in a picture of an infinite canvas, which can be very tall. */
+  const MAX_PICTURE_PIXELS = 16_000_000;
+  /** Longest side of such a picture; WebKit refuses larger canvases. */
+  const MAX_PICTURE_SIDE = 16_384;
+
+  /**
+   * Like `renderPagePng`, but keeps the picture as a canvas (continuous scrolling). On an
+   * infinite canvas the picture is of the drawing, cut the way exports cut it (or, with
+   * `paper`, at least a page in the page's shape, for previews), and may come out narrower
+   * than `width` when the drawing is too long for a canvas that wide.
+   */
+  async function renderPageCanvas(page: Page, width: number, opts: { paper?: boolean } = {}): Promise<HTMLCanvasElement> {
     const host = document.createElement("div");
     const r = new PageRenderer(host, () => page.elements);
-    r.setPage(page.size.width, page.size.height, page.template);
+    const canvas = !!lib.current?.infiniteCanvas;
+    const [x0, y0, x1, y1] = canvas ? canvasSheetRect(page, opts.paper) : [0, 0, page.size.width, page.size.height];
+    const w = x1 - x0, h = y1 - y0;
+    if (canvas) {
+      width = Math.min(width, Math.sqrt(MAX_PICTURE_PIXELS * (w / h)), (MAX_PICTURE_SIDE * w) / h);
+      r.setPage(w, h, page.template, [x0, y0], true, page.size.width);
+      if (page.background) r.pdfBox = [0, 0, page.size.width, page.size.height];
+    } else r.setPage(w, h, page.template);
     r.opts.mono = settings.effectiveTheme() === "epaper";
-    const res = Math.min(Math.max(2, width / page.size.width), (2 * width) / page.size.width);
+    const res = canvas ? width / w : Math.min(Math.max(2, width / w), (2 * width) / w);
     r.setResolution(res);
     if (page.background && pdfCache) {
       r.pdfBitmap = await new PdfPageRenderer().render(pdfCache, page.background, res).catch(() => null);
+    }
+    if (pdfCache) {
+      for (const e of page.elements) {
+        const key = e.type === "image" && e.pdfPage ? pdfPageKey(e.pdfPage) : null;
+        if (!key || e.type !== "image" || !e.pdfPage || r.pdfPages.has(key)) continue;
+        // the editor's bitmap of the page, when it is sharp enough, saves rendering it again
+        const open = editor.value?.renderer.pdfPages.get(key);
+        if (open && open.res >= res) {
+          r.pdfPages.set(key, open);
+          continue;
+        }
+        const bitmap = await renderPdfPage(pdfCache, e.pdfPage, res).catch(() => null);
+        if (bitmap) r.pdfPages.set(pdfPageKey(e.pdfPage), { canvas: bitmap, res });
+      }
     }
     const nb = lib.current;
     if (nb) await r.loadImages(page.elements, (hash) => api.readAsset(nb.id, hash));
     r.renderAll(null);
     await r.whenComplete();
-    return r.snapshot(width);
+    return r.snapshot(Math.round(width));
   }
 
   /** Tells the editor the notebook's pages, with the sizes and thumbnails known so far. */
@@ -209,6 +242,22 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       }
       await new Promise((r) => setTimeout(r, 30));
     }
+  }
+
+  /**
+   * Opens the current page again from disk with the notebook's way of showing pages (sheets
+   * or infinite canvases), after something outside the editor changed it. Flush first.
+   */
+  async function reload() {
+    const e = editor.value;
+    if (!e) return;
+    recent.clear();
+    session = null;
+    scrollTarget = null;
+    e.setCanvas(!!lib.current?.infiniteCanvas);
+    await openPage(lib.currentPageId);
+    // a canvas's picture is of its drawing; combining pages changed it, too
+    void thumbnailNow().catch(() => {});
   }
 
   /** Flushes the current page; throws (and keeps the data in memory) if saving fails. */
@@ -353,6 +402,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     benchHooks.editor = e;
     e.penSeen = settings.s.penSeen;
     applySettings();
+    e.setCanvas(!!lib.current?.infiniteCanvas);
     e.setTool(settings.s.tool);
     unregister = registerFlusher(flush);
     if (sync.available) {
@@ -397,6 +447,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   });
 
   watch(() => lib.currentPageId, (id) => void openPage(id));
+  // switched here by `reload`, or on another device and synced
+  watch(() => !!lib.current?.infiniteCanvas, (on) => editor.value?.setCanvas(on));
   watch([() => lib.current?.id, () => lib.current?.pageOrder.join(","), () => lib.thumbs], pushPageList);
   watch(() => settings.s, applySettings, { deep: true });
   watch(() => settings.effectiveTheme(), applySettings);
@@ -423,5 +475,5 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     if (remotePending.size && !remoteTimer) remoteTimer = setTimeout(() => void applyRemoteChanges(), 50);
   }
 
-  return { state, editor, native, loading, pageError, flush, openPage, markChanged, renderPagePng, retry: () => session?.retry(), session: () => session };
+  return { state, editor, native, loading, pageError, flush, openPage, reload, markChanged, renderPagePng, retry: () => session?.retry(), session: () => session };
 }

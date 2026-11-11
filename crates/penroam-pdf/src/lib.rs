@@ -13,6 +13,11 @@
 //!   a one-way rendering.
 //! * [`keep_pages`] cuts such an export down to chosen pages, for printing.
 //!
+//! PDF pages placed on a page as elements ([`ImageElement::pdf_page`], used
+//! by infinite canvases) are drawn from their source page wrapped in a form
+//! XObject, so they stay vector too. Infinite canvas pages are exported as
+//! sheets cut to their content; [`Page::canvas_as_sheets`] makes those first.
+//!
 //! # Coordinates
 //!
 //! Penroam pages use *display* coordinates in points: origin at the top-left
@@ -36,7 +41,7 @@ use images::{ImageSet, PageImages};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use penroam_core::geometry::{stroke_pieces, Piece};
 use penroam_core::markdown::{self, MathBox, Paint};
-use penroam_core::text::{metrics, Face};
+use penroam_core::text::{metrics, Face, HAND_BOLD_STROKE, HAND_SLANT};
 use penroam_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -276,8 +281,10 @@ fn name(s: &str) -> Object {
 /// Each source PDF is merged into the output once (its objects renumbered,
 /// inherited page attributes resolved first) and its pages are reused with
 /// their original content wrapped in `q … Q`, followed by one Penroam content
-/// stream. Opacity (highlighter) uses `ExtGState` entries; text uses the
-/// standard Helvetica and Courier fonts with WinAnsi encoding. Each distinct
+/// stream. Opacity (highlighter) uses `ExtGState` entries; formatted text uses
+/// the standard Helvetica and Courier fonts with WinAnsi encoding, and
+/// handwritten text the bundled Excalifont, embedded once when any page has some
+/// (whole, not subset). Each distinct
 /// PNG or JPEG image becomes one XObject shared by the pages that show it.
 ///
 /// A missing background PDF is an error, but a missing, damaged or oversized
@@ -294,16 +301,30 @@ pub fn export_annotated(
         .iter()
         .map(|m| ((m.tex.as_str(), m.display), m))
         .collect();
-    let fonts = FONTS.map(|(_, _, base)| {
-        out.add_object(Dictionary::from_iter(vec![
-            ("Type", name("Font")),
-            ("Subtype", name("Type1")),
-            ("BaseFont", name(base)),
-            ("Encoding", name("WinAnsiEncoding")),
-        ]))
+    let mut fonts: Vec<(&str, ObjectId)> = FONTS
+        .iter()
+        .map(|(_, resource, base)| {
+            let id = out.add_object(Dictionary::from_iter(vec![
+                ("Type", name("Font")),
+                ("Subtype", name("Type1")),
+                ("BaseFont", name(base)),
+                ("Encoding", name("WinAnsiEncoding")),
+            ]));
+            (*resource, id)
+        })
+        .collect();
+    let handwritten = pages.iter().any(|p| {
+        p.elements
+            .iter()
+            .any(|e| matches!(e, Element::Text(t) if t.font == TextFont::Handwritten))
     });
+    if handwritten {
+        fonts.push((HAND_RESOURCE, hand_font(&mut out)));
+    }
     // source documents merged into `out`, keyed by asset hash -> page object ids
     let mut sources: HashMap<String, Vec<ObjectId>> = HashMap::new();
+    // source pages wrapped as form XObjects, for PDF page elements
+    let mut forms: HashMap<(String, u32), ObjectId> = HashMap::new();
     let mut images = ImageSet::default();
     let mut kids = Vec::new();
 
@@ -313,8 +334,40 @@ pub fn export_annotated(
             .as_ref()
             .map(|bg| source_page(&mut out, &mut sources, bg, &mut asset))
             .transpose()?;
-        let taken = source.map_or_else(BTreeSet::new, |id| xobject_names(&out, id));
-        let page_images = images.place_on_page(
+        let mut taken = source.map_or_else(BTreeSet::new, |id| xobject_names(&out, id));
+        let mut page_forms = PageForms::default();
+        for e in &page.elements {
+            let Element::Image(ImageElement {
+                pdf_page: Some(pdf),
+                ..
+            }) = e
+            else {
+                continue;
+            };
+            let key = (pdf.asset_hash.clone(), pdf.page_index);
+            if page_forms.names.contains_key(&key) {
+                continue;
+            }
+            let id = match forms.get(&key) {
+                Some(id) => *id,
+                None => {
+                    let src = source_page(&mut out, &mut sources, pdf, &mut asset)?;
+                    let id = page_form(&mut out, src, pdf)?;
+                    forms.insert(key.clone(), id);
+                    id
+                }
+            };
+            let resource = (0u32..)
+                .map(|n| format!("PRpg{n}"))
+                .find(|n| !taken.contains(n.as_bytes()))
+                .expect("unbounded names");
+            taken.insert(resource.as_bytes().to_vec());
+            page_forms
+                .xobjects
+                .set(resource.as_bytes(), Object::Reference(id));
+            page_forms.names.insert(key, resource);
+        }
+        let mut page_images = images.place_on_page(
             &mut out,
             page,
             index + 1,
@@ -322,9 +375,19 @@ pub fn export_annotated(
             &mut asset,
             &mut report.warnings,
         );
+        for (k, v) in page_forms.xobjects.iter() {
+            page_images.xobjects.set(k.clone(), v.clone());
+        }
         // ExtGState names (one per distinct opacity) used by this page's annotations
         let mut gs: BTreeMap<String, f64> = BTreeMap::new();
-        let annot = annotation_content(page, &formulas, &page_images, &mut gs, &mut report);
+        let annot = annotation_content(
+            page,
+            &formulas,
+            &page_images,
+            &page_forms,
+            &mut gs,
+            &mut report,
+        );
         let annot_id = out
             .add_object(Stream::new(Dictionary::new(), annot.into_bytes()).with_compression(true));
         let mut ext = Dictionary::new();
@@ -464,6 +527,102 @@ fn source_page(
         .copied()
 }
 
+/// The PDF page elements one output page can draw: (asset, page index) to
+/// resource name, and the resource entries.
+#[derive(Default)]
+struct PageForms {
+    names: HashMap<(String, u32), String>,
+    xobjects: Dictionary,
+}
+
+impl PageForms {
+    /// Appends the operators that draw a PDF page element in y-down display
+    /// coordinates, clipped to its box. Writes nothing if it isn't available.
+    fn draw(&self, s: &mut String, image: &ImageElement) {
+        let Some(pdf) = &image.pdf_page else {
+            return;
+        };
+        let Some(resource) = self.names.get(&(pdf.asset_hash.clone(), pdf.page_index)) else {
+            return;
+        };
+        let m = pdf_page_placement(image, pdf);
+        let _ = writeln!(
+            s,
+            "q {} {} {} {} re W n {} {} {} {} {} {} cm /{resource} Do Q",
+            f(image.x),
+            f(image.y),
+            f(image.width),
+            f(image.height),
+            f(m[0]),
+            f(m[1]),
+            f(m[2]),
+            f(m[3]),
+            f(m[4]),
+            f(m[5])
+        );
+    }
+}
+
+/// The matrix taking the source page's user space to the element's box in
+/// y-down display coordinates: the inverse of the page's display-to-user
+/// matrix, then a stretch from its displayed size to the box.
+fn pdf_page_placement(image: &ImageElement, pdf: &PdfBackgroundRef) -> [f64; 6] {
+    let [a, b, c, d, e, g] = pdf.doc_to_pdf_matrix();
+    let det = a * d - b * c;
+    let inv = [
+        d / det,
+        -b / det,
+        -c / det,
+        a / det,
+        (c * g - d * e) / det,
+        (b * e - a * g) / det,
+    ];
+    let size = pdf.display_size();
+    let (sx, sy) = (image.width / size.width, image.height / size.height);
+    // inv, then the stretch and the move to the box (row-vector convention)
+    [
+        inv[0] * sx,
+        inv[1] * sy,
+        inv[2] * sx,
+        inv[3] * sy,
+        inv[4] * sx + image.x,
+        inv[5] * sy + image.y,
+    ]
+}
+
+/// Most bytes a source page's content may decompress to when it is copied
+/// into a form XObject (hostile-input guard).
+const MAX_FORM_CONTENT: usize = 256 << 20;
+
+/// Wraps an output-document page as a form XObject: its content streams
+/// joined into one, its resources, and its crop box as the bounding box.
+fn page_form(
+    out: &mut Document,
+    page: ObjectId,
+    pdf: &PdfBackgroundRef,
+) -> Result<ObjectId, PdfError> {
+    let content = out
+        .get_page_content_with_limit(page, MAX_FORM_CONTENT)
+        .map_err(|e| PdfError::Parse(e.to_string()))?;
+    let resources = out
+        .get_dictionary(page)
+        .ok()
+        .and_then(|d| d.get(b"Resources").ok().cloned())
+        .unwrap_or_else(|| Object::Dictionary(Dictionary::new()));
+    let [x0, y0, x1, y1] = pdf.crop_box;
+    let bbox = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+    let dict = Dictionary::from_iter(vec![
+        ("Type", name("XObject")),
+        ("Subtype", name("Form")),
+        (
+            "BBox",
+            Object::Array(bbox.iter().map(|v| Object::Real(*v as f32)).collect()),
+        ),
+        ("Resources", resources),
+    ]);
+    Ok(out.add_object(Stream::new(dict, content).with_compression(true)))
+}
+
 /// The `/XObject` resource names a page already uses.
 fn xobject_names(out: &Document, page: ObjectId) -> BTreeSet<Vec<u8>> {
     fn dict<'a>(out: &'a Document, parent: &'a Dictionary, key: &[u8]) -> Option<&'a Dictionary> {
@@ -483,7 +642,7 @@ fn xobject_names(out: &Document, page: ObjectId) -> BTreeSet<Vec<u8>> {
 fn merge_resources(
     out: &Document,
     res: &mut Dictionary,
-    fonts: &[ObjectId],
+    fonts: &[(&str, ObjectId)],
     ext: Dictionary,
     xobjects: Dictionary,
 ) {
@@ -495,7 +654,7 @@ fn merge_resources(
             .unwrap_or_default()
     };
     let mut dict = sub(b"Font", res);
-    for ((_, resource, _), id) in FONTS.iter().zip(fonts) {
+    for (resource, id) in fonts {
         dict.set(*resource, Object::Reference(*id));
     }
     res.set("Font", Object::Dictionary(dict));
@@ -589,6 +748,7 @@ fn annotation_content(
     page: &Page,
     math: &MathTable<'_>,
     images: &PageImages<'_>,
+    forms: &PageForms,
     gs: &mut BTreeMap<String, f64>,
     report: &mut ExportReport,
 ) -> String {
@@ -610,10 +770,12 @@ fn annotation_content(
         f(m[5])
     );
     let _ = writeln!(s, "0 0 {} {} re W n", f(w), f(h));
-    template_content(&mut s, &page.template, w, h);
+    template_content(&mut s, &page.template, w, h, page.continues_column());
     s.push_str("1 J 1 j\n");
     // paint order matches the editor: ink (by z), then images, then text (by z)
+    // PDF pages on a canvas go first: they are the paper the ink is written on
     let rank = |e: &Element| match e {
+        Element::Image(i) if i.pdf_page.is_some() => -1,
         Element::Ink(_) => 0,
         Element::Image(_) => 1,
         Element::Text(_) => 2,
@@ -630,6 +792,7 @@ fn annotation_content(
                 report.text_blocks += 1;
                 text_content(&mut s, t, math, report);
             }
+            Element::Image(image) if image.pdf_page.is_some() => forms.draw(&mut s, image),
             Element::Image(image) => report.images += u32::from(images.draw(&mut s, image)),
         }
     }
@@ -642,13 +805,15 @@ fn annotation_content(
 /// or dots) in display coordinates (y down; the caller sets up the `cm`).
 /// Keep in sync with the editor's `editor/templates.ts`: ruled lines start
 /// three spacings from the top with a margin line three spacings from the left.
-pub fn template_content(s: &mut String, t: &Template, w: f64, h: f64) {
+/// A `continued` sheet, a later page of a ruled canvas column, has no header:
+/// its rules start one spacing from the top, carrying on from the sheet before.
+pub fn template_content(s: &mut String, t: &Template, w: f64, h: f64, continued: bool) {
     let sp = t.spacing;
     match t.kind {
         TemplateKind::Blank => {}
         TemplateKind::Ruled => {
             s.push_str("0.78 0.824 0.871 RG 0.5 w\n");
-            let mut y = sp * 3.0;
+            let mut y = if continued { sp } else { sp * 3.0 };
             while y <= h - sp {
                 let _ = writeln!(s, "0 {} m {} {} l S", f(y), f(w), f(y));
                 y += sp;
@@ -856,10 +1021,77 @@ const FONTS: [(Face, &str, &str); 5] = [
 ];
 
 fn font_resource(face: Face) -> &'static str {
+    if face.is_hand() {
+        return HAND_RESOURCE;
+    }
     FONTS
         .iter()
         .find(|(f, _, _)| *f == face)
         .map_or("PRHelv", |(_, r, _)| r)
+}
+
+/// Resource name of the embedded handwritten font.
+const HAND_RESOURCE: &str = "PRHand";
+
+/// The handwritten font's TrueType file, the one the editor loads.
+const HAND_TTF: &[u8] =
+    include_bytes!("../../../apps/desktop-mobile/src/assets/fonts/Excalifont-Regular.ttf");
+
+/// Adds Excalifont as a simple TrueType font with WinAnsi encoding, the whole
+/// file embedded (it is small, and subsetting would need a font tool). Its
+/// widths come from the layout's metrics, so a viewer places every glyph where
+/// the editor does. Bold and italic have no font of their own: [`text_content`]
+/// strokes and shears this one, as the editor does.
+fn hand_font(out: &mut Document) -> ObjectId {
+    let m = metrics();
+    let mut widths = vec![Object::Integer(0); 224];
+    for cp in 0x20..=0x2122u32 {
+        let Some(c) = char::from_u32(cp) else {
+            continue;
+        };
+        if let Some(byte) = winansi(c).filter(|&b| b >= 32 && m.known_in(Face::Hand, c)) {
+            widths[(byte - 32) as usize] = Object::Integer(m.advance_in(Face::Hand, c) as i64);
+        }
+    }
+    let mut file = Stream::new(
+        Dictionary::from_iter(vec![("Length1", Object::Integer(HAND_TTF.len() as i64))]),
+        HAND_TTF.to_vec(),
+    );
+    let _ = file.compress();
+    let file = out.add_object(file);
+    let ascent = m.ascent_of(TextFont::Handwritten);
+    let descent = m.descent_of(TextFont::Handwritten);
+    let descriptor = out.add_object(Dictionary::from_iter(vec![
+        ("Type", name("FontDescriptor")),
+        ("FontName", name("Excalifont-Regular")),
+        // nonsymbolic: glyphs are found through the encoding's character names
+        ("Flags", Object::Integer(32)),
+        (
+            "FontBBox",
+            Object::Array(vec![
+                (-200).into(),
+                Object::Real(descent as f32),
+                1400.into(),
+                Object::Real(ascent as f32),
+            ]),
+        ),
+        ("ItalicAngle", 0.into()),
+        ("Ascent", Object::Real(ascent as f32)),
+        ("Descent", Object::Real(descent as f32)),
+        ("CapHeight", 600.into()),
+        ("StemV", 80.into()),
+        ("FontFile2", Object::Reference(file)),
+    ]));
+    out.add_object(Dictionary::from_iter(vec![
+        ("Type", name("Font")),
+        ("Subtype", name("TrueType")),
+        ("BaseFont", name("Excalifont-Regular")),
+        ("FirstChar", 32.into()),
+        ("LastChar", 255.into()),
+        ("Widths", Object::Array(widths)),
+        ("Encoding", name("WinAnsiEncoding")),
+        ("FontDescriptor", Object::Reference(descriptor)),
+    ]))
 }
 
 /// The same layout the editor draws for `t` (see `penroam_core::markdown`).
@@ -871,17 +1103,25 @@ fn paint_of(t: &TextBlock, math: &MathTable<'_>) -> Paint {
             depth: m.depth,
         })
     };
-    markdown::layout(&t.text, t.font_size, t.width, t.row_pitch, t.align, &size)
+    markdown::layout(
+        &t.text,
+        t.font,
+        t.font_size,
+        t.width,
+        t.row_pitch,
+        t.align,
+        &size,
+    )
 }
 
-/// Writes a string as a PDF literal, in WinAnsi. Characters the standard fonts
-/// cannot show become `?` and are counted in the report.
-fn pdf_literal(text: &str, report: &mut ExportReport) -> String {
+/// Writes a string as a PDF literal, in WinAnsi. Characters `face` cannot show
+/// become `?` and are counted in the report.
+fn pdf_literal(text: &str, face: Face, report: &mut ExportReport) -> String {
     let m = metrics();
     let mut lit = String::new();
     for c in text.chars() {
         let byte = match winansi(c) {
-            Some(b) if m.known(c) || c == ' ' => b,
+            Some(b) if m.known_in(face, c) || c == ' ' => b,
             _ => {
                 report.replaced_characters += 1;
                 b'?'
@@ -937,15 +1177,29 @@ fn text_content(s: &mut String, t: &TextBlock, math: &MathTable<'_>, report: &mu
     if !paint.runs.is_empty() {
         s.push_str("BT\n");
         for run in &paint.runs {
-            let lit = pdf_literal(&run.text, report);
+            let lit = pdf_literal(&run.text, run.face, report);
+            // The handwritten font has one face: italic is a shear in the text
+            // matrix and bold a stroke around the fill, as in the editor.
+            let slant = match run.face {
+                Face::HandItalic | Face::HandBoldItalic => HAND_SLANT,
+                _ => 0.0,
+            };
+            let bold = matches!(run.face, Face::HandBold | Face::HandBoldItalic);
+            if bold {
+                let _ = write!(s, "{} w 2 Tr ", f(HAND_BOLD_STROKE * run.size));
+            }
             let _ = writeln!(
                 s,
-                "/{} {} Tf 1 0 0 -1 {} {} Tm ({lit}) Tj",
+                "/{} {} Tf 1 0 {} -1 {} {} Tm ({lit}) Tj",
                 font_resource(run.face),
                 f(run.size),
+                f(slant),
                 f(t.x + run.x),
                 f(t.y + run.y)
             );
+            if bold {
+                s.push_str("0 Tr\n");
+            }
         }
         s.push_str("ET\n");
     }

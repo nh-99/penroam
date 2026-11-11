@@ -7,6 +7,7 @@ import type { Notebook } from "../generated/Notebook";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import type { Paper } from "../generated/Paper";
 import type { Template } from "../generated/Template";
+import type { PdfBackgroundRef } from "../generated/PdfBackgroundRef";
 import type { RecoveryReport } from "../generated/RecoveryReport";
 import { renderMathTable } from "../editor/math";
 import { api, CommandError } from "../platform/ipc";
@@ -124,9 +125,9 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
-  async function createNotebook(title: string, paper: Paper, template: Template, vault?: string) {
+  async function createNotebook(title: string, paper: Paper, template: Template, vault?: string, infiniteCanvas = false) {
     try {
-      const { notebook, page } = await api.createNotebook(title, paper, template, undefined, vault);
+      const { notebook, page } = await api.createNotebook(title, paper, template, undefined, vault, infiniteCanvas);
       await refresh();
       current.value = notebook;
       currentPageId.value = page.id;
@@ -221,6 +222,31 @@ export const useLibrary = defineStore("library", () => {
       await refresh();
     } catch (e) {
       fail(e, "Could not rename");
+    }
+  }
+
+  /**
+   * Shows the open notebook's pages as infinite canvases, or as sheets again. With `collapse`
+   * every page is gathered onto the first one, which then opens; the others go to the
+   * notebook's trash. Flush the editor first. Returns false if it failed (already reported).
+   */
+  async function setInfiniteCanvas(infinite: boolean, collapse = false): Promise<boolean> {
+    const nb = current.value;
+    if (!nb) return false;
+    if (collapse) busy.value = "Combining pages…";
+    try {
+      const updated = await api.setInfiniteCanvas(nb.id, infinite, collapse);
+      current.value = updated;
+      if (collapse) {
+        currentPageId.value = updated.pageOrder[0] ?? null;
+        await loadThumbs();
+      }
+      return true;
+    } catch (e) {
+      fail(e, infinite ? "Could not turn on the infinite canvas" : "Could not turn off the infinite canvas");
+      return false;
+    } finally {
+      busy.value = null;
     }
   }
 
@@ -386,6 +412,29 @@ export const useLibrary = defineStore("library", () => {
       current.value = notebook;
       ui.success(`Imported ${pages.length} page${pages.length === 1 ? "" : "s"} from ${f.name}.`);
       return pages[0]?.id ?? null;
+    } catch (e) {
+      fail(e, "PDF import failed");
+      return null;
+    } finally {
+      busy.value = null;
+    }
+  }
+
+  /**
+   * Picks a PDF and adds it to the open notebook, for placing its pages on the canvas.
+   * Returns references to its pages, or null if nothing was imported.
+   */
+  async function importPdfForCanvas(): Promise<PdfBackgroundRef[] | null> {
+    const nb = current.value;
+    if (!nb) return null;
+    const f = await pickFile("pdf");
+    if (!f) return null;
+    busy.value = "Importing PDF…";
+    try {
+      const { notebook, pages } = await api.addPdfAsset(nb.id, f.path, f.name);
+      current.value = notebook;
+      ui.success(`Placed ${pages.length} page${pages.length === 1 ? "" : "s"} from ${f.name} on the canvas.`);
+      return pages;
     } catch (e) {
       fail(e, "PDF import failed");
       return null;
@@ -603,6 +652,8 @@ export const useLibrary = defineStore("library", () => {
     restorePage,
     reorder,
     importPdf,
+    importPdfForCanvas,
+    setInfiniteCanvas,
     importFiles,
     importResults,
     progress,

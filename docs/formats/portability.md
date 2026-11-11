@@ -135,7 +135,7 @@ Fuzz targets: `import_xournal`, `import_jex`, `import_text`, `import_backup`, `i
 * **PNG**: drawn by the same renderer as the screen at twice the page's size in points, including
   any PDF background.
 * **SVG**: vector ink from the shared stroke geometry and live text in Liberation faces with
-  fallbacks. No PDF background, and formulas appear as LaTeX source. Both are reported.
+  fallbacks; a page with handwritten text embeds Excalifont as a `data:` font. No PDF background, and formulas appear as LaTeX source. Both are reported.
 * **Clipboard**: a page's typed text.
 
 The PDF exporter's text overlay stays limited to typed text: recognised handwriting isn't written

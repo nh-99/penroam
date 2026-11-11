@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InkEditor } from "../src/editor/engine";
+import { canvasSheetRect } from "../src/editor/renderer";
 import { PageSession } from "../src/editor/session";
 import type { Page } from "../src/generated/Page";
+import type { PdfBackgroundRef } from "../src/generated/PdfBackgroundRef";
 import type { NativeHandlers, NativeInkSurface } from "../src/platform/nativeInk";
 
 function page(): Page {
@@ -786,5 +788,176 @@ describe("task checkboxes in text blocks", () => {
     expect(text()).toBe("- [x] one\n- [x] two");
     expect(inks()).toHaveLength(0);
     await vi.waitFor(() => expect(removed).toEqual([["dot"]]));
+  });
+});
+
+describe("infinite canvas", () => {
+  const settle = () => vi.advanceTimersByTime(200);
+  const ref = (pageIndex: number): PdfBackgroundRef => ({ assetHash: "a".repeat(64), pageIndex, mediaBox: [0, 0, 300, 400], cropBox: [0, 0, 300, 400], rotation: 0 });
+
+  it("draws and pans anywhere, past where a sheet would stop", async () => {
+    ed.setCanvas(true);
+    await vi.waitFor(() => expect(ed.isCanvas).toBe(true));
+    ed.setTransform({ scale: 1, ox: 3000, oy: 2500 });
+    // a sheet keeps 80 px of the page on screen; a canvas leaves the view where it was put
+    expect(ed.transform).toEqual({ scale: 1, ox: 3000, oy: 2500 });
+    settle();
+    drawLine(100, 100, 200, 160);
+    const s = session.page.elements[0];
+    expect(s.type).toBe("ink");
+    if (s.type !== "ink") return;
+    expect(s.points[0].x).toBeCloseTo(-2900);
+    expect(s.points[0].y).toBeCloseTo(-2400);
+    // the layers moved to cover the view, and the new stroke in it
+    const [x0, y0, x1, y1] = ed.renderer.extent;
+    expect(x0).toBeLessThanOrEqual(-3000);
+    expect(y0).toBeLessThanOrEqual(-2500);
+    expect(x1).toBeGreaterThanOrEqual(-2200);
+    expect(y1).toBeGreaterThanOrEqual(-1900);
+  });
+
+  it("places text where it is tapped, above and left of the origin too", async () => {
+    session.page.template = { kind: "dotted", spacing: 24 };
+    ed.setCanvas(true);
+    await vi.waitFor(() => expect(ed.isCanvas).toBe(true));
+    ed.setTransform({ scale: 1, ox: 1000, oy: 1000 });
+    ed.setTool("text");
+    ptr("pointerdown", 10, 10);
+    ptr("pointerup", 10, 10);
+    typeIn("hello");
+    ed.endTextEdit();
+    const t = session.page.elements.find((e) => e.type === "text");
+    expect(t?.type).toBe("text");
+    if (t?.type !== "text") return;
+    expect(t.x).toBeCloseTo(-990);
+    // locked to the rows, which run above the origin on a dotted canvas
+    expect(t.y).toBeLessThan(0);
+    expect(t.y % 24).toBeCloseTo(0);
+  });
+
+  it("puts imported PDF pages below the content, under everything, as one undo step", async () => {
+    ed.setCanvas(true);
+    await vi.waitFor(() => expect(ed.isCanvas).toBe(true));
+    drawLine(50, 50, 120, 300);
+    ed.placePdfPages([ref(0), ref(1)]);
+    const pdfs = session.page.elements.filter((e) => e.type === "image" && e.pdfPage);
+    expect(pdfs).toHaveLength(2);
+    const ink = session.page.elements.find((e) => e.type === "ink")!;
+    for (const p of pdfs) {
+      if (p.type !== "image") continue;
+      expect(p.z).toBeLessThan(ink.z);
+      expect([p.width, p.height]).toEqual([300, 400]);
+    }
+    const [a, b] = pdfs as Extract<(typeof pdfs)[number], { type: "image" }>[];
+    expect(a.y).toBeGreaterThan(300);
+    expect(b.y).toBeGreaterThanOrEqual(a.y + a.height);
+    // a press on a PDF page selects nothing: it is paper
+    ed.setTool("select");
+    const { scale, ox, oy } = ed.transform;
+    const [sx, sy] = [(a.x + 150) * scale + ox, (a.y + 200) * scale + oy];
+    expect(sx > 0 && sx < 800 && sy > 0 && sy < 600).toBe(true);
+    ptr("pointerdown", sx, sy, { pointerType: "mouse" });
+    ptr("pointerup", sx, sy, { pointerType: "mouse" });
+    expect(ed.selection.size).toBe(0);
+    ed.undo();
+    expect(session.page.elements.filter((e) => e.type === "image")).toHaveLength(0);
+  });
+
+  it("fits the content, never above 100 %, and shows sheets again when turned off", async () => {
+    ed.setCanvas(true);
+    await vi.waitFor(() => expect(ed.isCanvas).toBe(true));
+    drawLine(100, 100, 130, 120);
+    ed.fit("width");
+    expect(ed.transform.scale).toBe(1);
+    ed.setCanvas(false);
+    await vi.waitFor(() => expect(ed.isCanvas).toBe(false));
+    expect(ed.renderer.extent).toEqual([0, 0, 612, 792]);
+  });
+});
+
+describe("ruled infinite canvas", () => {
+  const settle = () => vi.advanceTimersByTime(200);
+  const ruled = async () => {
+    session.page.template = { kind: "ruled", spacing: 24 };
+    ed.setCanvas(true);
+    await vi.waitFor(() => expect(ed.isCanvas).toBe(true));
+  };
+
+  it("is the page's width and goes on downward", async () => {
+    await ruled();
+    ed.fit("width");
+    // fitted like a sheet, from the top
+    expect(ed.transform.oy).toBeGreaterThanOrEqual(0);
+    const { scale } = ed.transform;
+    ed.setTransform({ scale, ox: 0, oy: -1000 * scale });
+    settle();
+    const [x0, y0, x1, y1] = ed.renderer.extent;
+    expect([x0, y0, x1]).toEqual([0, 0, 612]);
+    expect(y1).toBeGreaterThan(1000);
+    // nowhere to go above the top or off to the side
+    ed.setTransform({ scale, ox: 5000, oy: 5000 });
+    expect(ed.transform.ox).toBeLessThan(800);
+    expect(ed.transform.oy).toBeLessThan(600);
+  });
+
+  it("can go a page past its content, however long that is", async () => {
+    await ruled();
+    const { scale } = ed.transform;
+    ed.setTransform({ scale, ox: 0, oy: -1e6 });
+    expect(-ed.transform.oy / scale).toBeLessThan(792 * 2);
+    session.page.elements.push({ type: "ink", id: "far", z: 1, tool: "pen", color: "#111111", opacity: 1, width: 2, pressure: true, source: "stylus", input: {}, points: [{ x: 100, y: 5000, pressure: 0.5, tiltX: 0, tiltY: 0, timeUs: 0 }] } as any);
+    ed.setTransform({ scale, ox: 0, oy: -1e6 });
+    expect(-ed.transform.oy / scale).toBeGreaterThan(5000 - 600 / scale);
+    expect(-ed.transform.oy / scale).toBeLessThan(5000 + 792 * 2);
+  });
+
+  it("keeps text on the page and below the header", async () => {
+    await ruled();
+    ed.setTransform({ scale: 1, ox: 0, oy: 0 });
+    ed.setTool("text");
+    ptr("pointerdown", 5, 5);
+    ptr("pointerup", 5, 5);
+    typeIn("hello");
+    ed.endTextEdit();
+    const t = session.page.elements.find((e) => e.type === "text");
+    if (t?.type !== "text") throw new Error("no text");
+    expect(t.y).toBe(48);
+    expect(t.x).toBeGreaterThanOrEqual(0);
+    expect(t.x + t.width).toBeLessThanOrEqual(612);
+  });
+});
+
+describe("infinite canvas pictures", () => {
+  const blank = (elements: Page["elements"]) => ({ size: { width: 612, height: 792 }, template: { kind: "grid" as const, spacing: 24 }, elements });
+  const note: Page["elements"][number] = { type: "text", id: "t", z: 1, x: 100, y: 100, width: 120, height: 20, text: "hi", fontSize: 16, color: "#111111", align: "left" };
+
+  it("previews a small note on a whole page, from its corner", () => {
+    const [x0, y0, x1, y1] = canvasSheetRect(blank([note]), true);
+    expect([x1 - x0, y1 - y0]).toEqual([612, 792]);
+    expect(x0).toBeLessThanOrEqual(100 - 36);
+    expect(y0).toBeLessThanOrEqual(100 - 36);
+    // the tight cut, for PNG export, is just the note and its margin
+    const t = canvasSheetRect(blank([note]));
+    expect(t[2] - t[0]).toBeLessThan(612);
+  });
+
+  it("grows a preview to keep wide or long content whole, in the page's shape", () => {
+    const wide = { ...note, width: 2000 };
+    const [x0, y0, x1, y1] = canvasSheetRect(blank([wide]), true);
+    expect(x1 - x0).toBeGreaterThanOrEqual(2000);
+    expect((y1 - y0) / (x1 - x0)).toBeCloseTo(792 / 612);
+    const long = { ...note, height: 5000 };
+    const r = canvasSheetRect(blank([long]), true);
+    expect(r[3] - r[1]).toBeGreaterThanOrEqual(5000);
+    expect((r[3] - r[1]) / (r[2] - r[0])).toBeCloseTo(792 / 612);
+  });
+
+  it("cuts a ruled canvas as its column: the page's width from the top", () => {
+    const ruled = (elements: Page["elements"]) => ({ ...blank(elements), template: { kind: "ruled" as const, spacing: 24 } });
+    expect(canvasSheetRect(ruled([note]))).toEqual([0, 0, 612, 792]);
+    const long = { ...note, height: 5000 };
+    expect(canvasSheetRect(ruled([long]))).toEqual([0, 0, 612, 100 + 5000 + 36]);
+    // a preview is its top page
+    expect(canvasSheetRect(ruled([long]), true)).toEqual([0, 0, 612, 792]);
   });
 });

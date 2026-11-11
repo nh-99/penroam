@@ -11,6 +11,7 @@ const state = {
   selectionCount: 0,
   selectionHasText: false,
   selectionTextFree: true,
+  selectionTextFont: null,
   pageHasRows: false,
   editingText: false,
   textFormats: [],

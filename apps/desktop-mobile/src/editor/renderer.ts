@@ -21,6 +21,14 @@
 // layers so that nothing shows twice. The page layers stay complete underneath, so a pan past the
 // detail area shows softer ink until the next settle, never missing ink.
 //
+// On an infinite canvas the layers cover an *extent* instead of the page: a rectangle of the
+// unbounded surface around the content and the view, whose top-left corner (`org`) need not be
+// the origin. The engine moves and grows it as the view moves; everything here draws in
+// document coordinates offset by `org`, so a sheet is simply an extent at the origin.
+//
+// A PDF page placed as an element (an image with `pdfPage`) is drawn from `pdfPages`, bitmaps
+// the engine renders at a resolution that suits how close the page is to the view.
+//
 // The detail canvases live in the viewport, not in the scaled page element. The compositor can
 // rasterise a `will-change: transform` element at a fixed scale and stretch it (seen as blur on
 // iPad), so anything inside it may not reach the screen at its own resolution. At rest these
@@ -29,11 +37,11 @@ import type { Element } from "../generated/Element";
 import type { InkStroke } from "../generated/InkStroke";
 import type { TextBlock } from "../generated/TextBlock";
 import type { Template } from "../generated/Template";
-import { drawStroke, rectsIntersect, strokeBounds, type Rect } from "./geometry";
-import { drawTemplate } from "./templates";
+import { drawStroke, rectsIntersect, strokeBounds, unionRect, type Rect } from "./geometry";
+import { drawCanvasTemplate, drawTemplate, isCanvasColumn } from "./templates";
 import { layoutMarkdownWithTargets, type LinkBox, type Paint, type TaskBox } from "./markdown";
 import { drawMath, ensureMath, mathBox, mathEpoch, renderedMath } from "./math";
-import { canvasFont } from "./textLayout";
+import { drawRun } from "./textLayout";
 
 export type Ink = { type: "ink" } & InkStroke;
 export type Text = { type: "text" } & TextBlock;
@@ -42,14 +50,15 @@ export type Text = { type: "text" } & TextBlock;
 const PAINT_CACHE_ENTRIES = 2048;
 const layouts = new Map<string, TextLayout>();
 
-type Layoutable = Pick<TextBlock, "text" | "fontSize" | "width" | "align" | "rowPitch">;
+type Layoutable = Pick<TextBlock, "text" | "font" | "fontSize" | "width" | "align" | "rowPitch">;
 type TextLayout = { paint: Paint; links: LinkBox[]; tasks: TaskBox[] };
 
 function layoutOf(t: Layoutable): TextLayout {
-  const key = `${mathEpoch()}|${t.fontSize}|${t.width}|${t.rowPitch ?? ""}|${t.align}|${t.text}`;
+  const font = t.font ?? "formatted";
+  const key = `${mathEpoch()}|${font}|${t.fontSize}|${t.width}|${t.rowPitch ?? ""}|${t.align}|${t.text}`;
   let l = layouts.get(key);
   if (!l) {
-    l = layoutMarkdownWithTargets(t.text, t.fontSize, t.width, t.rowPitch ?? null, t.align, mathBox);
+    l = layoutMarkdownWithTargets(t.text, font, t.fontSize, t.width, t.rowPitch ?? null, t.align, mathBox);
     if (layouts.size >= PAINT_CACHE_ENTRIES) layouts.clear();
     layouts.set(key, l);
     // Until MathJax has loaded formulas show their source.
@@ -90,6 +99,48 @@ export function textBounds(t: TextBlock): Rect {
   return [t.x, t.y, t.x + t.width, t.y + Math.max(t.height, p.bottom)];
 }
 
+/** Space around an infinite canvas's content when it is cut to a sheet (`CANVAS_SHEET_MARGIN_PT` in the core crate). */
+export const CANVAS_SHEET_MARGIN_PT = 36;
+
+/**
+ * The doc rect an infinite canvas page shows as a picture: its content and PDF background with
+ * a margin, the corner on a whole template pitch, or the page itself when it is empty. That is
+ * the same cut `Page::canvas_as_sheet` makes for PDF and SVG, used for PNG export.
+ *
+ * With `paper`, for thumbnails and other previews, the rect is at least the page's size from
+ * that corner and grown to the page's proportions. A small note then fills part of a page
+ * instead of a tiny picture, which library covers would blow up and crop to their page shape.
+ *
+ * Ruled paper is a column (`isCanvasColumn`): the rect is the page's width from the origin,
+ * down to the content's end and at least a page long; with `paper`, the top page of it.
+ */
+export function canvasSheetRect(page: { size: { width: number; height: number }; template: Template; background?: unknown; elements: Element[] }, paper = false): Rect {
+  const { width: pw, height: ph } = page.size;
+  let r: Rect | null = page.background ? [0, 0, pw, ph] : null;
+  for (const e of page.elements) r = unionRect(r, elementBounds(e));
+  if (!r) return [0, 0, pw, ph];
+  const m = CANVAS_SHEET_MARGIN_PT;
+  const sp = Math.max(1, page.template.spacing);
+  if (isCanvasColumn(page.template)) {
+    // content off the column, from before the paper was ruled, stays in the picture
+    const x0 = Math.min(0, Math.floor(r[0] / sp) * sp), y0 = Math.min(0, Math.floor(r[1] / sp) * sp);
+    const x1 = Math.max(pw, r[2]);
+    return [x0, y0, x1, paper ? y0 + ((x1 - x0) * ph) / pw : Math.max(ph, r[3] + m)];
+  }
+  const x0 = Math.floor((r[0] - m) / sp) * sp, y0 = Math.floor((r[1] - m) / sp) * sp;
+  if (!paper) return [x0, y0, r[2] + m, r[3] + m];
+  let w = Math.max(pw, r[2] + m - x0), h = Math.max(ph, r[3] + m - y0);
+  // widen or lengthen, whichever keeps the content whole, to the page's proportions
+  if (w / h > pw / ph) h = (w * ph) / pw;
+  else w = (h * pw) / ph;
+  return [x0, y0, x0 + w, y0 + h];
+}
+
+/** Names one page of one PDF asset, for `PageRenderer.pdfPages`. */
+export function pdfPageKey(p: { assetHash: string; pageIndex: number }): string {
+  return `${p.assetHash}#${p.pageIndex}`;
+}
+
 export function elementBounds(e: Element): Rect {
   if (e.type === "ink") return strokeBounds(e);
   if (e.type === "text") return textBounds(e);
@@ -104,10 +155,7 @@ export function drawText(ctx: CanvasRenderingContext2D, t: TextBlock, colorOverr
   ctx.fillStyle = color;
   ctx.strokeStyle = color;
   ctx.lineCap = "butt";
-  for (const r of p.runs) {
-    ctx.font = canvasFont(r.face, r.size);
-    ctx.fillText(r.text, t.x + r.x, t.y + r.y);
-  }
+  for (const r of p.runs) drawRun(ctx, r.face, r.size, r.text, t.x + r.x, t.y + r.y);
   for (const s of p.segments) {
     ctx.lineWidth = s.width;
     ctx.beginPath();
@@ -140,7 +188,7 @@ interface InkJob {
   cleared: boolean;
   /** A rescale: swap this canvas in when the job ends. */
   swap: HTMLCanvasElement | null;
-  /** Top-left of the canvas in doc pt; not the page origin for detail canvases. */
+  /** Top-left of the canvas in doc pt: the extent's for page layers, the region's for detail. */
   org: [number, number];
   /** A detail job: show the canvas over this region when the job ends. */
   detail: Detail | null;
@@ -179,10 +227,26 @@ export class PageRenderer {
   private tctx: CanvasRenderingContext2D;
   width = 612;
   height = 792;
+  /** Doc point at the layers' top-left corner: the origin, except on an infinite canvas. */
+  org: [number, number] = [0, 0];
+  /** Infinite canvas: the template repeats without edges, or ruled paper is a column. */
+  canvas = false;
+  /** The page's width, which a ruled canvas column keeps. */
+  pageWidth = 0;
   res = 1; // device px per pt
   template: Template = { kind: "blank", spacing: 24 };
   pdfBitmap: CanvasImageSource | null = null;
+  /** Where `pdfBitmap` goes (doc pt); null fills the layer, which is the page itself on a sheet. */
+  pdfBox: Rect | null = null;
   images = new Map<string, CanvasImageSource>();
+  /** Bitmaps of PDF page elements by `pdfPageKey`, and the resolution each was rendered at. */
+  pdfPages = new Map<string, { canvas: CanvasImageSource; res: number }>();
+  /**
+   * Drawn under every element in the ink layers. On an infinite canvas the page's own PDF
+   * background goes here, as a PDF page element, instead of into `bg`: the background layer's
+   * resolution drops as the extent grows, while this one is drawn sharp like any element.
+   */
+  underlay: Extract<Element, { type: "image" }> | null = null;
   hidden = new Set<string>();
   opts: RenderOptions = { mono: false };
   /** last full ink redraw duration (ms, flushed) */
@@ -229,15 +293,44 @@ export class PageRenderer {
     this.dtctx = ctx(this.detailText);
   }
 
-  setPage(width: number, height: number, template: Template) {
+  /**
+   * Starts drawing a page. The layers cover `width` × `height` pt from `org`; for a sheet
+   * that is the page. `canvas` draws the template the infinite canvas way, with ruled paper
+   * `pageWidth` wide.
+   */
+  setPage(width: number, height: number, template: Template, org: [number, number] = [0, 0], canvas = false, pageWidth = width) {
+    this.template = template;
+    this.canvas = canvas;
+    this.pageWidth = pageWidth;
+    this.pdfBitmap = null;
+    this.pdfBox = null;
+    this.underlay = null;
+    this.hidden.clear();
+    this.setExtent(org, width, height);
+    this.resolveIdle();
+  }
+
+  /**
+   * Moves the layers to cover `width` × `height` pt from `org`, keeping everything else.
+   * Nothing is drawn: follow with `setResolution` and `renderAll`.
+   */
+  setExtent(org: [number, number], width: number, height: number) {
+    this.org = org;
     this.width = width;
     this.height = height;
-    this.template = template;
-    this.pdfBitmap = null;
-    this.hidden.clear();
     this.cancelBands();
     this.hideDetail();
-    this.resolveIdle();
+    for (const c of [this.bg, this.ink, this.text]) {
+      c.style.left = `${org[0]}px`;
+      c.style.top = `${org[1]}px`;
+      c.style.width = `${width}px`;
+      c.style.height = `${height}px`;
+    }
+  }
+
+  /** The doc rect the layers cover. */
+  get extent(): Rect {
+    return [this.org[0], this.org[1], this.org[0] + this.width, this.org[1] + this.height];
   }
 
   /** The resolution the page is at, or is about to change to. */
@@ -260,7 +353,7 @@ export class PageRenderer {
     return true;
   }
 
-  private prep(ctx: CanvasRenderingContext2D, res = this.res, org: [number, number] = [0, 0]) {
+  private prep(ctx: CanvasRenderingContext2D, res = this.res, org: [number, number] = this.org) {
     ctx.setTransform(res, 0, 0, res, -org[0] * res, -org[1] * res);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -281,9 +374,8 @@ export class PageRenderer {
   renderInkProgressive(visible: Rect | null) {
     this.cancelBands();
     if (!visible) return this.renderInk(null);
-    const pad = 8;
-    const v: Rect = [Math.max(0, visible[0] - pad), Math.max(0, visible[1] - pad), Math.min(this.width, visible[2] + pad), Math.min(this.height, visible[3] + pad)];
-    if (v[2] <= v[0] || v[3] <= v[1] || ((v[2] - v[0]) * (v[3] - v[1])) / (this.width * this.height) > 0.85) {
+    const v = this.clampVisible(visible);
+    if (!v || ((v[2] - v[0]) * (v[3] - v[1])) / (this.width * this.height) > 0.85) {
       this.renderInk(null);
       this.lastVisibleRedrawMs = this.lastFullRedrawMs;
       return;
@@ -318,7 +410,7 @@ export class PageRenderer {
     }
     this.afterSwap = done ?? null;
     this.lastLongestSliceMs = 0;
-    this.job = this.startJob(ctx, res, this.clampVisible(visible) ?? [0, 0, this.width, this.height], off);
+    this.job = this.startJob(ctx, res, this.clampVisible(visible) ?? this.extent, off);
     this.scheduleBands();
   }
 
@@ -336,7 +428,8 @@ export class PageRenderer {
     // A margin, so that small pans need no redraw.
     const mx = (v[2] - v[0]) * 0.25;
     const my = (v[3] - v[1]) * 0.25;
-    const rect: Rect = [Math.max(0, Math.floor(v[0] - mx)), Math.max(0, Math.floor(v[1] - my)), Math.min(this.width, Math.ceil(v[2] + mx)), Math.min(this.height, Math.ceil(v[3] + my))];
+    const [ex0, ey0, ex1, ey1] = this.extent;
+    const rect: Rect = [Math.max(ex0, Math.floor(v[0] - mx)), Math.max(ey0, Math.floor(v[1] - my)), Math.min(ex1, Math.ceil(v[2] + mx)), Math.min(ey1, Math.ceil(v[3] + my))];
     const px = (rect[2] - rect[0]) * (rect[3] - rect[1]) * res * res;
     this.pendingDetail = { rect, res: px > maxPixels ? res * Math.sqrt(maxPixels / px) : res, dpr };
     if (this.job?.detail) this.job = null; // superseded
@@ -409,9 +502,10 @@ export class PageRenderer {
     this.detail = d;
     this.placeDetail();
     this.renderDetailText(null);
+    const [ox, oy] = this.org;
     const pct = (v: number, of: number) => `${(v / of) * 100}%`;
-    const [l, r] = [pct(x0, this.width), pct(x1, this.width)];
-    const [t, b] = [pct(y0, this.height), pct(y1, this.height)];
+    const [l, r] = [pct(x0 - ox, this.width), pct(x1 - ox, this.width)];
+    const [t, b] = [pct(y0 - oy, this.height), pct(y1 - oy, this.height)];
     const hole = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${l} ${t}, ${r} ${t}, ${r} ${b}, ${l} ${b}, ${l} ${t})`;
     this.ink.style.clipPath = hole;
     this.text.style.clipPath = hole;
@@ -443,7 +537,8 @@ export class PageRenderer {
   }
 
   private clampVisible(visible: Rect, pad = 8): Rect | null {
-    const v: Rect = [Math.max(0, visible[0] - pad), Math.max(0, visible[1] - pad), Math.min(this.width, visible[2] + pad), Math.min(this.height, visible[3] + pad)];
+    const [x0, y0, x1, y1] = this.extent;
+    const v: Rect = [Math.max(x0, visible[0] - pad), Math.max(y0, visible[1] - pad), Math.min(x1, visible[2] + pad), Math.min(y1, visible[3] + pad)];
     return v[2] <= v[0] || v[3] <= v[1] ? null : v;
   }
 
@@ -452,9 +547,10 @@ export class PageRenderer {
     const bandH = 160;
     const cy = (v[1] + v[3]) / 2;
     const bands: Rect[] = [];
-    for (let y = 0; y < this.height; y += bandH) {
-      const b: Rect = [0, y, this.width, Math.min(this.height, y + bandH)];
-      const fullyVisible = b[1] >= v[1] && b[3] <= v[3] && v[0] <= 0 && v[2] >= this.width;
+    const [x0, y0, x1, y1] = this.extent;
+    for (let y = y0; y < y1; y += bandH) {
+      const b: Rect = [x0, y, x1, Math.min(y1, y + bandH)];
+      const fullyVisible = b[1] >= v[1] && b[3] <= v[3] && v[0] <= x0 && v[2] >= x1;
       if (!fullyVisible) bands.push(b);
     }
     bands.sort((a, b) => Math.abs((a[1] + a[3]) / 2 - cy) - Math.abs((b[1] + b[3]) / 2 - cy));
@@ -462,11 +558,13 @@ export class PageRenderer {
   }
 
   private startJob(ctx: CanvasRenderingContext2D, res: number, rect: Rect, swap: HTMLCanvasElement | null): InkJob {
-    return { ctx, res, rect, items: this.itemsIn(rect), next: 0, tail: [], cleared: false, swap, org: [0, 0], detail: null };
+    return { ctx, res, rect, items: this.itemsIn(rect), next: 0, tail: [], cleared: false, swap, org: this.org, detail: null };
   }
 
   private itemsIn(rect: Rect): Element[] {
-    return this.elements().filter((e) => e.type !== "text" && !this.hidden.has(e.id) && rectsIntersect(rect, elementBounds(e)));
+    const items = this.elements().filter((e) => e.type !== "text" && !this.hidden.has(e.id) && rectsIntersect(rect, elementBounds(e)));
+    const u = this.underlay;
+    return u && rectsIntersect(rect, elementBounds(u)) ? [u, ...items] : items;
   }
 
   private drawItem(ctx: CanvasRenderingContext2D, e: Element) {
@@ -500,7 +598,7 @@ export class PageRenderer {
     c.save();
     c.beginPath();
     c.rect(0, 0, off.width, off.height);
-    c.rect(job.rect[0] * r, job.rect[1] * r, (job.rect[2] - job.rect[0]) * r, (job.rect[3] - job.rect[1]) * r);
+    c.rect((job.rect[0] - job.org[0]) * r, (job.rect[1] - job.org[1]) * r, (job.rect[2] - job.rect[0]) * r, (job.rect[3] - job.rect[1]) * r);
     c.clip("evenodd");
     c.drawImage(this.ink, 0, 0, off.width, off.height);
     c.restore();
@@ -587,13 +685,18 @@ export class PageRenderer {
     c.fillRect(0, 0, this.bg.width, this.bg.height);
     if (this.pdfBitmap) {
       c.imageSmoothingQuality = "high";
-      c.drawImage(this.pdfBitmap, 0, 0, this.bg.width, this.bg.height);
+      const b = this.pdfBox;
+      const [ox, oy] = this.org;
+      const r = this.bg.width / this.width;
+      if (b) c.drawImage(this.pdfBitmap, (b[0] - ox) * r, (b[1] - oy) * r, (b[2] - b[0]) * r, (b[3] - b[1]) * r);
+      else c.drawImage(this.pdfBitmap, 0, 0, this.bg.width, this.bg.height);
     }
     this.prep(c);
-    drawTemplate(c, this.template, this.width, this.height, this.opts.mono);
+    if (this.canvas) drawCanvasTemplate(c, this.template, this.extent, this.res, this.opts.mono, this.pageWidth);
+    else drawTemplate(c, this.template, this.width, this.height, this.opts.mono);
   }
 
-  private clip(ctx: CanvasRenderingContext2D, rect: Rect | null, res = this.res, clear = true, org: [number, number] = [0, 0]) {
+  private clip(ctx: CanvasRenderingContext2D, rect: Rect | null, res = this.res, clear = true, org: [number, number] = this.org) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     if (!rect) {
       ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -625,6 +728,7 @@ export class PageRenderer {
     const t0 = performance.now();
     const ctx = this.ictx;
     this.clip(ctx, rect);
+    if (this.underlay && (!rect || rectsIntersect(rect, elementBounds(this.underlay)))) this.drawItem(ctx, this.underlay);
     for (const e of this.elements()) {
       if (e.type === "text" || this.hidden.has(e.id)) continue;
       if (rect && !rectsIntersect(rect, elementBounds(e))) continue;
@@ -664,6 +768,22 @@ export class PageRenderer {
   }
 
   private drawImageEl(ctx: CanvasRenderingContext2D, e: Extract<Element, { type: "image" }>) {
+    if (e.pdfPage) {
+      const pdf = this.pdfPages.get(pdfPageKey(e.pdfPage));
+      // a PDF page is paper: white until its bitmap is ready, never a dashed hole
+      ctx.save();
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(e.x, e.y, e.width, e.height);
+      if (pdf) {
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(pdf.canvas, e.x, e.y, e.width, e.height);
+      }
+      ctx.strokeStyle = "#d4d4d8";
+      ctx.lineWidth = 0.75;
+      ctx.strokeRect(e.x, e.y, e.width, e.height);
+      ctx.restore();
+      return;
+    }
     const img = this.images.get(e.assetHash);
     if (img) ctx.drawImage(img, e.x, e.y, e.width, e.height);
     else {
@@ -682,7 +802,7 @@ export class PageRenderer {
   async loadImages(elements: Element[], read: (hash: string) => Promise<Uint8Array>): Promise<boolean> {
     let added = false;
     for (const e of elements) {
-      if (e.type !== "image" || this.images.has(e.assetHash)) continue;
+      if (e.type !== "image" || e.pdfPage || this.images.has(e.assetHash)) continue;
       try {
         const bytes = await read(e.assetHash);
         this.images.set(e.assetHash, await createImageBitmap(new Blob([bytes as BlobPart])));

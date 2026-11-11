@@ -25,6 +25,7 @@ fn text(z: i64, s: &str) -> Element {
         font_size: 14.0,
         color: "#1d4ed8".into(),
         align: TextAlign::Left,
+        font: Default::default(),
         row_pitch: None,
         extra: Default::default(),
     })
@@ -636,4 +637,118 @@ fn legacy_json_archives_and_snapshots_still_load() {
     other.flush_all().unwrap();
     assert!(pages.join(format!("{}.prp", page.id)).exists());
     assert!(!pages.join(format!("{}.json", page.id)).exists());
+}
+
+#[test]
+fn infinite_canvas_setting_survives_a_reopen() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("library");
+    let mut lib = Library::open(&root).unwrap();
+    let (nb, _) = lib
+        .create_notebook("Canvas", PageDefaults::default(), None)
+        .unwrap();
+    assert!(!nb.infinite_canvas);
+    assert!(
+        lib.set_infinite_canvas(nb.id, true)
+            .unwrap()
+            .infinite_canvas
+    );
+    // setting it again changes nothing and journals nothing
+    let seq = lib.last_seq();
+    lib.set_infinite_canvas(nb.id, true).unwrap();
+    assert_eq!(lib.last_seq(), seq);
+    lib.crash_for_tests();
+    let mut lib = Library::open(&root).unwrap();
+    assert!(lib.notebook(nb.id).unwrap().infinite_canvas);
+    assert!(
+        !lib.set_infinite_canvas(nb.id, false)
+            .unwrap()
+            .infinite_canvas
+    );
+}
+
+#[test]
+fn collapsing_pages_stacks_them_on_the_first_page() {
+    let (_d, mut lib) = new_lib();
+    let (nb, first) = lib
+        .create_notebook("Pages", PageDefaults::default(), None)
+        .unwrap();
+    let asset = sample_pdf_hash_asset(&mut lib, nb.id);
+    let bg = PdfBackgroundRef {
+        asset_hash: asset.sha256.clone(),
+        page_index: 0,
+        media_box: [0.0, 0.0, 300.0, 400.0],
+        crop_box: [0.0, 0.0, 300.0, 400.0],
+        rotation: 0,
+    };
+    let (_, pages) = lib
+        .create_pages(
+            nb.id,
+            None,
+            vec![
+                (
+                    Paper::Letter,
+                    Size {
+                        width: 612.0,
+                        height: 792.0,
+                    },
+                    Template::default(),
+                    None,
+                ),
+                (
+                    Paper::Pdf,
+                    bg.display_size(),
+                    Template::default(),
+                    Some(bg.clone()),
+                ),
+            ],
+        )
+        .unwrap();
+    lib.apply_page_operations(nb.id, first.id, &add(first.revision, vec![text(1, "one")]))
+        .unwrap();
+    lib.apply_page_operations(nb.id, pages[0].id, &add(0, vec![text(1, "two")]))
+        .unwrap();
+    lib.apply_page_operations(nb.id, pages[1].id, &add(0, vec![text(1, "three")]))
+        .unwrap();
+
+    let (nb2, page) = lib.collapse_pages_into_canvas(nb.id).unwrap();
+    assert_eq!(nb2.page_order, vec![first.id]);
+    assert_eq!(nb2.trashed_pages.len(), 2);
+
+    let texts: Vec<&TextBlock> = page
+        .elements
+        .iter()
+        .filter_map(|e| match e {
+            Element::Text(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    let y = |s: &str| texts.iter().find(|t| t.text == s).unwrap().y;
+    // each page lands below the one before, on a whole row of the paper
+    assert_eq!(y("one"), 200.25);
+    let gap = 792.0 + CANVAS_PAGE_GAP_PT;
+    let row = |v: f64| (v / 24.0).ceil() * 24.0;
+    assert_eq!(y("two") - 200.25, row(gap));
+    assert_eq!(y("three") - 200.25, row(row(gap) + gap));
+    // the PDF page came along under the third page's content
+    let pdf = page
+        .elements
+        .iter()
+        .find_map(|e| match e {
+            Element::Image(i) if i.pdf_page.is_some() => Some(i),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(pdf.pdf_page.as_ref(), Some(&bg));
+    assert_eq!(
+        (pdf.y, pdf.width, pdf.height),
+        (row(row(gap) + gap), 300.0, 400.0)
+    );
+    assert!(page
+        .elements
+        .iter()
+        .all(|e| e.z() > pdf.z || e.id() == pdf.id));
+    // the trashed pages still have their content
+    lib.restore_page(nb.id, pages[0].id).unwrap();
+    assert_eq!(lib.load_page(nb.id, pages[0].id).unwrap().elements.len(), 1);
 }

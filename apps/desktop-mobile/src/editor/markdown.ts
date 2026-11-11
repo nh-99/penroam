@@ -7,11 +7,15 @@
 //
 // markdown-it stands in for pulldown-cmark. The tree it builds here matches the
 // Rust one: soft breaks are line breaks, HTML is literal text, images show their
-// alt text, and containers past MAX_DEPTH are flattened.
+// alt text, and containers past MAX_DEPTH are flattened. Table cells are spreadsheet cells
+// (sheet.ts): formulas show their results and `[ ]` / `[x]` cells are checkboxes, both read
+// from the cell's source rather than its inlines.
 import MarkdownIt from "markdown-it";
 import type Token from "markdown-it/lib/token.mjs";
 import type { TextAlign } from "../generated/TextAlign";
-import { advanceIn, firstBaseline, lineHeight, metrics, MONO_SCALE, type Face } from "./textLayout";
+import type { TextFont } from "../generated/TextFont";
+import { checkbox, evaluate, unstyle } from "./sheet";
+import { advanceIn, ascentOf, descentOf, firstBaseline, isHand, lineHeight, metrics, MONO_SCALE, styledFace, type Face } from "./textLayout";
 
 export const MAX_DEPTH = 16;
 
@@ -20,6 +24,21 @@ const SLOT_LAST = 0xffffd;
 export const HEADING_SCALE = [1.75, 1.5, 1.25, 1.1, 1, 0.9];
 const ROW_FRAME_DROP = 0.22;
 const STROKE_EM = 0.06;
+/**
+ * A sketched checkbox for handwritten text, as polylines in the box's unit
+ * square (y down). The sides bow a little and overshoot their corners, as a
+ * square drawn in four strokes does. Must match `HAND_BOX` in markdown.rs.
+ */
+const HAND_BOX: readonly (readonly [number, number])[][] = [
+  [[-0.05, 0.04], [0.5, -0.03], [1.04, 0.01]],
+  [[0.97, -0.06], [1.02, 0.48], [0.98, 1.05]],
+  [[1.04, 0.98], [0.48, 1.03], [-0.03, 0.96]],
+  [[0.02, 1.04], [-0.02, 0.52], [0.03, -0.05]],
+];
+/** How much heavier a sketched checkbox's strokes are, to match the handwritten letters. */
+const HAND_WEIGHT = 1.5;
+/** The tick of a sketched checkbox: down, then a flick past the top right corner. */
+const HAND_TICK: readonly (readonly [number, number])[] = [[0.12, 0.5], [0.38, 0.84], [0.66, 0.36], [1.14, -0.2]];
 
 export interface MathSpan {
   tex: string;
@@ -208,7 +227,12 @@ export function extractMath(src: string): { source: string; spans: MathSpan[] } 
 
 const BOLD = 1, ITALIC = 2, MONO = 4, STRIKE = 8, UNDERLINE = 16;
 
-type Inline = { kind: "text"; text: string; flags: number; href?: string } | { kind: "break" } | { kind: "math"; index: number };
+type Inline =
+  | { kind: "text"; text: string; flags: number; href?: string }
+  | { kind: "break" }
+  | { kind: "math"; index: number }
+  /** A spreadsheet checkbox, the whole of its table cell; `at` as in [`TaskBox`]. */
+  | { kind: "check"; done: boolean; at: number | null };
 interface Item {
   task: boolean | null;
   /** Offset of the task marker's `[` in the block's text, if it could be found. */
@@ -311,6 +335,21 @@ class Builder {
     }
     this.lines.push(source.slice(start));
     this.lineStarts.push(start);
+  }
+
+  /** Where the `[` of the checkbox in cell `cell` of the table row on source line `line` is in the block's text. */
+  private cellBoxOffset(line: number, cell: number): number | null {
+    const text = this.lines[line];
+    if (text === undefined) return null;
+    // GFM splits rows at pipes that aren't escaped, code spans included
+    let i = /^[ \t]*\|?/.exec(text)![0].length;
+    for (let n = 0; n < cell && i < text.length; i++) {
+      if (text[i] === "\\") i++;
+      else if (text[i] === "|") n++;
+    }
+    while (text[i] === " " || text[i] === "\t") i++;
+    const at = originalOffset(this.text, this.source, this.spans, this.lineStarts[line] + i);
+    return /^\[[ xX]\]$/.test(this.text.slice(at, at + 3)) ? at : null;
   }
 
   /** Where the task marker on source line `line` is in the block's text. */
@@ -507,18 +546,36 @@ class Builder {
         case "table_open": {
           const aligns: TextAlign[] = [];
           const rows: Inline[][][] = [];
+          const raws: string[][] = [];
+          const lines: number[] = [];
           let row: Inline[][] = [];
+          let raw: string[] = [];
           for (i++; tokens[i].type !== "table_close"; i++) {
             const c = tokens[i];
             if (c.type === "th_open" && rows.length === 0) {
               const style = c.attrGet("style") ?? "";
               aligns.push(style.includes("center") ? "center" : style.includes("right") ? "right" : "left");
-            } else if (c.type === "inline") row.push(this.inline(c));
-            else if (c.type === "tr_close") {
+            } else if (c.type === "tr_open") lines.push(c.map?.[0] ?? -1);
+            else if (c.type === "inline") {
+              row.push(this.inline(c));
+              // markdown-it's content is the cell trimmed, with `\|` unescaped: what penroam-core reads
+              raw.push(this.restore(c.content));
+            } else if (c.type === "tr_close") {
               rows.push(row);
+              raws.push(raw);
               row = [];
+              raw = [];
             }
           }
+          evaluate(raws).forEach((results, r) =>
+            results.forEach((result, c) => {
+              const done = result === null ? checkbox(raws[r][c]) : null;
+              const s = unstyle(raws[r][c]).style;
+              const flags = (s.bold ? BOLD : 0) | (s.italic ? ITALIC : 0) | (s.strike ? STRIKE : 0);
+              if (result !== null) rows[r][c] = [{ kind: "text", text: result, flags }];
+              else if (done !== null) rows[r][c] = [{ kind: "check", done, at: this.cellBoxOffset(lines[r], c) }];
+            }),
+          );
           this.blocks().push({ kind: "table", aligns, rows });
           break;
         }
@@ -528,14 +585,10 @@ class Builder {
   }
 }
 
-const faceOf = (flags: number): Face => {
-  if (flags & MONO) return "mono";
-  const b = flags & BOLD, i = flags & ITALIC;
-  return b && i ? "boldItalic" : b ? "bold" : i ? "italic" : "regular";
-};
+const faceOf = (font: TextFont, flags: number, c: string): Face => styledFace(font, !!(flags & BOLD), !!(flags & ITALIC), !!(flags & MONO), c);
 
 type Atom =
-  | { kind: "char"; c: string; flags: number; size: number; width: number; href?: string }
+  | { kind: "char"; c: string; flags: number; face: Face; size: number; width: number; href?: string }
   | { kind: "math"; index: number; size: number; width: number; height: number; depth: number };
 
 const atomIsSpace = (a: Atom) => a.kind === "char" && a.c === " ";
@@ -547,22 +600,17 @@ const sum = (atoms: Atom[], from: number, to: number) => {
   return w;
 };
 
-function charAtom(c: string, flags: number, size: number, href?: string): Atom {
-  const s = flags & MONO ? size * MONO_SCALE : size;
-  const a: Atom = { kind: "char", c, flags, size: s, width: (advanceIn(faceOf(flags), c) * s) / metrics.unitsPerEm };
-  if (href !== undefined) a.href = href;
-  return a;
-}
 
 class Layout {
   y = 0;
   listDepth = 0;
-  marker: { x: number; text: string | null; task: boolean | null; at: number | null } | null = null;
+  marker: { x: number; face: Face; text: string | null; task: boolean | null; at: number | null } | null = null;
   paint: Paint = { height: 0, bottom: 0, runs: [], segments: [], math: [] };
   links: LinkBox[] = [];
   tasks: TaskBox[] = [];
 
   constructor(
+    private font: TextFont,
     private fs: number,
     private row: number | null,
     private align: TextAlign,
@@ -579,12 +627,27 @@ class Layout {
   segment(x0: number, y0: number, x1: number, y1: number, width: number) {
     this.paint.segments.push({ x0: round6(x0), y0: round6(y0), x1: round6(x1), y1: round6(y1), width: round6(width) });
   }
+  /** Strokes `points`, given in a unit square, scaled to `side` at `(x, y)`. */
+  polyline(x: number, y: number, side: number, points: readonly (readonly [number, number])[], width: number) {
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i];
+      this.segment(x + side * a[0], y + side * a[1], x + side * b[0], y + side * b[1], width);
+    }
+  }
   run(x: number, y: number, face: Face, size: number, text: string) {
     this.paint.runs.push({ x: round6(x), y: round6(y), face, size: round6(size), text });
   }
 
+  charAtom(c: string, flags: number, size: number, href?: string): Atom {
+    const s = flags & MONO ? size * MONO_SCALE : size;
+    const face = faceOf(this.font, flags, c);
+    const a: Atom = { kind: "char", c, flags, face, size: s, width: (advanceIn(face, c) * s) / metrics.unitsPerEm };
+    if (href !== undefined) a.href = href;
+    return a;
+  }
+
   sourceAtoms(index: number, size: number, out: Atom[]) {
-    for (const c of this.spans[index].source) out.push(charAtom(c === "\n" ? " " : c, MONO, size));
+    for (const c of this.spans[index].source) out.push(this.charAtom(c === "\n" ? " " : c, MONO, size));
   }
 
   mathAtom(index: number, size0: number, avail: number, out: Atom[]) {
@@ -641,11 +704,11 @@ class Layout {
       let text = "";
       for (; i < atoms.length; i++) {
         const b = atoms[i];
-        if (b.kind !== "char" || b.flags !== a.flags || b.size !== a.size) break;
+        if (b.kind !== "char" || b.flags !== a.flags || b.face !== a.face || b.size !== a.size) break;
         text += b.c === "\t" ? "    " : b.c;
         cx += b.width;
       }
-      this.run(start, baseline, faceOf(a.flags), a.size, text);
+      this.run(start, baseline, a.face, a.size, text);
       const weight = STROKE_EM * a.size;
       if (a.flags & UNDERLINE) {
         const y = baseline + 0.12 * a.size;
@@ -659,24 +722,29 @@ class Layout {
     const mk = this.marker;
     if (mk) {
       this.marker = null;
-      if (mk.text !== null) this.run(mk.x, baseline, "regular", this.fs, mk.text);
+      if (mk.text !== null) this.run(mk.x, baseline, mk.face, this.fs, mk.text);
       if (mk.task !== null) {
         const side = 0.68 * this.fs;
         const x0 = mk.x, y0 = baseline - side, x1 = mk.x + side, y1 = baseline;
         const w = STROKE_EM * this.fs;
         if (mk.at !== null) this.tasks.push({ x0, y0, x1, y1, at: mk.at, done: mk.task });
-        this.segment(x0, y0, x1, y0, w);
-        this.segment(x1, y0, x1, y1, w);
-        this.segment(x1, y1, x0, y1, w);
-        this.segment(x0, y1, x0, y0, w);
-        if (mk.task) {
-          const mx = x0 + side * 0.4, my = y1 - side * 0.2;
-          this.segment(x0 + side * 0.18, y1 - side * 0.5, mx, my, w * 1.4);
-          this.segment(mx, my, x1 - side * 0.14, y0 + side * 0.2, w * 1.4);
+        if (this.font === "handwritten") {
+          for (const line of HAND_BOX) this.polyline(x0, y0, side, line, w * HAND_WEIGHT);
+          if (mk.task) this.polyline(x0, y0, side, HAND_TICK, w * 1.4 * HAND_WEIGHT);
+        } else {
+          this.segment(x0, y0, x1, y0, w);
+          this.segment(x1, y0, x1, y1, w);
+          this.segment(x1, y1, x0, y1, w);
+          this.segment(x0, y1, x0, y0, w);
+          if (mk.task) {
+            const mx = x0 + side * 0.4, my = y1 - side * 0.2;
+            this.segment(x0 + side * 0.18, y1 - side * 0.5, mx, my, w * 1.4);
+            this.segment(mx, my, x1 - side * 0.14, y0 + side * 0.2, w * 1.4);
+          }
         }
       }
     }
-    const bottom = baseline + Math.max((-metrics.descent * size) / metrics.unitsPerEm, deep);
+    const bottom = baseline + Math.max((-descentOf(this.font) * size) / metrics.unitsPerEm, deep);
     this.paint.bottom = Math.max(this.paint.bottom, round6(bottom));
     this.y += advance;
   }
@@ -689,8 +757,8 @@ class Layout {
       const href = a.kind === "char" ? a.href : undefined;
       if (open && open.href !== href) open = null;
       if (href !== undefined && a.kind === "char") {
-        const up = baseline - (metrics.ascent * a.size) / metrics.unitsPerEm;
-        const down = baseline - (metrics.descent * a.size) / metrics.unitsPerEm;
+        const up = baseline - (ascentOf(this.font) * a.size) / metrics.unitsPerEm;
+        const down = baseline - (descentOf(this.font) * a.size) / metrics.unitsPerEm;
         if (!open) {
           open = { x0: cx, y0: up, x1: cx, y1: down, href };
           this.links.push(open);
@@ -737,8 +805,10 @@ class Layout {
     let placed = false;
     let afterDisplay = false;
     inlines.forEach((item, i) => {
+      // a checkbox is only ever a whole table cell, which `table` draws itself
+      if (item.kind === "check") return;
       if (item.kind === "text") {
-        for (const c of item.text) line.push(charAtom(c, item.flags | extra, size, item.href));
+        for (const c of item.text) line.push(this.charAtom(c, item.flags | extra, size, item.href));
         afterDisplay = false;
       } else if (item.kind === "break") {
         const next = inlines[i + 1];
@@ -785,7 +855,7 @@ class Layout {
         const pad = 0.4 * this.fs;
         const top = this.y + this.drop();
         for (const line of b.text.split("\n")) {
-          const atoms = Array.from(line, (c) => charAtom(c, MONO, this.fs));
+          const atoms = Array.from(line, (c) => this.charAtom(c, MONO, this.fs));
           this.wrap(atoms, x + pad, avail - 2 * pad, "left", this.fs * MONO_SCALE);
         }
         const bottom = this.y + this.drop();
@@ -821,13 +891,15 @@ class Layout {
         b.items.forEach((item, i) => {
           if (i > 0 && !b.tight) this.y += this.gap();
           const label = item.task !== null ? null : b.start !== null ? `${b.start + i}.` : this.listDepth % 2 === 1 ? "•" : "–";
+          // the whole label in one face: "10." never mixes fonts
+          const face: Face = label !== null && Array.from(label).every((c) => isHand(faceOf(this.font, 0, c))) ? "hand" : "regular";
           let w = 0.68 * this.fs;
           if (label !== null) {
             w = 0;
-            for (const c of label) w += advanceIn("regular", c);
+            for (const c of label) w += advanceIn(face, c);
             w = (w * this.fs) / metrics.unitsPerEm;
           }
-          this.marker = { x: Math.max(x, x + gutter - 0.4 * this.fs - w), text: label, task: item.task, at: item.taskAt };
+          this.marker = { x: Math.max(x, x + gutter - 0.4 * this.fs - w), face, text: label, task: item.task, at: item.taskAt };
           this.blocks(item.blocks, x + gutter, avail - gutter, !b.tight);
           if (this.marker) this.place([], x + gutter, avail - gutter, "left", this.fs);
         });
@@ -863,7 +935,17 @@ class Layout {
       let cx = x;
       for (let c = 0; c < columns; c++) {
         this.y = start;
-        this.flow(row[c] ?? [], cx + pad, widths[c] - 2 * pad, aligns[c] ?? "left", this.fs, r === 0 ? BOLD : 0);
+        const cell = row[c] ?? [];
+        const align = aligns[c] ?? "left";
+        const inner = widths[c] - 2 * pad;
+        const box = cell.length === 1 && cell[0].kind === "check" ? cell[0] : null;
+        if (box) {
+          // the checkbox is a list marker on the cell's one empty line
+          const side = 0.68 * this.fs;
+          const dx = align === "center" ? (inner - side) / 2 : align === "right" ? inner - side : 0;
+          this.marker = { x: cx + pad + Math.max(dx, 0), face: "regular", text: null, task: box.done, at: box.at };
+        }
+        this.flow(cell, cx + pad, inner, align, this.fs, r === 0 ? BOLD : 0);
         end = Math.max(end, this.y);
         cx += widths[c];
       }
@@ -884,8 +966,9 @@ class Layout {
     let best = 0, line = 0;
     for (const item of cell) {
       const atoms: Atom[] = [];
-      if (item.kind === "text") for (const c of item.text) atoms.push(charAtom(c, item.flags | extra, this.fs));
+      if (item.kind === "text") for (const c of item.text) atoms.push(this.charAtom(c, item.flags | extra, this.fs));
       else if (item.kind === "math") this.mathAtom(item.index, this.fs, Infinity, atoms);
+      else if (item.kind === "check") line += 0.68 * this.fs;
       else {
         best = Math.max(best, line);
         line = 0;
@@ -896,14 +979,23 @@ class Layout {
   }
 }
 
-/** Lays Markdown out. `rowPitch` locks lines to rows; `lookup` sizes formulas. */
-export function layoutMarkdown(text: string, fontSize: number, boxWidth: number, rowPitch: number | null, align: TextAlign, lookup: MathLookup): Paint {
-  return layoutMarkdownWithTargets(text, fontSize, boxWidth, rowPitch, align, lookup).paint;
+/** Lays Markdown out in `font`. `rowPitch` locks lines to rows; `lookup` sizes formulas. */
+export function layoutMarkdown(
+  text: string,
+  font: TextFont,
+  fontSize: number,
+  boxWidth: number,
+  rowPitch: number | null,
+  align: TextAlign,
+  lookup: MathLookup,
+): Paint {
+  return layoutMarkdownWithTargets(text, font, fontSize, boxWidth, rowPitch, align, lookup).paint;
 }
 
 /** [`layoutMarkdown`], plus where the things a tap can act on landed: links and checkboxes. */
 export function layoutMarkdownWithTargets(
   text: string,
+  font: TextFont,
   fontSize: number,
   boxWidth: number,
   rowPitch: number | null,
@@ -912,7 +1004,7 @@ export function layoutMarkdownWithTargets(
 ): { paint: Paint; links: LinkBox[]; tasks: TaskBox[] } {
   const { source, spans } = extractMath(text);
   const blocks = new Builder(spans, source, text).build(md.parse(source, {}));
-  const l = new Layout(fontSize, rowPitch, align, spans, lookup);
+  const l = new Layout(font, fontSize, rowPitch, align, spans, lookup);
   l.blocks(blocks, 0, boxWidth, true);
   if (!blocks.length) l.place([], 0, boxWidth, align, fontSize);
   l.paint.height = round6(l.y);

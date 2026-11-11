@@ -86,14 +86,24 @@ purchases need a TestFlight build.
 cd apps/desktop-mobile
 pnpm tauri ios init
 # gen/apple is not checked in and starts with Tauri's default icon; install ours
-cp src-tauri/icons/ios/*.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
+rm -rf src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset
+cp -R src-tauri/icons/ios src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset
 pnpm tauri ios dev --open           # set the signing team in Xcode
 pnpm tauri ios build --export-method debugging
 ```
 
-Repeat the icon copy whenever `gen/apple` is regenerated. `AppIcon-512@2x.png` is the 1024 px App
-Store icon and must stay opaque RGB with no alpha channel, because App Store validation rejects
-any alpha.
+Repeat the icon copy whenever `gen/apple` is regenerated. `src-tauri/icons/ios/` is a single-size
+asset catalog: Xcode derives every size from the three 1024 px images its `Contents.json` names.
+
+* `AppIcon-1024.png` is the light icon and the App Store icon. It must stay opaque RGB with no
+  alpha channel, because App Store validation rejects any alpha.
+* `AppIcon-1024-dark.png` is the iOS 18 dark icon. It keeps a transparent background, because
+  the system draws the dark backdrop behind it.
+* `AppIcon-1024-tinted.png` is the tinted icon: opaque grayscale on black, which the system
+  colours with the user's tint.
+
+All three come from `tools/icons/make-icons.py`. Don't run `tauri icon` on its own, because it
+overwrites this folder with light-only RGBA images.
 
 ## Hover
 

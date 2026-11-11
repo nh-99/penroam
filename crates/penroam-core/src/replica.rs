@@ -28,6 +28,8 @@
 //!   registers too, and so is the folder a notebook is filed in. Concurrent
 //!   writes to those show the highest operation id and raise no conflict: a
 //!   folder's name isn't worth interrupting anyone for.
+//! * Whether a notebook shows infinite canvases is a register that raises no
+//!   conflict either: it only changes how the pages are shown.
 
 use crate::folder::{Folder, FolderSet};
 use crate::model::*;
@@ -148,6 +150,8 @@ struct NotebookState {
     purges: HashSet<OperationId>,
     /// The folder it's filed in; `None` until it is first filed.
     folder: Option<Register<Option<Uuid>>>,
+    /// Infinite canvases on or off; `None` until first set.
+    canvas: Option<Register<bool>>,
 }
 
 #[derive(Debug, Clone)]
@@ -511,6 +515,7 @@ impl Replica {
             }
             NotebookRenamed { .. }
             | NotebookFiled { .. }
+            | NotebookCanvasSet { .. }
             | NotebookCoverChanged { .. }
             | NotebookDeleted { .. }
             | NotebookRestored { .. }
@@ -553,6 +558,7 @@ impl Replica {
                     deleted_at: HashMap::new(),
                     purges: HashSet::new(),
                     folder: None,
+                    canvas: None,
                 });
             }
             NotebookFiled { folder, .. } => {
@@ -560,6 +566,13 @@ impl Replica {
                 match nb.folder.as_mut() {
                     Some(r) => r.write(w.of(*folder)),
                     None => nb.folder = Some(Register::new(w.of(*folder))),
+                }
+            }
+            NotebookCanvasSet { infinite, .. } => {
+                let nb = self.nb();
+                match nb.canvas.as_mut() {
+                    Some(r) => r.write(w.of(*infinite)),
+                    None => nb.canvas = Some(Register::new(w.of(*infinite))),
                 }
             }
             FolderCreated {
@@ -794,6 +807,7 @@ impl Replica {
         }
         nb.assets = self.assets.values().cloned().collect();
         nb.folder = s.folder.as_ref().and_then(|r| r.winner().value);
+        nb.infinite_canvas = s.canvas.as_ref().is_some_and(|r| r.winner().value);
         Some(nb)
     }
 

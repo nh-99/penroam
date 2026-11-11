@@ -12,8 +12,9 @@
 //!   with conflicts kept as alternates.
 //! * [`order_key`]: fractional keys that make page order converge.
 //! * [`validate`], [`migrate`]: hostile-input limits and schema migrations.
-//! * [`geometry`], [`text`]: brush geometry and text layout shared with the
-//!   renderer and the PDF exporter.
+//! * [`geometry`], [`text`], [`markdown`]: brush geometry and text layout
+//!   shared with the renderer and the PDF exporter.
+//! * [`sheet`]: spreadsheet values and formulas in Markdown tables.
 //!
 //! Architecture overview: `docs/architecture/overview.md`.
 
@@ -29,6 +30,7 @@ pub mod operation;
 pub mod ops;
 pub mod order_key;
 pub mod replica;
+pub mod sheet;
 pub mod text;
 pub mod validate;
 

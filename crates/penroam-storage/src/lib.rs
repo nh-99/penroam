@@ -44,5 +44,5 @@ pub use error::{ErrorCode, Result, StorageError};
 pub use history::{HistoryPoint, HistoryRetention, HistoryStats, NotebookRestore};
 pub use library::{
     sha256_hex, ApplyOutcome, Library, NewAsset, NewPage, NotebookSummary, OutboxStatus,
-    RecoveryReport,
+    RecoveryReport, CANVAS_PAGE_GAP_PT,
 };

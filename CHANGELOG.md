@@ -3,6 +3,49 @@
 User-visible changes for each release. The release workflow copies a version's section into its
 release notes and stops if the version has no entry.
 
+## 0.1.0-beta.7
+
+* New: infinite canvases. A canvas is a page with no edges: write, type and pan in any direction
+  and it grows with you, on blank, grid or dotted paper. Ruled paper keeps the page's width,
+  header and margin line and goes on downward for as long as you write. Tick **Infinite canvas**
+  when you create a notebook, or use **Page template → Infinite canvas** to switch a notebook
+  either way. Turning it off shows the pages as sheets again without changing anything on them.
+* A canvas notebook can still have several pages, each a canvas of its own. The page sidebar
+  starts closed there. When you turn the canvas on for a notebook with several pages, you can keep
+  them or combine them onto one canvas, one below the other; the emptied pages go to the
+  notebook's trash.
+* On a canvas, **Import PDF onto this canvas** puts a whole PDF on the open page, below what's
+  already there. Its text is searchable, and **Undo** takes it off again.
+* Annotated PDF export and printing lay a canvas out on pages of the notebook's paper size,
+  breaking between lines where they can; on ruled paper only the first page has the header. PNG
+  and SVG export give one picture of the whole canvas.
+* Devices still on an older version show canvas notebooks as ordinary pages, and ask to be updated
+  once a notebook is switched to or from a canvas.
+* New: spreadsheets in notes. A table in a text box becomes a grid while you edit: type into
+  cells, move with `Tab`, `Enter` and the arrow keys, fill down with `Ctrl+D`, and copy and paste
+  blocks of cells to and from other spreadsheet apps. Tables keep the box's font, so handwritten
+  tables stay handwritten, and they are still saved as ordinary Markdown tables.
+* Cells starting with `=` are formulas (`=B2*C2`, `=SUM(B2:B5)`, with `AVERAGE`, `MIN`, `MAX`,
+  `COUNT`, `PRODUCT`, `ROUND` and `ABS`), and the page and PDF exports show their results. Click a
+  cell while writing a formula to put in its reference. `[ ]` and `[x]` cells are checkboxes you
+  can tick in the grid or on the page.
+* Numbers can be money (`$9.99`, `$ 9.99`, `9.99 €`, `($9.99)` for a negative amount, in `$`,
+  `€`, `£` or `¥`), percentages or plain numbers with thousands separators, and dates are
+  `2026-11-10` or `11/10/2026`.
+* Each column header has a hand-drawn sort arrow: tap it to sort by that column, and again to sort
+  the other way. Sorting understands numbers, money, dates and checkboxes, and keeps a totals row
+  in place. The menu next to the arrow aligns, formats, inserts and deletes columns, and the
+  filter row hides rows by text, numbers, dates or checkboxes while you work.
+* The bar above a table formats the selected cells: bold, italic, strikethrough, currency,
+  percentage, thousands separators, decimals and alignment. The main toolbar's bold, italic and
+  strikethrough buttons format cells too, and a bold number still counts as a number.
+* Devices still on an older version show a table's formulas as written, not their results.
+* New: handwritten text. Text boxes can use a handwritten font (Excalifont) or the formatted font
+  used until now, picked with the two **Aa** buttons in the toolbar for new text or for selected
+  text boxes. New text is handwritten by default; existing text stays formatted. Bullets,
+  numbered lists, checkboxes (sketched by hand in handwritten text), links, bold and italic all
+  work in both, and PDF and SVG exports include the handwritten font. Older versions show handwritten text in the formatted font.
+
 ## 0.1.0-beta.6
 
 0.1.0-beta.5 reached TestFlight and Google Play testing but never got a GitHub release, so if you

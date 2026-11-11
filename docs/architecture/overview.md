@@ -182,6 +182,20 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   redraw; the backing resolution is re-rendered once a zoom settles (160 ms), capped by pixel
   area (16 Mpx desktop, 8 Mpx mobile — WebKit's iOS canvas limit). Erase/undo/move redraw only
   the dirty rectangle; a new stroke is appended incrementally.
+* **Infinite canvas** (`Notebook.infiniteCanvas`): the same layers cover an *extent* of the
+  unbounded page instead of the sheet: the content and the view with half a view's margin,
+  snapped to 512 pt. When a pan or zoom settles outside it, the extent grows, or becomes a
+  window around the view when growing would pass the pixel budget at the lowest backing scale,
+  so memory stays bounded however far a canvas reaches. Panning is unconstrained and fit fits the
+  content. On ruled paper the canvas is a column the page's width, with the sheet's header and
+  margin line: the extent spans that width and grows only downward, the view is kept on the
+  column to a page's length past its content, and text is placed and sized as on a sheet. PDF pages on a canvas are image elements with `pdfPage`, rendered by PDF.js sharp
+  near the view and at a low resolution elsewhere. Exports cut a canvas page to a sheet around its
+  content (`Page::canvas_as_sheet`), which PDF export and printing split into paper-shaped
+  pages at gaps in the content (`Page::canvas_as_sheets`); the PDF exporter draws `pdfPage` elements from their source
+  page as form XObjects, so they stay vector. Combining a notebook's pages onto one canvas
+  (`Library::collapse_pages_into_canvas`) is ordinary journaled operations: content is added to
+  the first page before the others go to the trash.
 * **Live stroke**: screen-space `active` canvas for stable pieces drawn
   incrementally and `tail` canvas for the provisional piece and predicted samples (50 % alpha,
   never stored). One sample stream (`pointerrawupdate` when present, else `pointermove`) plus
@@ -198,13 +212,25 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   wrapping is identical on every OS and in the PDF. The two ports use different parsers
   (markdown-it and pulldown-cmark) and are held together by a shared golden file; formulas are
   scanned out before either parser runs, so they can't disagree about TeX. Rendering uses bundled
-  Liberation fonts, metric-compatible with the Helvetica and Courier that the PDF export uses. A
+  Liberation fonts, metric-compatible with the Helvetica and Courier that the PDF export uses, or
+  for handwritten blocks Excalifont, which the PDF export embeds. Excalifont has one face, so its
+  bold and italic are a stroke and a shear, applied the same way by the canvas (`drawRun` in
+  `textLayout.ts`), the PDF and the SVG export. A
   layout is cached by its inputs, because hit tests and dirty-rect redraws need a block's bounds.
   Editing uses a CodeMirror overlay in the same coordinates (`markdownEditor.ts`). Its document
   is the Markdown source, with decorations that show the formatting and hide the markers away
   from the caret (`markdownPreview.ts`). That preview parses with Lezer and is approximate: the
   finished block is always drawn by the layout above. Text locked to the paper's rows uses the
   row pitch as its line height there too.
+* Tables are spreadsheets. The formula engine is `penroam-core::sheet`, ported in `sheet.ts`
+  and held to it by `tests/fixtures/sheet-golden.json`; both layouts read each cell's source and
+  draw a formula's result, or a checkbox for `[ ]`/`[x]`. While a box is edited, a table at the
+  top level of its Markdown shows as a grid (`sheetGrid.ts`), a CodeMirror block widget over the
+  table's lines. Every grid edit is a transaction that replaces those lines with the table
+  printed back as GFM (`sheetTable.ts`, which also sorts, filters, inserts and deletes and moves
+  formula references with the cells), so undo, the page history and sync only ever see text.
+  Filters are the grid's own state and never reach the note. The table shows as source while
+  the caret is on it after typing there, so a new table can be written by hand.
 * Formulas come from MathJax, loaded on first use because it is the largest dependency. It runs
   only in the webview, so PDF export and printing first ask Rust which formulas a notebook has,
   render them, and pass the outlines back. Until MathJax is ready a formula shows its source.

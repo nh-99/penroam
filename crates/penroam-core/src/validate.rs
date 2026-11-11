@@ -166,6 +166,12 @@ pub fn validate_element(e: &Element) -> Result<(), ValidationError> {
             if !is_sha256_hex(&i.asset_hash) {
                 return err(format!("image {} has an invalid asset hash", i.id));
             }
+            if let Some(pdf) = &i.pdf_page {
+                if pdf.asset_hash != i.asset_hash {
+                    return err(format!("PDF page {} names another asset", i.id));
+                }
+                validate_pdf_ref(pdf)?;
+            }
         }
     }
     Ok(())
@@ -193,18 +199,24 @@ pub fn validate_page(p: &Page) -> Result<(), ValidationError> {
         }
     }
     if let Some(bg) = &p.background {
-        if !is_sha256_hex(&bg.asset_hash) {
-            return err("PDF background has an invalid asset hash");
-        }
-        if ![0, 90, 180, 270].contains(&bg.rotation) {
-            return err(format!(
-                "PDF background rotation {} is not a multiple of 90",
-                bg.rotation
-            ));
-        }
-        for v in bg.crop_box.iter().chain(bg.media_box.iter()) {
-            finite(*v, "PDF box")?;
-        }
+        validate_pdf_ref(bg)?;
+    }
+    Ok(())
+}
+
+/// A PDF page reference: hash, rotation and finite boxes.
+fn validate_pdf_ref(bg: &PdfBackgroundRef) -> Result<(), ValidationError> {
+    if !is_sha256_hex(&bg.asset_hash) {
+        return err("PDF page has an invalid asset hash");
+    }
+    if ![0, 90, 180, 270].contains(&bg.rotation) {
+        return err(format!(
+            "PDF page rotation {} is not a multiple of 90",
+            bg.rotation
+        ));
+    }
+    for v in bg.crop_box.iter().chain(bg.media_box.iter()) {
+        finite(*v, "PDF box")?;
     }
     Ok(())
 }

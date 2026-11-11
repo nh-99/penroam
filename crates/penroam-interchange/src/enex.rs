@@ -1273,6 +1273,7 @@ pub(crate) fn place_image(pages: &mut Vec<ImportedPage>, image: &Image) -> Resul
         width,
         height,
         asset_hash: image.asset.clone(),
+        pdf_page: None,
         extra: Default::default(),
     }));
     Ok(())

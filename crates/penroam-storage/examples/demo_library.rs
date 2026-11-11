@@ -258,6 +258,7 @@ impl Pen<'_> {
             font_size: size,
             color: color.into(),
             align: TextAlign::Left,
+            font: Default::default(),
             row_pitch: None,
             extra: Extra::new(),
         })
@@ -513,7 +514,8 @@ fn trip(lib: &mut Library, pen: &mut Pen) {
         e.extend(pen.write(s, 84.0, y, 6.2, INK, 2.0).0);
     }
     e.push(pen.highlight(80.0, 200.0, 337.0, PINK, 14.0));
-    e.push(pen.text(
+    // the typed itinerary is handwritten, the other typed notes formatted
+    let mut itinerary = pen.text(
         330.0,
         110.0,
         230.0,
@@ -521,7 +523,11 @@ fn trip(lib: &mut Library, pen: &mut Pen) {
         "Day 1: Alfama, castle, tram 28\nDay 2: Belém tower + pastries\nDay 3: Sintra (train from Rossio)\nDay 4: LX Factory, sunset at the miradouro",
         12.0,
         INK,
-    ));
+    );
+    if let Element::Text(t) = &mut itinerary {
+        t.font = TextFont::Handwritten;
+    }
+    e.push(itinerary);
     e.extend(
         pen.write("book Sintra tickets!", 330.0, 300.0, 6.0, ORANGE, 2.0)
             .0,

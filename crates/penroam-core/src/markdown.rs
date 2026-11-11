@@ -29,14 +29,26 @@
 //! * Containers nested past [`MAX_DEPTH`] are flattened, which keeps a hostile
 //!   document from exhausting the stack and keeps both ports in step.
 //! * Layout never reads the platform's fonts: every width is in
-//!   [`crate::text::metrics`].
+//!   [`crate::text::metrics`]. Each character's face comes from
+//!   [`Face::styled`], so handwritten text falls back to the formatted font
+//!   one character at a time, and a run never mixes the two.
+//! * List bullets and numbers are text in the block's font; task checkboxes,
+//!   link underlines and every other decoration are [`Segment`]s. Checkboxes in
+//!   handwritten text are sketched instead of ruled: fixed strokes, never
+//!   random, so both ports and every export draw the same marks.
+//! * A table is a small spreadsheet ([`crate::sheet`]): a cell whose source
+//!   starts with `=` shows its formula's result, and a cell that is just
+//!   `[ ]` or `[x]` is a checkbox drawn like a task's. Both read the cell's
+//!   source text, not its parsed inlines, so `=A2*B2` never turns italic.
 //! * Formula sizes come from the caller. Without one (the math renderer hasn't
 //!   run, or the formula is invalid) the source is shown in the code face.
 
-use crate::model::TextAlign;
+use crate::model::{TextAlign, TextFont};
+use crate::sheet;
 use crate::text::{metrics, Face, MONO_SCALE};
 use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use serde::Serialize;
+use std::ops::Range;
 
 /// Deepest container nesting that is laid out; deeper content joins its parent.
 pub const MAX_DEPTH: usize = 16;
@@ -50,6 +62,21 @@ const HEADING_SCALE: [f64; 6] = [1.75, 1.5, 1.25, 1.1, 1.0, 0.9];
 const ROW_FRAME_DROP: f64 = 0.22;
 /// Line weight of frames and decorations, in em.
 const STROKE_EM: f64 = 0.06;
+/// A sketched checkbox for handwritten text, as polylines in the box's unit
+/// square (y down). The sides bow a little and overshoot their corners, as a
+/// square drawn in four strokes does.
+const HAND_BOX: [&[(f64, f64)]; 4] = [
+    &[(-0.05, 0.04), (0.5, -0.03), (1.04, 0.01)],
+    &[(0.97, -0.06), (1.02, 0.48), (0.98, 1.05)],
+    &[(1.04, 0.98), (0.48, 1.03), (-0.03, 0.96)],
+    &[(0.02, 1.04), (-0.02, 0.52), (0.03, -0.05)],
+];
+/// How much heavier a sketched checkbox's strokes are than a ruled one's, to
+/// match the weight of the handwritten letters beside it.
+const HAND_WEIGHT: f64 = 1.5;
+/// The tick of a sketched checkbox, in the same unit square: a short stroke
+/// down, then a long one that flicks past the box's top right corner.
+const HAND_TICK: &[(f64, f64)] = &[(0.12, 0.5), (0.38, 0.84), (0.66, 0.36), (1.14, -0.2)];
 
 /// A formula found in Markdown source.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -332,6 +359,8 @@ enum Inline {
     Text(String, u8),
     Break,
     Math(usize),
+    /// A spreadsheet checkbox, the whole of its table cell.
+    Check(bool),
 }
 
 /// A table row: its cells' inline content.
@@ -378,6 +407,8 @@ enum Frame {
 /// Builds the block tree from parser events.
 struct Builder<'a> {
     spans: &'a [MathSpan],
+    /// The source the parser reads, formulas already replaced by slots.
+    src: &'a str,
     stack: Vec<Frame>,
     /// One entry per open container start: whether it pushed a frame.
     pushed: Vec<bool>,
@@ -388,6 +419,11 @@ struct Builder<'a> {
     html: Option<String>,
     table: Option<(Vec<TextAlign>, Vec<Row>)>,
     row: Row,
+    /// Source of the open table's cells, row by row, for [`sheet`].
+    raws: Vec<Vec<String>>,
+    raw_row: Vec<String>,
+    /// Where the open table cell is in `src`.
+    cell: Range<usize>,
 }
 
 impl Builder<'_> {
@@ -495,8 +531,12 @@ impl Builder<'_> {
         }
     }
 
-    fn event(&mut self, ev: Event<'_>) {
+    fn event(&mut self, ev: Event<'_>, range: Range<usize>) {
         match ev {
+            Event::Start(Tag::TableCell) => {
+                self.inlines.clear();
+                self.cell = range;
+            }
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
             Event::Text(s) => {
@@ -583,8 +623,8 @@ impl Builder<'_> {
                     })
                     .collect();
                 self.table = Some((aligns, Vec::new()));
+                self.raws.clear();
             }
-            Tag::TableCell => self.inlines.clear(),
             Tag::Emphasis => self.style[1] += 1,
             Tag::Strong => self.style[0] += 1,
             Tag::Strikethrough => self.style[3] += 1,
@@ -624,15 +664,40 @@ impl Builder<'_> {
             TagEnd::TableCell => {
                 let cell = std::mem::take(&mut self.inlines);
                 self.row.push(cell);
+                // markdown-it's cell content: trimmed, with `\|` unescaped
+                let raw = self
+                    .src
+                    .get(self.cell.clone())
+                    .unwrap_or("")
+                    .replace(r"\|", "|");
+                let raw = self.restore(sheet::trim(&raw));
+                self.raw_row.push(raw);
             }
             TagEnd::TableHead | TagEnd::TableRow => {
                 let row = std::mem::take(&mut self.row);
+                let raw = std::mem::take(&mut self.raw_row);
                 if let Some((_, rows)) = &mut self.table {
                     rows.push(row);
+                    self.raws.push(raw);
                 }
             }
             TagEnd::Table => {
-                if let Some((aligns, rows)) = self.table.take() {
+                if let Some((aligns, mut rows)) = self.table.take() {
+                    let raws = std::mem::take(&mut self.raws);
+                    let results = sheet::evaluate(&raws);
+                    for ((row, raw), result) in rows.iter_mut().zip(&raws).zip(results) {
+                        for ((cell, raw), result) in row.iter_mut().zip(raw).zip(result) {
+                            if let Some(text) = result {
+                                let s = sheet::unstyle(raw).1;
+                                let flags = if s.bold { BOLD } else { 0 }
+                                    | if s.italic { ITALIC } else { 0 }
+                                    | if s.strike { STRIKE } else { 0 };
+                                *cell = vec![Inline::Text(text, flags)];
+                            } else if let Some(done) = sheet::checkbox(raw) {
+                                *cell = vec![Inline::Check(done)];
+                            }
+                        }
+                    }
                     self.blocks().push(Block::Table { aligns, rows });
                 }
             }
@@ -648,6 +713,7 @@ impl Builder<'_> {
 fn parse(src: &str, spans: &[MathSpan]) -> Vec<Block> {
     let mut b = Builder {
         spans,
+        src,
         stack: vec![Frame::Root(Vec::new())],
         pushed: Vec::new(),
         inlines: Vec::new(),
@@ -657,10 +723,13 @@ fn parse(src: &str, spans: &[MathSpan]) -> Vec<Block> {
         html: None,
         table: None,
         row: Vec::new(),
+        raws: Vec::new(),
+        raw_row: Vec::new(),
+        cell: 0..0,
     };
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-    for ev in Parser::new_ext(src, opts) {
-        b.event(ev);
+    for (ev, range) in Parser::new_ext(src, opts).into_offset_iter() {
+        b.event(ev, range);
     }
     b.flush();
     match b.stack.swap_remove(0) {
@@ -669,17 +738,14 @@ fn parse(src: &str, spans: &[MathSpan]) -> Vec<Block> {
     }
 }
 
-fn face_of(flags: u8) -> Face {
-    if flags & MONO != 0 {
-        Face::Mono
-    } else {
-        match (flags & BOLD != 0, flags & ITALIC != 0) {
-            (true, true) => Face::BoldItalic,
-            (true, false) => Face::Bold,
-            (false, true) => Face::Italic,
-            (false, false) => Face::Regular,
-        }
-    }
+fn face_of(font: TextFont, flags: u8, c: char) -> Face {
+    Face::styled(
+        font,
+        flags & BOLD != 0,
+        flags & ITALIC != 0,
+        flags & MONO != 0,
+        c,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -687,6 +753,7 @@ enum Atom {
     Char {
         c: char,
         flags: u8,
+        face: Face,
         size: f64,
         width: f64,
     },
@@ -719,6 +786,7 @@ fn round6(v: f64) -> f64 {
 
 struct Layout<'a, F> {
     fs: f64,
+    font: TextFont,
     row: Option<f64>,
     align: TextAlign,
     spans: &'a [MathSpan],
@@ -732,6 +800,7 @@ struct Layout<'a, F> {
 
 struct Marker {
     x: f64,
+    face: Face,
     text: Option<String>,
     task: Option<bool>,
 }
@@ -769,18 +838,20 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
         });
     }
 
-    fn char_atom(c: char, flags: u8, size: f64) -> Atom {
+    fn char_atom(&self, c: char, flags: u8, size: f64) -> Atom {
         let m = metrics();
+        let face = face_of(self.font, flags, c);
         // the code face is set a little smaller: its letters are wide and tall
         let size = if flags & MONO != 0 {
             size * MONO_SCALE
         } else {
             size
         };
-        let width = m.advance_in(face_of(flags), c) * size / m.units_per_em;
+        let width = m.advance_in(face, c) * size / m.units_per_em;
         Atom::Char {
             c,
             flags,
+            face,
             size,
             width,
         }
@@ -792,7 +863,7 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
             self.spans[index]
                 .source
                 .chars()
-                .map(|c| Self::char_atom(if c == '\n' { ' ' } else { c }, MONO, size)),
+                .map(|c| self.char_atom(if c == '\n' { ' ' } else { c }, MONO, size)),
         );
     }
 
@@ -877,18 +948,21 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
                     cx += width;
                     i += 1;
                 }
-                Atom::Char { flags, size, .. } => {
-                    let (flags, size) = (*flags, *size);
+                Atom::Char {
+                    flags, face, size, ..
+                } => {
+                    let (flags, face, size) = (*flags, *face, *size);
                     let start = cx;
                     let mut text = String::new();
                     while let Some(Atom::Char {
                         c,
                         flags: fl,
+                        face: fc,
                         size: sz,
                         width,
                     }) = atoms.get(i)
                     {
-                        if *fl != flags || *sz != size {
+                        if *fl != flags || *fc != face || *sz != size {
                             break;
                         }
                         if *c == '\t' {
@@ -899,7 +973,7 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
                         cx += width;
                         i += 1;
                     }
-                    self.run(start, baseline, face_of(flags), size, text);
+                    self.run(start, baseline, face, size, text);
                     let weight = STROKE_EM * size;
                     if flags & UNDERLINE != 0 {
                         let y = baseline + 0.12 * size;
@@ -914,26 +988,49 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
         }
         if let Some(mk) = self.marker.take() {
             if let Some(text) = mk.text {
-                self.run(mk.x, baseline, Face::Regular, self.fs, text);
+                self.run(mk.x, baseline, mk.face, self.fs, text);
             }
             if let Some(done) = mk.task {
                 let side = 0.68 * self.fs;
                 let (x0, y0, x1, y1) = (mk.x, baseline - side, mk.x + side, baseline);
                 let w = STROKE_EM * self.fs;
-                self.segment(x0, y0, x1, y0, w);
-                self.segment(x1, y0, x1, y1, w);
-                self.segment(x1, y1, x0, y1, w);
-                self.segment(x0, y1, x0, y0, w);
-                if done {
-                    let (mx, my) = (x0 + side * 0.4, y1 - side * 0.2);
-                    self.segment(x0 + side * 0.18, y1 - side * 0.5, mx, my, w * 1.4);
-                    self.segment(mx, my, x1 - side * 0.14, y0 + side * 0.2, w * 1.4);
+                if self.font == TextFont::Handwritten {
+                    for line in HAND_BOX {
+                        self.polyline(x0, y0, side, line, w * HAND_WEIGHT);
+                    }
+                    if done {
+                        self.polyline(x0, y0, side, HAND_TICK, w * 1.4 * HAND_WEIGHT);
+                    }
+                } else {
+                    self.segment(x0, y0, x1, y0, w);
+                    self.segment(x1, y0, x1, y1, w);
+                    self.segment(x1, y1, x0, y1, w);
+                    self.segment(x0, y1, x0, y0, w);
+                    if done {
+                        let (mx, my) = (x0 + side * 0.4, y1 - side * 0.2);
+                        self.segment(x0 + side * 0.18, y1 - side * 0.5, mx, my, w * 1.4);
+                        self.segment(mx, my, x1 - side * 0.14, y0 + side * 0.2, w * 1.4);
+                    }
                 }
             }
         }
-        let bottom = baseline + (-m.descent * size / m.units_per_em).max(deep);
+        let bottom = baseline + (-m.descent_of(self.font) * size / m.units_per_em).max(deep);
         self.paint.bottom = self.paint.bottom.max(round6(bottom));
         self.y += advance;
+    }
+
+    /// Strokes `points`, given in a unit square, scaled to `side` at `(x, y)`.
+    fn polyline(&mut self, x: f64, y: f64, side: f64, points: &[(f64, f64)], width: f64) {
+        for p in points.windows(2) {
+            let (a, b) = (p[0], p[1]);
+            self.segment(
+                x + side * a.0,
+                y + side * a.1,
+                x + side * b.0,
+                y + side * b.1,
+                width,
+            );
+        }
     }
 
     /// Greedy wrapping: the rules of [`crate::text::layout`], over styled atoms.
@@ -991,7 +1088,7 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
         for (i, item) in inlines.iter().enumerate() {
             match item {
                 Inline::Text(t, flags) => {
-                    line.extend(t.chars().map(|c| Self::char_atom(c, flags | extra, size)));
+                    line.extend(t.chars().map(|c| self.char_atom(c, flags | extra, size)));
                     after_display = false;
                 }
                 Inline::Break => {
@@ -1019,6 +1116,8 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
                     self.math_atom(*n, size, avail, &mut line);
                     after_display = false;
                 }
+                // only ever a whole table cell, which `table` draws itself
+                Inline::Check(_) => {}
             }
         }
         if !line.is_empty() || !placed {
@@ -1050,7 +1149,7 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
                 for line in text.split('\n') {
                     let atoms: Vec<Atom> = line
                         .chars()
-                        .map(|c| Self::char_atom(c, MONO, self.fs))
+                        .map(|c| self.char_atom(c, MONO, self.fs))
                         .collect();
                     let base = self.fs * MONO_SCALE;
                     self.wrap(&atoms, x + pad, avail - 2.0 * pad, TextAlign::Left, base);
@@ -1104,12 +1203,21 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
                             .to_owned(),
                         ),
                     };
+                    // the whole label in one face: "10." never mixes fonts
+                    let face = match &label {
+                        Some(l) if l.chars().all(|c| face_of(self.font, 0, c).is_hand()) => {
+                            Face::Hand
+                        }
+                        _ => Face::Regular,
+                    };
                     let w = label.as_deref().map_or(0.68 * self.fs, |l| {
                         let m = metrics();
-                        l.chars().map(|c| m.advance(c)).sum::<f64>() * self.fs / m.units_per_em
+                        l.chars().map(|c| m.advance_in(face, c)).sum::<f64>() * self.fs
+                            / m.units_per_em
                     });
                     self.marker = Some(Marker {
                         x: x.max(x + gutter - 0.4 * self.fs - w),
+                        face,
                         text: label,
                         task: item.task,
                     });
@@ -1157,7 +1265,23 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
                 self.y = start;
                 let cell = row.get(c).map_or(&[][..], Vec::as_slice);
                 let align = aligns.get(c).copied().unwrap_or(TextAlign::Left);
-                self.flow(cell, cx + pad, width - 2.0 * pad, align, self.fs, extra);
+                let inner = width - 2.0 * pad;
+                if let [Inline::Check(done)] = cell {
+                    // the checkbox is a list marker on the cell's one empty line
+                    let side = 0.68 * self.fs;
+                    let dx = match align {
+                        TextAlign::Left => 0.0,
+                        TextAlign::Center => (inner - side) / 2.0,
+                        TextAlign::Right => inner - side,
+                    };
+                    self.marker = Some(Marker {
+                        x: cx + pad + dx.max(0.0),
+                        face: Face::Regular,
+                        text: None,
+                        task: Some(*done),
+                    });
+                }
+                self.flow(cell, cx + pad, inner, align, self.fs, extra);
                 end = end.max(self.y);
                 cx += width;
             }
@@ -1182,16 +1306,14 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
             let mut atoms = Vec::new();
             match item {
                 Inline::Text(t, flags) => {
-                    atoms.extend(
-                        t.chars()
-                            .map(|c| Self::char_atom(c, flags | extra, self.fs)),
-                    );
+                    atoms.extend(t.chars().map(|c| self.char_atom(c, flags | extra, self.fs)));
                 }
                 Inline::Math(n) => self.math_atom(*n, self.fs, f64::INFINITY, &mut atoms),
                 Inline::Break => {
                     best = best.max(line);
                     line = 0.0;
                 }
+                Inline::Check(_) => line += 0.68 * self.fs,
             }
             line += atoms.iter().map(Atom::width).sum::<f64>();
         }
@@ -1199,10 +1321,11 @@ impl<F: Fn(&str, bool) -> Option<MathBox>> Layout<'_, F> {
     }
 }
 
-/// Lays Markdown out. `row_pitch` locks lines to rows (see the module docs);
-/// `math` gives a formula's size in em, or `None` to show its source.
+/// Lays Markdown out in `font`. `row_pitch` locks lines to rows (see the module
+/// docs); `math` gives a formula's size in em, or `None` to show its source.
 pub fn layout<F>(
     text: &str,
+    font: TextFont,
     font_size: f64,
     box_width: f64,
     row_pitch: Option<f64>,
@@ -1216,6 +1339,7 @@ where
     let blocks = parse(&src, &spans);
     let mut l = Layout {
         fs: font_size,
+        font,
         row: row_pitch,
         align,
         spans: &spans,

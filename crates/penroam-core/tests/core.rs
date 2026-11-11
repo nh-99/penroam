@@ -158,6 +158,7 @@ fn text(id: Uuid, z: i64, s: &str) -> Element {
         font_size: 14.0,
         color: "#202020".into(),
         align: TextAlign::Left,
+        font: Default::default(),
         row_pitch: None,
         extra: Default::default(),
     })
@@ -427,4 +428,119 @@ fn validation_rejects_bad_numbers() {
     assert!(validate::validate_element(&Element::Ink(s.clone())).is_err());
     s.points.clear();
     assert!(validate::validate_element(&Element::Ink(s)).is_err());
+}
+
+#[test]
+fn a_tall_canvas_splits_into_paper_shaped_sheets_between_lines() {
+    let letter = Size {
+        width: 612.0,
+        height: 792.0,
+    };
+    let mut page = Page::new(
+        Uuid::from_u128(7),
+        Paper::Letter,
+        letter,
+        Template {
+            kind: TemplateKind::Grid,
+            spacing: 24.0,
+        },
+        0,
+    );
+    // 40 lines of text, 30 pt tall, every 60 pt: about three sheets' worth
+    for i in 0..40 {
+        page.elements.push(Element::Text(TextBlock {
+            id: Uuid::from_u128(100 + i),
+            z: i as i64,
+            x: 0.0,
+            y: 60.0 * i as f64,
+            width: 400.0,
+            height: 30.0,
+            text: format!("line {i}"),
+            font_size: 14.0,
+            color: "#111111".into(),
+            align: TextAlign::Left,
+            font: Default::default(),
+            row_pitch: None,
+            extra: Default::default(),
+        }));
+    }
+    let sheets = page.canvas_as_sheets(CANVAS_SHEET_MARGIN_PT, letter);
+    assert!(sheets.len() >= 3, "{}", sheets.len());
+    let mut seen = std::collections::HashSet::new();
+    for s in &sheets {
+        // paper-shaped, never narrower than the paper
+        assert_eq!(s.size.width, 612.0);
+        assert!((s.size.height - 792.0).abs() < 1e-9);
+        for e in &s.elements {
+            let b = e.bounds().unwrap();
+            // no line is cut by a break
+            assert!(b[1] >= 0.0 && b[3] <= s.size.height, "{b:?}");
+            seen.insert(e.id());
+        }
+    }
+    // every line is on exactly one sheet
+    assert_eq!(seen.len(), 40);
+    assert_eq!(sheets.iter().map(|s| s.elements.len()).sum::<usize>(), 40);
+
+    // a wide canvas keeps its width, so nothing is cut sideways
+    page.elements.truncate(1);
+    if let Element::Text(t) = &mut page.elements[0] {
+        t.width = 1500.0;
+    }
+    let wide = page.canvas_as_sheets(CANVAS_SHEET_MARGIN_PT, letter);
+    assert_eq!(wide.len(), 1);
+    assert!(wide[0].size.width >= 1500.0);
+    assert!((wide[0].size.height / wide[0].size.width - 792.0 / 612.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_ruled_canvas_is_a_column_the_page_wide() {
+    let letter = Size {
+        width: 612.0,
+        height: 792.0,
+    };
+    let mut page = Page::new(
+        Uuid::from_u128(8),
+        Paper::Letter,
+        letter,
+        Template::default(),
+        0,
+    );
+    assert!(page.is_canvas_column());
+    let line = |i: u128, y: f64| {
+        Element::Text(TextBlock {
+            id: Uuid::from_u128(200 + i),
+            z: i as i64,
+            x: 100.0,
+            y,
+            width: 200.0,
+            height: 24.0,
+            text: format!("line {i}"),
+            font_size: 14.0,
+            color: "#111111".into(),
+            align: TextAlign::Left,
+            font: Default::default(),
+            row_pitch: None,
+            extra: Default::default(),
+        })
+    };
+    // a short note: the sheet is the page, from the origin, not cut to the note
+    page.elements.push(line(0, 96.0));
+    let sheet = page.canvas_as_sheet(CANVAS_SHEET_MARGIN_PT);
+    assert_eq!((sheet.size.width, sheet.size.height), (612.0, 792.0));
+    assert_eq!(sheet.elements[0].bounds().unwrap()[0], 100.0);
+
+    // a long column: pages of it, the later ones ruled from the top
+    for i in 1..60 {
+        page.elements.push(line(i, 96.0 + 48.0 * i as f64));
+    }
+    let sheets = page.canvas_as_sheets(CANVAS_SHEET_MARGIN_PT, letter);
+    assert!(sheets.len() >= 3, "{}", sheets.len());
+    assert!(!sheets[0].continues_column());
+    for s in &sheets {
+        assert_eq!(s.size.width, 612.0);
+        assert!((s.size.height - 792.0).abs() < 1e-9);
+    }
+    assert!(sheets[1..].iter().all(Page::continues_column));
+    assert_eq!(sheets.iter().map(|s| s.elements.len()).sum::<usize>(), 60);
 }

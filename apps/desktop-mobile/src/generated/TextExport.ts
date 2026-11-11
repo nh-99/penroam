@@ -25,7 +25,8 @@ strokesOmitted: number,
  */
 imagesOmitted: number, 
 /**
- * Pages with a PDF background, whose content isn't in the output.
+ * PDF pages (page backgrounds, and PDF pages placed on infinite
+ * canvases) whose content isn't in the output.
  */
 pdfPagesOmitted: number, 
 /**

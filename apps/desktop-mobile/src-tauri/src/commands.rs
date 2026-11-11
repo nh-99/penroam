@@ -138,7 +138,7 @@ pub fn get_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
 }
 
 /// Creates a notebook with one empty page. Only Letter and A4 are accepted
-/// for new notebooks.
+/// for new notebooks. With `infinite_canvas` its pages are infinite canvases.
 #[tauri::command(async)]
 pub fn create_notebook(
     state: State<'_, AppState>,
@@ -147,6 +147,7 @@ pub fn create_notebook(
     template: Option<Template>,
     cover: Option<String>,
     vault: Option<String>,
+    infinite_canvas: Option<bool>,
 ) -> R<NotebookAndPage> {
     let defaults = PageDefaults {
         paper: paper.unwrap_or(Paper::Letter),
@@ -163,9 +164,12 @@ pub fn create_notebook(
         if let Some(v) = &vault {
             crate::sync::require_open_vault(&root, v)?;
         }
-        let made = lib.create_notebook(&title, defaults, cover)?;
+        let mut made = lib.create_notebook(&title, defaults, cover)?;
         if let Some(v) = &vault {
             crate::sync::assign_to_vault(&root, made.0.id, v)?;
+        }
+        if infinite_canvas == Some(true) {
+            made.0 = lib.set_infinite_canvas(made.0.id, true)?;
         }
         made
     };
@@ -299,6 +303,28 @@ pub fn purge_notebook(state: State<'_, AppState>, id: Uuid) -> R<()> {
     lib!(state).purge_notebook(id)?;
     state.search.notebook_changed(id);
     Ok(())
+}
+
+/// Shows a notebook's pages as infinite canvases, or as sheets again. With
+/// `collapse` (turning infinite canvases on), every page is first gathered
+/// onto the first one and the emptied pages go to the notebook's trash.
+#[tauri::command(async)]
+pub fn set_infinite_canvas(
+    state: State<'_, AppState>,
+    id: Uuid,
+    infinite: bool,
+    collapse: Option<bool>,
+) -> R<Notebook> {
+    state.sync.nudge();
+    let nb = {
+        let mut lib = lib!(state);
+        if infinite && collapse == Some(true) {
+            lib.collapse_pages_into_canvas(id)?;
+        }
+        lib.set_infinite_canvas(id, infinite)?
+    };
+    state.search.notebook_changed(id);
+    Ok(nb)
 }
 
 /// Inserts a page at `index` (default: end). An explicit `size` creates a
@@ -511,13 +537,7 @@ pub fn import_pdf(
     index: Option<usize>,
 ) -> R<NotebookAndPages> {
     state.sync.nudge();
-    let bytes = read_user_file(&app, &path, 1 << 30)?;
-    if !bytes.starts_with(b"%PDF") && !bytes.windows(5).take(1024).any(|w| w == b"%PDF-") {
-        return Err(CmdError {
-            code: ErrorCode::Pdf,
-            message: "this file is not a PDF".into(),
-        });
-    }
+    let bytes = read_pdf_file(&app, &path)?;
     let info = penroam_pdf::inspect(&bytes)?;
     let mut lib = lib!(state);
     let asset = lib.add_asset(notebook_id, &bytes, "application/pdf", file_name)?;
@@ -539,6 +559,48 @@ pub fn import_pdf(
     let (notebook, pages) = lib.create_pages(notebook_id, index, pages)?;
     state.search.notebook_changed(notebook_id);
     Ok(NotebookAndPages { notebook, pages })
+}
+
+/// A PDF added to a notebook as an asset, with a reference to each of its pages.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfAsset {
+    notebook: Notebook,
+    pages: Vec<PdfBackgroundRef>,
+}
+
+/// Adds a user-chosen PDF (≤ 1 GiB) to a notebook as an asset without making
+/// any pages: the editor places its pages on an infinite canvas itself.
+#[tauri::command(async)]
+pub fn add_pdf_asset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    path: String,
+    file_name: Option<String>,
+) -> R<PdfAsset> {
+    state.sync.nudge();
+    let bytes = read_pdf_file(&app, &path)?;
+    let info = penroam_pdf::inspect(&bytes)?;
+    let mut lib = lib!(state);
+    let asset = lib.add_asset(notebook_id, &bytes, "application/pdf", file_name)?;
+    let pages = info.iter().map(|i| i.background(&asset.sha256)).collect();
+    Ok(PdfAsset {
+        notebook: lib.notebook(notebook_id)?.clone(),
+        pages,
+    })
+}
+
+/// Reads a user-chosen file that must be a PDF (≤ 1 GiB).
+fn read_pdf_file(app: &AppHandle, path: &str) -> R<Vec<u8>> {
+    let bytes = read_user_file(app, path, 1 << 30)?;
+    if !bytes.starts_with(b"%PDF") && !bytes.windows(5).take(1024).any(|w| w == b"%PDF-") {
+        return Err(CmdError {
+            code: ErrorCode::Pdf,
+            message: "this file is not a PDF".into(),
+        });
+    }
+    Ok(bytes)
 }
 
 /// Copies a user-chosen file into the staging folder and returns a handle that deletes
@@ -893,6 +955,16 @@ pub fn page_plain_text(
     export_text_of(&state, notebook_id, Some(page_id), TextFormat::Plain)
 }
 
+/// A page as exports lay it out: an infinite canvas page becomes a sheet cut
+/// to its content.
+fn sheet_of(page: Page, infinite_canvas: bool) -> Page {
+    if infinite_canvas {
+        page.canvas_as_sheet(CANVAS_SHEET_MARGIN_PT)
+    } else {
+        page
+    }
+}
+
 /// Exports one page as SVG and returns what the file doesn't show.
 #[tauri::command(async)]
 pub fn export_page_svg(
@@ -904,7 +976,8 @@ pub fn export_page_svg(
 ) -> R<Vec<String>> {
     let r = {
         let mut lib = lib!(state);
-        let page = lib.load_page(notebook_id, page_id)?;
+        let canvas = lib.notebook(notebook_id)?.infinite_canvas;
+        let page = sheet_of(lib.load_page(notebook_id, page_id)?, canvas);
         let types: std::collections::HashMap<String, String> = lib
             .notebook(notebook_id)?
             .assets
@@ -1161,7 +1234,8 @@ pub fn import_notebook(
 }
 
 /// Renders a notebook's live pages as a PDF with vector ink and text over the original PDF
-/// backgrounds. Returns the page order alongside, and holds the library lock only for the
+/// backgrounds; an infinite canvas page becomes as many PDF pages as it needs. Returns, for
+/// each PDF page, the notebook page it shows, and holds the library lock only for the
 /// duration of this call.
 fn render_pdf(
     state: &State<'_, AppState>,
@@ -1169,10 +1243,26 @@ fn render_pdf(
     math: &[penroam_pdf::RenderedMath],
 ) -> R<(Vec<u8>, penroam_pdf::ExportReport, Vec<Uuid>)> {
     let mut lib = lib!(state);
-    let order = lib.notebook(notebook_id)?.page_order.clone();
-    let mut pages = Vec::with_capacity(order.len());
-    for p in &order {
-        pages.push(lib.load_page(notebook_id, *p)?);
+    let nb = lib.notebook(notebook_id)?;
+    let (ids, canvas) = (nb.page_order.clone(), nb.infinite_canvas);
+    let paper = nb.defaults.paper.size().unwrap_or(Size {
+        width: 612.0,
+        height: 792.0,
+    });
+    let mut pages = Vec::with_capacity(ids.len());
+    // one entry per PDF page: a canvas can take several
+    let mut order = Vec::with_capacity(ids.len());
+    for p in &ids {
+        let page = lib.load_page(notebook_id, *p)?;
+        if canvas {
+            for sheet in page.canvas_as_sheets(CANVAS_SHEET_MARGIN_PT, paper) {
+                pages.push(sheet);
+                order.push(*p);
+            }
+        } else {
+            pages.push(page);
+            order.push(*p);
+        }
     }
     let lib = &*lib;
     let (bytes, report) =

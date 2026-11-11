@@ -47,6 +47,7 @@ fn text(id: u128, s: &str) -> Element {
         font_size: 14.0,
         color: "#202020".into(),
         align: TextAlign::Center,
+        font: Default::default(),
         row_pitch: None,
         extra: Default::default(),
     })

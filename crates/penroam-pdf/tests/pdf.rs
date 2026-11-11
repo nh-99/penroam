@@ -143,6 +143,7 @@ fn text(x: f64, y: f64, s: &str) -> Element {
         font_size: 16.0,
         color: "#1d4ed8".into(),
         align: TextAlign::Left,
+        font: Default::default(),
         row_pitch: None,
         extra: Default::default(),
     })
@@ -415,6 +416,58 @@ fn markdown_uses_the_matching_standard_fonts() {
 }
 
 #[test]
+fn handwritten_text_embeds_excalifont_and_draws_its_bold_and_italic() {
+    let mut page = text_page("- **b** *i* `c`\n- [x] [link](x)", None);
+    if let Element::Text(t) = &mut page.elements[0] {
+        t.font = TextFont::Handwritten;
+    }
+    let (bytes, report) = export_annotated(&[page], &[], |_| None).unwrap();
+    assert_eq!(report.replaced_characters, 0);
+    let doc = lopdf::Document::load_mem(&bytes).unwrap();
+    let id = *doc.get_pages().values().next().unwrap();
+    let content = String::from_utf8_lossy(&doc.get_page_content(id)).into_owned();
+    // the bullet is WinAnsi 0x95 in the handwritten font
+    assert!(content.contains("/PRHand 16 Tf 1 0 0 -1"), "{content}");
+    assert!(content.contains("(\\225) Tj"), "{content}");
+    assert!(
+        content.contains("2 Tr /PRHand"),
+        "bold is stroked: {content}"
+    );
+    assert!(
+        content.contains("1 0 0.2 -1"),
+        "italic is sheared: {content}"
+    );
+    assert!(content.contains("/PRCour"), "code stays monospace");
+    let fonts = doc.get_page_fonts(id).unwrap();
+    let hand = fonts[b"PRHand".as_slice()];
+    assert_eq!(
+        hand.get(b"Subtype").unwrap().as_name().unwrap(),
+        b"TrueType"
+    );
+    let descriptor = doc
+        .get_dictionary(hand.get(b"FontDescriptor").unwrap().as_reference().unwrap())
+        .unwrap();
+    let file = descriptor
+        .get(b"FontFile2")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let ttf = doc.get_object(file).unwrap().as_stream().unwrap();
+    assert_eq!(&ttf.decompressed_content().unwrap()[..4], &[0, 1, 0, 0]);
+}
+
+#[test]
+fn formatted_only_exports_leave_the_handwritten_font_out() {
+    let (bytes, _) = export_annotated(&[text_page("plain", None)], &[], |_| None).unwrap();
+    let doc = lopdf::Document::load_mem(&bytes).unwrap();
+    let id = *doc.get_pages().values().next().unwrap();
+    assert!(!doc
+        .get_page_fonts(id)
+        .unwrap()
+        .contains_key(b"PRHand".as_slice()));
+}
+
+#[test]
 fn row_locked_text_lands_on_the_rows() {
     let (content, _) = content_of(&[text_page("one\ntwo", Some(24.0))], &[]);
     assert!(content.contains("1 0 0 -1 40 72 Tm (one) Tj"), "{content}");
@@ -561,6 +614,7 @@ fn image(hash: &str, x: f64, y: f64, width: f64, height: f64) -> Element {
         width,
         height,
         asset_hash: hash.into(),
+        pdf_page: None,
         extra: Default::default(),
     })
 }
@@ -1095,4 +1149,75 @@ fn cut_off_images_never_panic() {
             assert!(report.images <= 1, "len {len}");
         }
     }
+}
+
+#[test]
+fn pdf_pages_on_a_canvas_are_drawn_from_their_source_under_the_ink() {
+    // two source pages, the second turned a quarter
+    let src = make_pdf(&[(300.0, 400.0, 0), (300.0, 400.0, 90)], false);
+    let hash = hash_of(7);
+    let infos = inspect(&src).unwrap();
+    let el = |i: usize, x: f64, y: f64| {
+        let bg = infos[i].background(&hash);
+        let size = bg.display_size();
+        Element::Image(ImageElement {
+            id: Uuid::new_v4(),
+            z: -5,
+            x,
+            y,
+            width: size.width,
+            height: size.height,
+            asset_hash: hash.clone(),
+            pdf_page: Some(bg),
+            extra: Default::default(),
+        })
+    };
+    let mut page = plain_page(vec![
+        stroke(&[(20.0, 20.0), (80.0, 80.0)], "#111111", InkTool::Pen),
+        el(0, -100.0, -50.0),
+        el(1, -100.0, 400.0),
+    ]);
+    page.id = Uuid::from_u128(9);
+    // ruled paper would be a column; grid paper is cut to the content
+    page.template.kind = TemplateKind::Grid;
+    let sheet = page.canvas_as_sheet(CANVAS_SHEET_MARGIN_PT);
+    // cut to the content plus the margin, on whole template pitches
+    assert_eq!(sheet.elements.len(), 3);
+    let pitch = page.template.spacing;
+    let x0 = ((-100.0 - CANVAS_SHEET_MARGIN_PT) / pitch).floor() * pitch;
+    assert!(sheet.size.width >= 300.0 + 2.0 * CANVAS_SHEET_MARGIN_PT);
+    let Element::Image(first) = &sheet.elements[1] else {
+        panic!()
+    };
+    assert_eq!(first.x, -100.0 - x0);
+
+    let (bytes, report) = export_with(&[sheet], &[(hash.as_str(), src)]);
+    // a PDF page is not counted or warned about as an image
+    assert_eq!(report.images, 0);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let doc = Document::load_mem(&bytes).unwrap();
+    let content = first_content(&doc);
+    // both source pages are form XObjects, drawn before the ink
+    let first_do = content.find("/PRpg0 Do").unwrap();
+    assert!(content.contains("/PRpg1 Do"));
+    let ink = content.find("0.067 0.067 0.067 RG").unwrap();
+    assert!(first_do < ink, "{content}");
+    let (_, form) = xobject(&doc, 1, "PRpg0");
+    assert_eq!(name_of(form, b"Subtype"), b"Form");
+    let text = String::from_utf8_lossy(&form.decompressed_content().unwrap()).into_owned();
+    assert!(text.contains("Source page 1"), "{text}");
+}
+
+#[test]
+fn later_pages_of_a_ruled_column_are_ruled_from_the_top() {
+    let t = Template::default();
+    let first_rule = |continued| {
+        let mut s = String::new();
+        template_content(&mut s, &t, 612.0, 792.0, continued);
+        let line = s.lines().find(|l| l.ends_with(" l S")).unwrap().to_owned();
+        line.split(' ').nth(1).unwrap().parse::<f64>().unwrap()
+    };
+    // a first page has the header rows; the pages after carry on the rules from the one before
+    assert_eq!(first_rule(false), t.spacing * 3.0);
+    assert_eq!(first_rule(true), t.spacing);
 }

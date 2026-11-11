@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Extracts advance widths (per 1000 em) for the code points Penroam's text
 // layout measures, from the bundled Liberation faces (metric-compatible with
-// Helvetica, its bold and oblique cuts, and Courier). Output is the single
+// Helvetica, its bold and oblique cuts, and Courier) and from Excalifont, the
+// handwritten font (rebuilt by tools/merge-excalifont.py). Output is the single
 // source of truth used by both the Rust text layout (penroam-core) and the
 // TypeScript renderer.
 //
@@ -69,6 +70,8 @@ function readFace(src) {
 const [dir, out] = process.argv.slice(2);
 const face = (file) => readFace(join(dir, file));
 const regular = face("LiberationSans-Regular.ttf");
+const hand = face("Excalifont-Regular.ttf");
+const em = (v, f) => Math.round((v * 1000) / f.unitsPerEm);
 const doc = {
   font: "Liberation Sans Regular (metric-compatible with Helvetica)",
   unitsPerEm: 1000,
@@ -85,6 +88,16 @@ const doc = {
     italic: face("LiberationSans-Italic.ttf").widths,
     boldItalic: face("LiberationSans-BoldItalic.ttf").widths,
     mono: face("LiberationMono-Regular.ttf").widths,
+  },
+  // The handwritten font (Excalifont). It has a single face: bold and italic are
+  // drawn from it by thickening and slanting, so they share these widths. Text
+  // it has no glyph for is set in the faces above. Line heights stay those of
+  // the faces above; its own extents only matter for how far ink reaches.
+  hand: {
+    font: "Excalifont Regular",
+    ascent: em(hand.ascender, hand),
+    descent: em(hand.descender, hand),
+    widths: hand.widths,
   },
 };
 writeFileSync(out, JSON.stringify(doc, null, 1) + "\n");

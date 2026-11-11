@@ -7,12 +7,24 @@
 //   committed model -> PageSession (Rust is authoritative; ops persisted in order)
 //   rendered cache  -> PageRenderer page-sized layers, CSS-transformed for pan/zoom
 //   other pages     -> PageStrip pictures around the open page (continuous scrolling)
+//
+// Infinite canvas (`setCanvas`): the page has no edges. The renderer's layers then cover an
+// extent around the content and the view instead of the page, and the extent follows the view
+// when it settles: it grows in `CANVAS_CHUNK_PT` steps while that stays within the pixel
+// budget, and is otherwise a window around the view, so memory stays bounded however far the
+// canvas reaches. Panning is free; "fit" fits the content. PDF pages sit on a canvas as image
+// elements with `pdfPage`, rendered sharp near the view and coarse elsewhere (`syncPdfPages`).
+// Ruled paper makes the canvas a column (`column`): the page's width with its header and margin
+// line, infinite only downward. The extent then spans the column's width and grows down, the
+// view is kept on the column, and text is placed and sized as on a sheet.
 import type { Element } from "../generated/Element";
 import type { InkPoint } from "../generated/InkPoint";
 import type { InkStroke } from "../generated/InkStroke";
+import type { ImageElement } from "../generated/ImageElement";
 import type { PdfBackgroundRef } from "../generated/PdfBackgroundRef";
 import type { Template } from "../generated/Template";
 import type { TextBlock } from "../generated/TextBlock";
+import type { TextFont } from "../generated/TextFont";
 import type { NativeInkSurface, NativeTool } from "../platform/nativeInk";
 import {
   drawPieces,
@@ -31,18 +43,30 @@ import {
 } from "./geometry";
 import { newId } from "./ids";
 import { classifyPointer, PALM_CONTACT_PX, PENCIL_CURVE, penErases, pressureArrived, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
-import { PdfCache, PdfPageRenderer } from "./pdf";
-import { drawText, elementBounds, linkAt, PageRenderer, paintOf, taskAt, textBounds, type Ink, type Text } from "./renderer";
+import { PdfCache, PdfPageRenderer, renderPdfPage } from "./pdf";
+import { drawText, elementBounds, linkAt, PageRenderer, paintOf, pdfPageKey, taskAt, textBounds, type Ink, type Text } from "./renderer";
 import type { PageSession, SaveState } from "./session";
 import { rowsFor, toggledTask, type TaskBox } from "./markdown";
 import { MarkdownEditor } from "./markdownEditor";
 import type { FormatAction } from "./markdownFormat";
 import { onMathReady } from "./math";
 import { alignment, SNAP_DISTANCE_PX, type Guide, type TextEdges } from "./snap";
-import { rowPitchOf, snapToRow } from "./templates";
-import { contentHeight, firstBaseline, lineHeight, metrics, TEXT_FONT_FAMILY } from "./textLayout";
+import { isCanvasColumn, rowPitchOf, snapToRow } from "./templates";
+import { ascentOf, contentHeight, descentOf, firstBaseline, fontFamilyOf, lineHeight, metrics } from "./textLayout";
 import { PageStrip, type StripPage } from "./pageStrip";
 import { backingScale, clampScale, constrain, constrainTo, fitPage, fitWidth, toDoc, zoomAbout, type ViewTransform } from "./viewport";
+
+/** The font all the text blocks among `sel` share, or null when they differ or there are none. */
+export function sharedTextFont(sel: Element[]): TextFont | null {
+  let font: TextFont | null = null;
+  for (const e of sel) {
+    if (e.type !== "text") continue;
+    const f = e.font ?? "formatted";
+    if (font !== null && font !== f) return null;
+    font = f;
+  }
+  return font;
+}
 
 export type Tool = "pen" | "highlighter" | "eraser" | "select" | "lasso" | "text" | "hand";
 export const DRAW_TOOLS: Tool[] = ["pen", "highlighter", "eraser"];
@@ -54,6 +78,8 @@ export interface ToolSettings {
   highlighterWidth: number;
   textColor: string;
   textSize: number;
+  /** Font of new text. */
+  textFont: TextFont;
   /** New text goes anywhere on ruled and dotted paper instead of locking to its rows. */
   textFreePlacement: boolean;
   pressure: boolean;
@@ -82,6 +108,8 @@ export interface EditorState {
   selectionHasText: boolean;
   /** Every selected text block is placed freely (as opposed to locked to rows). */
   selectionTextFree: boolean;
+  /** The font every selected text block shares; null when they differ or none is selected. */
+  selectionTextFont: TextFont | null;
   /** The current page's paper has rows that text can lock to. */
   pageHasRows: boolean;
   editingText: boolean;
@@ -126,6 +154,32 @@ const PEN_LIFT_GRACE_MS = 400;
 const TAP_SLOP_PX = 8;
 /** How far (screen pixels) outside a task's small checkbox a tap still reaches it. */
 const TASK_TAP_PAD_PX = 6;
+/** Infinite canvas: how far past the view, as a fraction of its size, the layers reach. */
+const CANVAS_VIEW_PAD = 0.5;
+/** Infinite canvas: extents snap to this many points, so small pans don't redraw. */
+const CANVAS_CHUNK_PT = 512;
+/** Space between content and PDF pages placed below it, before rounding up to a row. */
+const CANVAS_PLACE_GAP_PT = 48;
+/** Widest a text block may be made (the model's longest page side). */
+const MAX_TEXT_WIDTH_PT = 14_400;
+/** PDF pages away from the view are kept at this resolution (device px per pt). */
+const PDF_FAR_RES = 0.5;
+/** Sharpest a PDF page on a canvas is rendered (device px per pt); the detail layer stretches it past that. */
+const PDF_MAX_RES = 3;
+
+type PdfImage = ImageElement & { type: "image"; pdfPage: PdfBackgroundRef };
+const isPdfPage = (e: Element): e is PdfImage => e.type === "image" && !!e.pdfPage;
+
+/** The size a PDF page shows at: its crop box, turned by its rotation. */
+export function pdfDisplaySize(p: PdfBackgroundRef): { width: number; height: number } {
+  const [x0, y0, x1, y1] = p.cropBox;
+  const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+  return p.rotation % 180 === 90 ? { width: h, height: w } : { width: w, height: h };
+}
+
+const containsRect = (o: Rect, i: Rect) => o[0] <= i[0] && o[1] <= i[1] && o[2] >= i[2] && o[3] >= i[3];
+const rectArea = (r: Rect) => (r[2] - r[0]) * (r[3] - r[1]);
+const snapOut = (r: Rect, c: number): Rect => [Math.floor(r[0] / c) * c, Math.floor(r[1] / c) * c, Math.ceil(r[2] / c) * c, Math.ceil(r[3] / c) * c];
 
 /** A task checkbox under a page point, with the text its position was worked out from. */
 interface TaskHit {
@@ -187,6 +241,7 @@ export class InkEditor {
     highlighterWidth: 14,
     textColor: "#111111",
     textSize: 16,
+    textFont: "handwritten",
     textFreePlacement: false,
     pressure: true,
   };
@@ -252,7 +307,16 @@ export class InkEditor {
   private nativeQueue: Promise<unknown> = Promise.resolve();
   // continuous scrolling
   private strip = new PageStrip();
+  /** Continuous scrolling is on: the setting, and the page isn't an infinite canvas. */
   private continuous = false;
+  private continuousSetting = false;
+  // infinite canvas
+  private canvas = false;
+  /** Whether the open page was laid out as a column, to notice its paper changing to or from ruled. */
+  private wasColumn = false;
+  /** PDF page bitmaps waiting to be rendered, nearest the view first. */
+  private pdfQueue: { key: string; ref: PdfBackgroundRef; res: number }[] = [];
+  private pdfBusy = false;
   /** The page last handed to `onScrollToPage`, until a session opens. */
   private scrollRequested: string | null = null;
 
@@ -350,7 +414,16 @@ export class InkEditor {
       e.stopPropagation(); // typing never triggers editor shortcuts
     });
     on(this.textHost, "focusout", (e: FocusEvent) => {
-      if (!this.textHost.contains(e.relatedTarget as Node | null)) this.endTextEdit();
+      if (this.textHost.contains(e.relatedTarget as Node | null)) return;
+      // A control removed while it had focus (a closed menu, a redrawn button) takes focus with
+      // it, which is not leaving the box: give the text the focus back instead.
+      if (e.target instanceof Node && !e.target.isConnected && this.textHost.isConnected) {
+        queueMicrotask(() => {
+          if (this.edit && (document.activeElement === document.body || document.activeElement === null)) this.textEditor?.focus();
+        });
+        return;
+      }
+      this.endTextEdit();
     });
     on(window, "keydown", (e: KeyboardEvent) => {
       if (e.code === "Space" && !this.edit && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) this.spaceDown = true;
@@ -411,6 +484,7 @@ export class InkEditor {
       selectionCount: sel.length,
       selectionHasText: sel.some((e) => e.type === "text"),
       selectionTextFree: sel.every((e) => e.type !== "text" || e.rowPitch === undefined),
+      selectionTextFont: sharedTextFont(sel),
       pageHasRows: this.pageHasRows(),
       editingText: !!this.edit,
       textFormats: this.textEditor?.formats ?? [],
@@ -444,6 +518,11 @@ export class InkEditor {
     }
     this.scrollRequested = null;
     this.session = session;
+    // PDF page bitmaps belong to the notebook the cache reads from
+    if (pdfCache !== this.pdfCache) {
+      this.renderer.pdfPages.clear();
+      this.pdfQueue = [];
+    }
     this.pdfCache = pdfCache;
     session.events = {
       onElementsChanged: (c) => this.onElementsChanged(c),
@@ -452,14 +531,25 @@ export class InkEditor {
       onPageReplaced: () => this.pageReplaced(),
     };
     const p = session.page;
-    this.renderer.setPage(p.size.width, p.size.height, p.template);
+    if (this.canvas) {
+      // a first extent around the content; `growExtent` adds the view once the view is known
+      const c = this.onColumn(snapOut(this.contentRect() ?? [0, 0, p.size.width, p.size.height], CANVAS_CHUNK_PT));
+      this.renderer.setPage(c[2] - c[0], c[3] - c[1], p.template, [c[0], c[1]], true, p.size.width);
+      // the page's PDF is drawn like the PDF pages placed on the canvas, so it stays sharp
+      if (p.background) this.renderer.underlay = { type: "image", id: "page-background", z: -Infinity, x: 0, y: 0, ...p.size, assetHash: p.background.assetHash, pdfPage: p.background };
+    } else this.renderer.setPage(p.size.width, p.size.height, p.template);
     this.renderer.opts.mono = this.settings.mono;
+    this.wasColumn = this.column;
+    // a column is a page on the desk; a free canvas is paper everywhere
+    this.viewport.classList.toggle("penroam-canvas-view", this.unbounded);
     this.world.style.width = `${p.size.width}px`;
     this.world.style.height = `${p.size.height}px`;
-    this.background = p.background ?? null;
+    // the background layer's PDF bitmap is for sheets
+    this.background = this.canvas ? null : (p.background ?? null);
     this.relayoutStrip();
     this.transform = kept ? this.constrained(kept) : this.fitTransform("width");
     this.applyTransform(false);
+    if (this.canvas) this.growExtent();
     this.renderer.setResolution(this.wantedRes());
     this.renderer.renderAll(this.visibleDocRect());
     this.emitAll();
@@ -469,6 +559,7 @@ export class InkEditor {
     }
     this.updateNative();
     void this.loadImages();
+    this.syncPdfPages();
     if (this.background) await this.renderPdf();
   }
 
@@ -493,8 +584,11 @@ export class InkEditor {
     if (!s) return;
     for (const id of [...this.selection]) if (!s.elementById(id)) this.selection.delete(id);
     this.renderer.template = s.page.template;
-    this.renderer.renderAll(this.visibleDocRect());
+    const content = this.canvas ? this.contentRect() : null;
+    // includeInExtent draws everything again when it moves the layers
+    if (!content || !this.includeInExtent(content)) this.renderer.renderAll(this.visibleDocRect());
     void this.loadImages();
+    this.syncPdfPages();
     this.scheduleSettle(); // the redraw replaced any change of resolution in progress
     if (this.native?.ownsCommittedInk && this.nativeMounted) this.nativeCall((n) => n.loadCommittedInk(this.inkElements()));
     if (this.selection.size) this.updateSelectionBox();
@@ -561,7 +655,7 @@ export class InkEditor {
   /** `e` locked to `pitch` on paper `t`, or freed when `pitch` is undefined. */
   private relockedText(e: Text, t: Template, pitch: number | undefined): Text {
     const n: Text = { ...e, rowPitch: pitch };
-    if (pitch !== undefined) n.y = snapToRow(e.y, t, pitch);
+    if (pitch !== undefined) n.y = snapToRow(e.y, t, pitch, Math.round, this.unbounded);
     n.height = this.textHeight(n);
     return n;
   }
@@ -596,20 +690,138 @@ export class InkEditor {
   private fitTransform(mode: "width" | "page"): ViewTransform {
     const f = mode === "width" ? fitWidth : fitPage;
     const margin = this.viewW < 600 ? 8 : 24;
+    if (this.canvas) return this.fitCanvas(mode, margin);
     const t = f(Math.max(1, this.viewW), Math.max(1, this.viewH), this.renderer.width, this.renderer.height, margin);
     // a short page centred in the column would leave the page before it half on screen
     if (this.continuous && mode === "width") t.oy = margin;
     return t;
   }
 
+  /**
+   * Infinite canvas: fits the content (and the page's PDF background) at no more than 100 %,
+   * so a small drawing isn't blown up. An empty canvas shows its origin at 100 %.
+   */
+  private fitCanvas(mode: "width" | "page", margin: number): ViewTransform {
+    const p = this.session?.page;
+    if (this.column && p) {
+      // like a sheet: the column's width, or its first page, from the top
+      const [x0, y0, x1] = this.columnBounds();
+      const t = (mode === "width" ? fitWidth : fitPage)(Math.max(1, this.viewW), Math.max(1, this.viewH), x1 - x0, p.size.height, margin);
+      return { scale: t.scale, ox: t.ox - x0 * t.scale, oy: (mode === "width" ? margin : t.oy) - y0 * t.scale };
+    }
+    const r = this.contentRect();
+    if (!r) return { scale: 1, ox: margin, oy: margin };
+    const w = Math.max(1, r[2] - r[0]), h = Math.max(1, r[3] - r[1]);
+    const fit = (mode === "width" ? fitWidth : fitPage)(Math.max(1, this.viewW), Math.max(1, this.viewH), w, h, margin);
+    const scale = Math.min(1, fit.scale);
+    const ox = (this.viewW - w * scale) / 2;
+    const oy = mode === "page" || h * scale + margin * 2 <= this.viewH ? (this.viewH - h * scale) / 2 : margin;
+    return { scale, ox: ox - r[0] * scale, oy: oy - r[1] * scale };
+  }
+
+  /** The bounds of everything on the page, with its PDF background; null when there is none. */
+  private contentRect(): Rect | null {
+    const p = this.session?.page;
+    if (!p) return null;
+    let r: Rect | null = p.background ? [0, 0, p.size.width, p.size.height] : null;
+    for (const e of p.elements) r = unionRect(r, elementBounds(e));
+    return r;
+  }
+
+  /** True while the open page is an infinite canvas of ruled paper, which is a column (`isCanvasColumn`). */
+  private get column(): boolean {
+    const t = this.session?.page.template;
+    return this.canvas && !!t && isCanvasColumn(t);
+  }
+
+  /** True when text and handles go anywhere: a canvas that isn't a column. */
+  private get unbounded(): boolean {
+    return this.canvas && !this.column;
+  }
+
+  /**
+   * Column: the doc rect it spans, with the bottom at the end of its content (or of the page).
+   * That is the page's width from the origin, widened for any content beside it, such as
+   * drawing made before the paper was ruled.
+   */
+  private columnBounds(): Rect {
+    const p = this.session!.page;
+    const c = this.contentRect();
+    return [Math.min(0, c?.[0] ?? 0), Math.min(0, c?.[1] ?? 0), Math.max(p.size.width, c?.[2] ?? 0), Math.max(p.size.height, c?.[3] ?? 0)];
+  }
+
+  /** Column: `r` made as wide as the column and kept from going above its top. Other canvases: `r`. */
+  private onColumn(r: Rect): Rect {
+    if (!this.column) return r;
+    const [x0, y0, x1] = this.columnBounds();
+    const top = Math.max(y0, r[1]);
+    return [x0, top, x1, Math.max(top + 1, r[3])];
+  }
+
+  /** Infinite canvas: the most doc area the layers may cover, given the pixel budget and the lowest backing scale. */
+  private get maxExtentArea(): number {
+    return this.settings.maxCanvasPixels / (0.25 * 0.25);
+  }
+
+  /**
+   * Infinite canvas: makes the layers cover the view with a margin around it. Returns true
+   * when they moved, which leaves them blank: the caller redraws. The extent takes in all the
+   * content when that fits the budget, so panning around a drawing doesn't redraw it.
+   */
+  private growExtent(): boolean {
+    if (!this.canvas || !this.session || !this.viewW) return false;
+    const vis = this.visibleDocRect();
+    const pad = (k: number): Rect => {
+      const px = (vis[2] - vis[0]) * k, py = (vis[3] - vis[1]) * k;
+      return [vis[0] - px, vis[1] - py, vis[2] + px, vis[3] + py];
+    };
+    let want = this.onColumn(pad(CANVAS_VIEW_PAD));
+    const max = this.maxExtentArea;
+    if (rectArea(want) > max) want = this.onColumn(vis); // zoomed far out: the view itself is all that fits
+    const cur = this.renderer.extent;
+    if (containsRect(cur, want)) return false;
+    const content = this.contentRect();
+    const candidates = [unionRect(unionRect(content, want), cur), unionRect(content, want), want];
+    const next = candidates.map((r) => this.onColumn(snapOut(r, CANVAS_CHUNK_PT))).find((r) => rectArea(r) <= max) ?? this.onColumn(snapOut(want, CANVAS_CHUNK_PT));
+    this.renderer.setExtent([next[0], next[1]], next[2] - next[0], next[3] - next[1]);
+    return true;
+  }
+
+  /** Infinite canvas: after the layers moved, draws them again at the resolution that suits them. */
+  private redrawExtent() {
+    this.renderer.setResolution(this.wantedRes());
+    this.renderer.renderAll(this.visibleDocRect());
+    if (this.background) void this.renderPdf();
+    this.syncDetail();
+  }
+
+  /** Infinite canvas: makes sure `r` (doc pt) is inside the layers, as after adding content beyond them. */
+  private includeInExtent(r: Rect): boolean {
+    const cur = this.renderer.extent;
+    if (!this.canvas || containsRect(cur, r)) return false;
+    const next = this.onColumn(snapOut(unionRect(cur, r), CANVAS_CHUNK_PT));
+    // too far to take in: it is off screen, and the layers move there when the view does
+    if (rectArea(next) > this.maxExtentArea) return false;
+    this.renderer.setExtent([next[0], next[1]], next[2] - next[0], next[3] - next[1]);
+    this.redrawExtent();
+    return true;
+  }
+
   /** Keeps the page, or in continuous scrolling the column of pages, from leaving the view. */
   private constrained(t: ViewTransform): ViewTransform {
+    // a column reaches a page's length past its content; a free canvas has nowhere to get lost from
+    if (this.column) {
+      const b = this.columnBounds();
+      return constrainTo(t, this.viewW, this.viewH, [b[0], b[1], b[2], b[3] + this.session!.page.size.height]);
+    }
+    if (this.canvas) return t;
     if (this.continuous) return constrainTo(t, this.viewW, this.viewH, this.strip.bounds());
     return constrain(t, this.viewW, this.viewH, this.renderer.width, this.renderer.height);
   }
 
+  /** Fits the page's width or the whole page; on a free infinite canvas, always everything on it. */
   fit(mode: "width" | "page" = "width") {
-    this.setTransform(this.fitTransform(mode));
+    this.setTransform(this.fitTransform(this.unbounded ? "page" : mode));
   }
 
   zoomBy(factor: number) {
@@ -657,6 +869,13 @@ export class InkEditor {
    * and below the open page, and scrolling onto one opens it. Off, only the open page shows.
    */
   setContinuous(on: boolean) {
+    this.continuousSetting = on;
+    this.applyContinuous();
+  }
+
+  /** Infinite canvases show one page at a time whatever the setting. */
+  private applyContinuous() {
+    const on = this.continuousSetting && !this.canvas;
     if (on === this.continuous) return;
     this.continuous = on;
     this.scrollRequested = null;
@@ -671,6 +890,124 @@ export class InkEditor {
   /** True while continuous scrolling is on. */
   get isContinuous(): boolean {
     return this.continuous;
+  }
+
+  /**
+   * Shows pages as infinite canvases, or as sheets. An open page is shown again the new way,
+   * with the view fitted to it.
+   */
+  setCanvas(on: boolean) {
+    if (on === this.canvas) return;
+    this.canvas = on;
+    this.world.classList.toggle("penroam-canvas", on);
+    this.viewport.classList.toggle("penroam-canvas-view", on);
+    this.applyContinuous();
+    if (this.session) void this.setSession(this.session, this.pdfCache);
+  }
+
+  /** True while pages show as infinite canvases. */
+  get isCanvas(): boolean {
+    return this.canvas;
+  }
+
+  /**
+   * Places PDF pages on the open canvas below its content, one under the other, as a single
+   * undoable change, and scrolls to the first. They go underneath everything already there,
+   * like paper.
+   */
+  placePdfPages(pages: PdfBackgroundRef[]) {
+    const s = this.session;
+    if (!s || !pages.length) return;
+    this.endTextEdit();
+    this.cancelGestures();
+    const sp = s.page.template.spacing;
+    const row = (v: number) => Math.ceil(v / sp) * sp;
+    const content = this.contentRect();
+    // on a column the pages go at its left edge, like the sheets they come from
+    const x = this.column ? this.columnBounds()[0] : content ? Math.floor(content[0] / sp) * sp : 0;
+    let y = content ? row(content[3] + CANVAS_PLACE_GAP_PT) : 0;
+    const els = s.page.elements;
+    const floor = (els.length ? els[0].z : 0) - pages.length;
+    const placed: Element[] = pages.map((ref, i) => {
+      const { width, height } = pdfDisplaySize(ref);
+      const e: Element = { type: "image", id: newId(), z: floor + i, x, y, width, height, assetHash: ref.assetHash, pdfPage: ref };
+      y = row(y + height + CANVAS_PLACE_GAP_PT);
+      return e;
+    });
+    const label = pages.length === 1 ? "Import PDF page" : "Import PDF";
+    s.commit({ label, forward: [{ op: "addElements", elements: placed }], inverse: [{ op: "removeElements", ids: placed.map((e) => e.id) }] });
+    const first = placed[0] as PdfImage;
+    const scale = Math.min(this.transform.scale, Math.max(0.2, (this.viewW - 48) / first.width));
+    const margin = this.viewW < 600 ? 8 : 24;
+    this.setTransform({ scale, ox: (this.viewW - first.width * scale) / 2 - first.x * scale, oy: margin - first.y * scale });
+  }
+
+  /**
+   * Renders the bitmaps of the page's PDF page elements: sharp near the view, coarse away from
+   * it, so that a long document on a canvas doesn't hold every page at full resolution.
+   */
+  private syncPdfPages() {
+    const s = this.session;
+    const cache = this.pdfCache;
+    if (!s || !cache) return;
+    const pdfs = s.page.elements.filter(isPdfPage);
+    const under = this.renderer.underlay;
+    if (under && isPdfPage(under)) pdfs.push(under);
+    const have = this.renderer.pdfPages;
+    if (!pdfs.length) {
+      have.clear();
+      this.pdfQueue = [];
+      return;
+    }
+    const vis = this.visibleDocRect();
+    const w = vis[2] - vis[0], h = vis[3] - vis[1];
+    const near: Rect = [vis[0] - w, vis[1] - h, vis[2] + w, vis[3] + h];
+    const sharp = Math.min(PDF_MAX_RES, Math.max(PDF_FAR_RES, this.transform.scale * this.dpr));
+    const cx = (vis[0] + vis[2]) / 2, cy = (vis[1] + vis[3]) / 2;
+    const wants = new Map<string, { ref: PdfBackgroundRef; res: number; dist: number }>();
+    for (const e of pdfs) {
+      const key = pdfPageKey(e.pdfPage);
+      const b = elementBounds(e);
+      const res = rectsIntersect(near, b) ? sharp : PDF_FAR_RES;
+      const dist = Math.hypot(Math.max(b[0] - cx, cx - b[2], 0), Math.max(b[1] - cy, cy - b[3], 0));
+      const w0 = wants.get(key);
+      if (!w0 || res > w0.res || dist < w0.dist) wants.set(key, { ref: e.pdfPage, res: Math.max(res, w0?.res ?? 0), dist: Math.min(dist, w0?.dist ?? Infinity) });
+    }
+    for (const key of [...have.keys()]) if (!wants.has(key)) have.delete(key);
+    this.pdfQueue = [...wants]
+      .filter(([key, want]) => {
+        const got = have.get(key);
+        // too soft for where it is, or far sharper than it needs to be away from the view
+        return !got || got.res < want.res * 0.8 || got.res > want.res * 2;
+      })
+      .sort((a, b) => a[1].dist - b[1].dist)
+      .map(([key, want]) => ({ key, ref: want.ref, res: want.res }));
+    void this.drainPdfPages();
+  }
+
+  private async drainPdfPages() {
+    if (this.pdfBusy) return;
+    this.pdfBusy = true;
+    try {
+      for (let job = this.pdfQueue.shift(); job; job = this.pdfQueue.shift()) {
+        const s = this.session;
+        const cache = this.pdfCache;
+        if (!s || !cache) break;
+        try {
+          const canvas = await renderPdfPage(cache, job.ref, job.res);
+          if (this.session !== s || this.pdfCache !== cache) continue;
+          this.renderer.pdfPages.set(job.key, { canvas, res: job.res });
+          let r: Rect | null = null;
+          const under = this.renderer.underlay;
+          for (const e of under ? [under, ...s.page.elements] : s.page.elements) if (isPdfPage(e) && pdfPageKey(e.pdfPage) === job.key) r = unionRect(r, elementBounds(e));
+          if (r) this.renderer.renderInk(r);
+        } catch (e) {
+          console.warn("PDF page", job.key, e);
+        }
+      }
+    } finally {
+      this.pdfBusy = false;
+    }
   }
 
   /** The notebook's pages in reading order, for continuous scrolling. */
@@ -754,6 +1091,8 @@ export class InkEditor {
     if (this.settleTimer) clearTimeout(this.settleTimer);
     this.settleTimer = window.setTimeout(() => {
       this.settleTimer = null;
+      this.syncPdfPages();
+      if (this.growExtent()) return this.redrawExtent();
       const want = this.wantedRes();
       const cur = this.renderer.targetRes;
       this.requestPageImages();
@@ -854,12 +1193,14 @@ export class InkEditor {
   setToolSettings(t: Partial<ToolSettings>) {
     // the host sends every setting on any change; only an actual flip moves the block
     const freed = t.textFreePlacement !== undefined && t.textFreePlacement !== this.tools.textFreePlacement;
+    const refont = t.textFont !== undefined && t.textFont !== this.tools.textFont;
     this.tools = { ...this.tools, ...t };
     if (this.edit) {
       // live style change for the block being edited
       const d = this.edit.draft;
       if (t.textColor) d.color = t.textColor;
       if (t.textSize) d.fontSize = t.textSize;
+      if (refont) d.font = this.tools.textFont;
       if (freed) Object.assign(d, this.placedForMode(d, this.tools.textFreePlacement));
       this.layoutTextEditor();
       this.scheduleTextCommit();
@@ -894,8 +1235,8 @@ export class InkEditor {
     this.updateSelectionBox();
   }
 
-  /** Applies colour/size to the current selection (text: colour + size; ink: colour). */
-  restyleSelection(style: { color?: string; fontSize?: number }) {
+  /** Applies colour/size/font to the current selection (text: all three; ink: colour). */
+  restyleSelection(style: { color?: string; fontSize?: number; font?: TextFont }) {
     const s = this.session;
     if (!s || this.selection.size === 0) return;
     const before: Element[] = [];
@@ -904,7 +1245,7 @@ export class InkEditor {
       const e = s.elementById(id);
       if (!e) continue;
       let n: Element | null = null;
-      if (e.type === "text") n = { ...e, color: style.color ?? e.color, fontSize: style.fontSize ?? e.fontSize };
+      if (e.type === "text") n = { ...e, color: style.color ?? e.color, fontSize: style.fontSize ?? e.fontSize, font: style.font ?? e.font };
       else if (e.type === "ink" && style.color) n = { ...e, color: style.color };
       if (n?.type === "text") n.height = Math.max(this.textHeight(n), 1);
       if (n) {
@@ -1487,7 +1828,8 @@ export class InkEditor {
     for (let i = els.length - 1; i >= 0; i--) {
       const e = els[i];
       if (e.type === "ink" && hitTest(e, x, y, r)) return e;
-      if (e.type === "image" && x >= e.x && x <= e.x + e.width && y >= e.y && y <= e.y + e.height) return e;
+      // a PDF page is the paper written on: a press on it starts a band, as on the page
+      if (e.type === "image" && !e.pdfPage && x >= e.x && x <= e.x + e.width && y >= e.y && y <= e.y + e.height) return e;
     }
     return null;
   }
@@ -1547,13 +1889,20 @@ export class InkEditor {
     this.drag = { kind: "move", pointerId: e.pointerId, start: this.docPoint(e), dx: 0, dy: 0, moved: false, guides: [], tapEdits };
   }
 
+  /** The right edge text keeps to: the page's, which on a column is the layers' right edge. */
+  private get pageRight(): number {
+    return this.column ? this.renderer.extent[2] : this.renderer.width;
+  }
+
   /**
    * Where a block's resize handle goes: its corner, pulled back onto the page.
    * Long text runs off the bottom of the page, and the corner with it, where
    * nothing could reach the handle to make the box wider.
    */
   private handlePoint(b: Rect): [number, number] {
-    return [Math.min(b[2], this.renderer.width), Math.min(b[3], this.renderer.height)];
+    if (this.unbounded) return [b[2], b[3]];
+    const [, , right, bottom] = this.column ? this.renderer.extent : [0, 0, this.renderer.width, this.renderer.height];
+    return [Math.min(b[2], right), Math.min(b[3], bottom)];
   }
 
   private hideSelection(hide: boolean) {
@@ -1582,8 +1931,8 @@ export class InkEditor {
       d.dy = this.snappedDy(d.dy);
       this.alignDrag(d, freehand);
     } else {
-      // never wider than the page, unless it already was
-      const widest = Math.max(d.orig.width, this.renderer.width - d.orig.x);
+      // never wider than the page, unless it already was; a free canvas has no edge
+      const widest = this.unbounded ? MAX_TEXT_WIDTH_PT : Math.max(d.orig.width, this.pageRight - d.orig.x);
       d.width = Math.max(24, Math.min(widest, d.orig.width + p[0] - d.start[0]));
       const minH = this.textHeight({ ...d.orig, width: d.width });
       const h = Math.max(minH, d.orig.height + p[1] - d.start[1]);
@@ -1634,7 +1983,7 @@ export class InkEditor {
     if (!s) return dy;
     for (const id of this.selection) {
       const e = s.elementById(id);
-      if (e?.type === "text" && e.rowPitch !== undefined) return snapToRow(e.y + dy, s.page.template, e.rowPitch) - e.y;
+      if (e?.type === "text" && e.rowPitch !== undefined) return snapToRow(e.y + dy, s.page.template, e.rowPitch, Math.round, this.unbounded) - e.y;
     }
     return dy;
   }
@@ -1727,6 +2076,8 @@ export class InkEditor {
         .filter((e) => {
           if (!rectsIntersect(r, elementBounds(e))) return false;
           if (e.type === "ink") return e.points.some((p) => p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3]);
+          // PDF pages only when the band takes in all of one, as with the lasso
+          if (isPdfPage(e)) return containsRect(r, elementBounds(e));
           return true;
         })
         .map((e) => e.id);
@@ -1760,6 +2111,8 @@ export class InkEditor {
   private lassoCatches(e: Element, poly: [number, number][]): boolean {
     if (e.type === "ink") return lassoHitsStroke(e, poly);
     const b = elementBounds(e);
+    // a PDF page only when it is all inside, so that circling ink on it takes the ink alone
+    if (isPdfPage(e)) return [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].every(([x, y]) => pointInPolygon(x, y, poly));
     return pointInPolygon((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, poly);
   }
 
@@ -1810,6 +2163,7 @@ export class InkEditor {
       selectionCount: sel.length,
       selectionHasText: sel.some((e) => e.type === "text"),
       selectionTextFree: sel.every((e) => e.type !== "text" || e.rowPitch === undefined),
+      selectionTextFont: sharedTextFont(sel),
     });
   }
 
@@ -1818,13 +2172,16 @@ export class InkEditor {
     const [x, y] = this.docPoint(e);
     const hit = this.hitText(x, y);
     if (hit) return this.beginTextMove(hit.id, e, true);
-    const W = this.renderer.width;
+    const W = this.pageRight;
     const fs = this.tools.textSize;
     const template = this.session!.page.template;
     const pitch = this.tools.textFreePlacement ? undefined : rowPitchOf(template);
-    let bx = Math.min(Math.max(0, x), W - 40);
+    // on a sheet or a column, text stays on the page; a free canvas has no edges to keep it from
+    const free = this.unbounded;
+    const lo = free ? -Infinity : 0;
+    let bx = free ? x : Math.min(Math.max(0, x), W - 40);
     // a tap between two rules writes on the lower one
-    let by = pitch === undefined ? Math.max(0, y - lineHeight(fs) / 2) : snapToRow(y, template, pitch, Math.floor);
+    let by = pitch === undefined ? Math.max(lo, y - lineHeight(fs) / 2) : snapToRow(y, template, pitch, Math.floor, free);
     const h = pitch === undefined ? lineHeight(fs) : rowsFor(fs, pitch) * pitch;
     if (!e.altKey) {
       // Lines up with the text already there. A new block's width comes from where it
@@ -1832,10 +2189,10 @@ export class InkEditor {
       const here: TextEdges = { rect: [bx, by, bx, by + h], baseline: by + (pitch ?? firstBaseline(fs)) };
       const others = this.otherTextEdges(new Set()).map((o) => ({ ...o, rect: [o.rect[0], o.rect[1], o.rect[0], o.rect[3]] as Rect }));
       const a = alignment([here], others, SNAP_DISTANCE_PX / this.transform.scale, pitch === undefined);
-      bx = Math.max(0, bx + a.dx);
-      by = Math.max(0, by + a.dy);
+      bx = Math.max(lo, bx + a.dx);
+      by = Math.max(lo, by + a.dy);
     }
-    const width = Math.max(60, Math.min(280, W - bx - 12));
+    const width = free ? 280 : Math.max(60, Math.min(280, W - bx - 12));
     const block: Text = {
       type: "text",
       id: newId(),
@@ -1846,6 +2203,7 @@ export class InkEditor {
       height: h,
       text: "",
       fontSize: fs,
+      font: this.tools.textFont,
       color: this.tools.textColor,
       align: "left",
       rowPitch: pitch,
@@ -1894,7 +2252,9 @@ export class InkEditor {
     const lh = pitch === undefined ? lineHeight(fs) : rowsFor(fs, pitch) * pitch;
     // CSS centres the font in its line box; rendered row-locked text sits on the
     // bottom of it, so the source moves down to the same baselines.
-    const cssBaseline = ((lh - ((metrics.ascent - metrics.descent) * fs) / metrics.unitsPerEm) / 2) + (metrics.ascent * fs) / metrics.unitsPerEm;
+    const font = d.font ?? "formatted";
+    const ascent = ascentOf(font), descent = descentOf(font);
+    const cssBaseline = ((lh - ((ascent - descent) * fs) / metrics.unitsPerEm) / 2) + (ascent * fs) / metrics.unitsPerEm;
     const top = pitch === undefined ? d.y : d.y + lh - cssBaseline;
     Object.assign(host.style, {
       left: `${d.x}px`,
@@ -1902,7 +2262,10 @@ export class InkEditor {
       width: `${d.width}px`,
       fontSize: `${fs}px`,
       lineHeight: `${lh}px`,
-      fontFamily: TEXT_FONT_FAMILY,
+      fontFamily: fontFamilyOf(font),
+      // as on the canvas: the layout has no kerning or ligatures for the handwritten font
+      fontKerning: font === "handwritten" ? "none" : "",
+      fontVariantLigatures: font === "handwritten" ? "none" : "",
       color: d.color,
       textAlign: d.align,
     });
@@ -1947,7 +2310,7 @@ export class InkEditor {
       return;
     } else if (empty) {
       return;
-    } else if (prev.text !== next.text || prev.color !== next.color || prev.fontSize !== next.fontSize || prev.height !== next.height || prev.y !== next.y || prev.rowPitch !== next.rowPitch) {
+    } else if (prev.text !== next.text || prev.color !== next.color || prev.fontSize !== next.fontSize || prev.font !== next.font || prev.height !== next.height || prev.y !== next.y || prev.rowPitch !== next.rowPitch) {
       s.commit({ label: "Edit text", forward: [{ op: "replaceElements", elements: [next] }], inverse: [{ op: "replaceElements", elements: [prev] }] });
     } else return;
     ed.committed = next;
@@ -1985,6 +2348,11 @@ export class InkEditor {
 
   // ------------------------------------------------- model changes --
   private onElementsChanged(c: { added: Element[]; removed: Element[]; templateChanged?: boolean }) {
+    if (c.templateChanged && this.canvas && this.column !== this.wasColumn) {
+      // to or from ruled paper: the canvas becomes a column, or stops being one, and is laid out again
+      void this.setSession(this.session!, this.pdfCache);
+      return;
+    }
     if (c.templateChanged) {
       this.renderer.template = this.session!.page.template;
       this.renderer.renderBackground();
@@ -1993,7 +2361,12 @@ export class InkEditor {
     const els = this.session!.page.elements;
     const maxZ = els.length ? els[els.length - 1].z : 0;
     const appendOnly = c.removed.length === 0 && c.added.length > 0 && c.added.every((e) => e.type === "ink" && e.z >= maxZ) && c.added.length <= 4;
-    if (appendOnly) {
+    let reach: Rect | null = null;
+    for (const e of c.added) reach = unionRect(reach, elementBounds(e));
+    if (c.added.some(isPdfPage) || c.removed.some(isPdfPage)) this.syncPdfPages();
+    if (reach && this.includeInExtent(reach)) {
+      // the layers moved to take the change in, and were drawn again whole
+    } else if (appendOnly) {
       for (const e of c.added) this.renderer.appendStroke(e as Ink);
     } else {
       let ink: Rect | null = null;

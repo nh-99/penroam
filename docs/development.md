@@ -84,6 +84,9 @@ pnpm --filter penroam test
 Add a line to `CORPUS` in `crates/penroam-core/tests/markdown.rs` when the two parsers turn out to
 disagree on something. After changing a bundled font, regenerate the widths with
 `node tools/gen-font-metrics.mjs apps/desktop-mobile/src/assets/fonts crates/penroam-core/data/text-metrics.json`.
+Upstream ships Excalifont only as Unicode-range WOFF2 subsets; `tools/merge-excalifont.py` (needs
+`pip install fonttools brotli`) merges them back into the bundled `Excalifont-Regular.ttf`, which
+the PDF and SVG exports embed as well.
 
 ## Benchmarks
 
@@ -292,6 +295,20 @@ It matches each page's regions to its prompt from the top down and leaves out, w
 any page where the counts differ. The writer becomes the page's `style`, so reports come out per
 writer. Handwriting models are compared with the benchmark that sits beside the trainers in the
 private models repository; on the same corpus and bundle its numbers agree with this tool's.
+
+## App icons
+
+`apps/desktop-mobile/src-tauri/icons/source.png` is the master artwork, a 1024 px square with a
+transparent background. After changing it, run `python tools/icons/make-icons.py` (needs
+Pillow). The script runs `pnpm tauri icon` for the desktop and Android sets, then replaces the
+outputs Tauri gets wrong:
+
+* it insets the Android adaptive foregrounds so the artwork fits inside the launcher mask;
+* it writes the iOS asset catalog with light, dark and tinted icons
+  ([`platforms/ipad.md`](platforms/ipad.md#on-a-mac)).
+
+It also refreshes the in-app logo and the README logo. Regenerate the README screenshots
+afterwards, because the library header shows the logo.
 
 ## README screenshots
 

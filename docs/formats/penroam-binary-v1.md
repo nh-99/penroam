@@ -180,7 +180,7 @@ wall clock.
   if lost it is rebuilt with `uploadedThrough = 0` (re-upload; the server deduplicates by op id).
 * `.lock`: exclusive OS file lock while a library is open (second writer refused).
 
-## 9. Operation schema 3
+## 9. Operation schema 4
 
 `LocalOperation {id, deviceId, localSequence, schemaVersion, causalDependencies, at, body}`.
 `id` is stable across retries (page operations reuse the editor's `PageOperation.opId`).
@@ -192,7 +192,8 @@ as schema 1, so older clients only stop at a purge), `pageCreated`
 (`changed[i]` = field-group mask: 1 placement, 2 content, 4 style), `assetReferenced`,
 `notebookFiled` (`folder`, or null for the top level), `folderCreated` (`folderId`, `name`,
 `parent`), `folderRenamed`, `folderMoved`, `folderDeleted`. The last five are written as schema 3.
-Unknown types or newer schemas are never applied or dropped.
+`notebookCanvasSet` (`infinite`: whether the pages show as infinite canvases) is written as
+schema 4. Unknown types or newer schemas are never applied or dropped.
 
 Folder operations belong to no notebook. They are journaled and routed under the reserved stream
 id `70656e72-6f61-4d00-8000-666f6c646572`, which no notebook may use, and applied to `folders.json`
@@ -205,7 +206,8 @@ deletes are tombstones; a concurrent restore beats a delete; an edit the deletin
 seen is reported (`editedWhileDeleted`) with its value; page order = (order key, page id);
 element order = (z, element id); duplicate op ids with identical bodies are no-ops, reused ids
 with different bodies are rejected. A folder's name, parent and deletion and a notebook's folder are
-registers too, but concurrent writes to them show the winner without being retained as conflicts.
+registers too, and so is whether a notebook shows infinite canvases, but concurrent writes to them
+show the winner without being retained as conflicts.
 A deleted folder stays as a tombstone. What's inside shows at its nearest live ancestor, and a
 parent cycle made by concurrent moves is cut at its highest folder id; both are computed when
 reading (`penroam_core::folder`), so no operation is written to repair them.

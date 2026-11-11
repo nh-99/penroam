@@ -10,6 +10,17 @@ notes. If you find one, please report it: see [support](support.md).
 * **A backup, export or WebDAV copy isn't encrypted.** Keep these files somewhere you trust.
   Penroam warns you if the notebooks are synced.
 
+## Infinite canvas
+
+* Older versions of Penroam show canvas notebooks as ordinary sheets, cut off at the page edge, and
+  PDF pages placed on a canvas as empty boxes. Once a notebook is switched to or from a canvas on a
+  synced device, devices on older versions stop syncing it and ask to be updated.
+* A long canvas is split across several PDF pages where its content has gaps. Writing or a
+  drawing taller than a page, with no gap to break in, is cut at the page edge and continues on
+  the next page.
+* SVG export and text export leave out PDF pages placed on a canvas, with a warning. PNG and
+  annotated PDF keep them.
+
 ## Importing
 
 * Evernote PDF attachments aren't imported. Penroam lists them in the import report.

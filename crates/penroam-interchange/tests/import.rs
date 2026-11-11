@@ -382,6 +382,7 @@ fn svg_is_well_formed_and_escaped() {
         font_size: 12.0,
         color: "#000000".into(),
         align: TextAlign::Left,
+        font: Default::default(),
         row_pitch: None,
         extra: Default::default(),
     }));

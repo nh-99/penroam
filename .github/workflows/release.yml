@@ -257,8 +257,9 @@ jobs:
         run: |
           brew install xcodegen
           pnpm tauri ios init --ci
-          cp apps/desktop-mobile/src-tauri/icons/ios/*.png \
-            apps/desktop-mobile/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
+          # Replace Tauri's light-only catalog with ours (light, dark and tinted).
+          appicon=apps/desktop-mobile/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset
+          rm -rf "$appicon" && cp -R apps/desktop-mobile/src-tauri/icons/ios "$appicon"
       - name: Build
         run: |
           pnpm tauri ios build --ci --target aarch64 --export-method app-store-connect \

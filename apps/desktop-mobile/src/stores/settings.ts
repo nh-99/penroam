@@ -6,6 +6,7 @@ import type { Tool } from "../editor/engine";
 import type { PenOnlyMode } from "../editor/input";
 import type { Paper } from "../generated/Paper";
 import type { TemplateKind } from "../generated/TemplateKind";
+import type { TextFont } from "../generated/TextFont";
 import type { UpdateChannel } from "../platform/updates";
 import { normalizeHex } from "../editor/color";
 
@@ -50,6 +51,8 @@ interface Persisted {
   highlighterWidth: number;
   textColor: string;
   textSize: number;
+  /** Font of new text: handwritten (Excalifont) or formatted (Liberation Sans). */
+  textFont: TextFont;
   /** The toolbar's pen colours: distinct `#rrggbb` values, never empty. */
   penPalette: string[];
   /** The toolbar's highlighter colours: distinct `#rrggbb` values, never empty. */
@@ -58,6 +61,8 @@ interface Persisted {
   textFreePlacement: boolean;
   paper: Paper;
   template: TemplateKind;
+  /** New notebooks start as infinite canvases (the last choice in the new notebook dialog). */
+  infiniteCanvas: boolean;
   sidebarOpen: boolean;
   /** The editor shows every page in one scrolling column instead of one page at a time. */
   continuousScroll: boolean;
@@ -84,11 +89,13 @@ const defaults: Persisted = {
   highlighterWidth: 14,
   textColor: "#111111",
   textSize: 16,
+  textFont: "handwritten",
   penPalette: PEN_COLORS,
   highlighterPalette: HIGHLIGHTER_COLORS,
   textFreePlacement: false,
   paper: "letter",
   template: "ruled",
+  infiniteCanvas: false,
   sidebarOpen: true,
   continuousScroll: true,
   epaperChosenAutomatically: false,
@@ -116,6 +123,7 @@ function load(): Persisted {
     ...saved,
     penPalette: cleanPalette(saved.penPalette, PEN_COLORS),
     highlighterPalette: cleanPalette(saved.highlighterPalette, HIGHLIGHTER_COLORS),
+    textFont: saved.textFont === "formatted" ? "formatted" : "handwritten",
   };
 }
 

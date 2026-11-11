@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search, FileText, FileImage, ClipboardCopy, History, File, GalleryVertical } from "@lucide/vue";
+import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search, FileText, FileImage, ClipboardCopy, History, File, GalleryVertical, Infinity as InfinityIcon, Check } from "@lucide/vue";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
@@ -19,6 +19,7 @@ import SearchPanel from "../components/SearchPanel.vue";
 import { useSearch } from "../stores/search";
 import { highlightRects, type SearchHit } from "../platform/search";
 import PromptDialog from "../components/PromptDialog.vue";
+import CanvasModeDialog from "../components/CanvasModeDialog.vue";
 import TemplatePreview from "../components/TemplatePreview.vue";
 import IconBtn from "../components/ui/IconBtn.vue";
 import Menu from "../components/ui/Menu.vue";
@@ -50,7 +51,15 @@ const mod = modKey();
 
 const nb = computed(() => lib.current!);
 const idx = computed(() => lib.pageIndex);
-const sidebarVisible = computed(() => (narrow.value ? drawerOpen.value : settings.s.sidebarOpen));
+const canvas = computed(() => !!lib.current?.infiniteCanvas);
+/**
+ * Infinite canvases start with the page list closed, whatever it was for sheets, so the canvas
+ * gets the room; opening it there doesn't change the setting for sheets.
+ */
+const canvasSidebarOpen = ref(false);
+watch([() => lib.current?.id, canvas], () => (canvasSidebarOpen.value = false));
+const sidebarOpen = computed(() => (canvas.value ? canvasSidebarOpen.value : settings.s.sidebarOpen));
+const sidebarVisible = computed(() => (narrow.value ? drawerOpen.value : sidebarOpen.value));
 
 function onResize() {
   narrow.value = window.innerWidth < 768;
@@ -60,6 +69,7 @@ onBeforeUnmount(() => window.removeEventListener("resize", onResize));
 
 function toggleSidebar() {
   if (narrow.value) drawerOpen.value = !drawerOpen.value;
+  else if (canvas.value) canvasSidebarOpen.value = !canvasSidebarOpen.value;
   else settings.s.sidebarOpen = !settings.s.sidebarOpen;
 }
 
@@ -85,8 +95,31 @@ async function back() {
   lib.close();
 }
 async function importPdf() {
+  if (canvas.value) {
+    // the whole document goes onto the page that is open
+    const pages = await lib.importPdfForCanvas();
+    if (pages) host.editor.value?.placePdfPages(pages);
+    return;
+  }
   const first = await lib.importPdf();
   if (first) lib.currentPageId = first;
+}
+
+/** Asking whether to combine the pages, before infinite canvases go on. */
+const askCanvas = ref(false);
+function toggleCanvas() {
+  if (!canvas.value && nb.value.pageOrder.length > 1) askCanvas.value = true;
+  else void setCanvas(!canvas.value, false);
+}
+async function setCanvas(on: boolean, collapse: boolean) {
+  askCanvas.value = false;
+  try {
+    await host.flush();
+  } catch (e) {
+    ui.error(`Changes are not saved yet: ${(e as Error).message}`, { label: "Retry", run: () => void host.retry() });
+    return;
+  }
+  if (await lib.setInfiniteCanvas(on, collapse)) await host.reload();
 }
 const search = useSearch();
 async function openHit(h: SearchHit) {
@@ -250,8 +283,14 @@ watch(narrow, (n) => {
             <MenuItem v-for="t in templates" :key="t.kind" @click="setTemplate(t.kind)">
               <TemplatePreview :kind="t.kind" class="!h-8 !w-6" />{{ t.label }}
             </MenuItem>
+            <div class="my-1 border-t border-line" role="separator" />
+            <MenuItem role="menuitemcheckbox" :aria-checked="canvas" @click="toggleCanvas">
+              <InfinityIcon :size="16" />
+              <span class="mr-auto">Infinite canvas</span>
+              <Check v-if="canvas" :size="16" aria-hidden="true" />
+            </MenuItem>
           </Menu>
-          <IconBtn label="Import PDF as pages" @click="importPdf"><FileUp :size="20" /></IconBtn>
+          <IconBtn :label="canvas ? 'Import PDF onto this canvas' : 'Import PDF as pages'" @click="importPdf"><FileUp :size="20" /></IconBtn>
           <Menu label="Export and print">
             <template #trigger="{ toggle, open }">
               <IconBtn label="Export and print" :aria-expanded="open" aria-haspopup="menu" @click="toggle"><Download :size="20" /></IconBtn>
@@ -278,7 +317,7 @@ watch(narrow, (n) => {
 
     <div class="relative flex min-h-0 flex-1">
       <!-- sidebar (wide) / drawer (narrow) -->
-      <aside v-if="!narrow && settings.s.sidebarOpen" class="w-44 shrink-0 border-r border-line bg-surface">
+      <aside v-if="!narrow && sidebarOpen" class="w-44 shrink-0 border-r border-line bg-surface">
         <PageSidebar :notebook="nb" :current="lib.currentPageId" :thumbs="lib.thumbs" @select="selectPage" @add="addPage" @delete="lib.deletePage" @reorder="lib.reorder" @restore="lib.restorePage" />
       </aside>
       <template v-if="narrow && drawerOpen">
@@ -300,7 +339,7 @@ watch(narrow, (n) => {
             <Btn class="mt-3" variant="outline" @click="host.openPage(lib.currentPageId)">Try again</Btn>
           </div>
         </div>
-        <div v-if="nb.pageOrder.length > 0" class="absolute bottom-3 right-3 z-10 flex items-center gap-0.5 rounded-xl border border-line bg-surface p-0.5 shadow-sm epaper:border-2 epaper:shadow-none" role="group" aria-label="Page layout">
+        <div v-if="nb.pageOrder.length > 0 && !canvas" class="absolute bottom-3 right-3 z-10 flex items-center gap-0.5 rounded-xl border border-line bg-surface p-0.5 shadow-sm epaper:border-2 epaper:shadow-none" role="group" aria-label="Page layout">
           <IconBtn label="One page at a time" :active="!settings.s.continuousScroll" @click="settings.s.continuousScroll = false"><File :size="18" /></IconBtn>
           <IconBtn label="Continuous scrolling" :active="settings.s.continuousScroll" @click="settings.s.continuousScroll = true"><GalleryVertical :size="18" /></IconBtn>
         </div>
@@ -321,9 +360,10 @@ watch(narrow, (n) => {
     </footer>
 
     <ConflictsDialog v-if="showConflicts" :notebook-id="nb.id" :current-title="nb.title" @close="showConflicts = false" @resolved="lib.reloadCurrent(); lib.currentPageId && host.markChanged([lib.currentPageId])" />
-    <HistoryDialog v-if="showHistory && lib.currentPageId" :notebook="nb" :page-id="lib.currentPageId" :render="host.renderPagePng" @close="showHistory = false" @restored="onHistoryRestored" />
+    <HistoryDialog v-if="showHistory && lib.currentPageId" :notebook="nb" :page-id="lib.currentPageId" :render="(p, w) => host.renderPagePng(p, w, { paper: true })" @close="showHistory = false" @restored="onHistoryRestored" />
     <SettingsDialog v-if="showSettings" :native-kind="host.native.value?.kind ?? null" @close="showSettings = false" />
     <SearchPanel v-if="search.panelOpen" @close="search.panelOpen = false" @open="openHit" />
+    <CanvasModeDialog v-if="askCanvas" :pages="nb.pageOrder.length" @close="askCanvas = false" @choose="(c) => setCanvas(true, c)" />
     <PromptDialog v-if="renaming" title="Rename notebook" label="Title" :value="nb.title" confirm="Rename" @close="renaming = false" @submit="(t) => { lib.rename(nb.id, t); renaming = false; }" />
   </div>
 </template>

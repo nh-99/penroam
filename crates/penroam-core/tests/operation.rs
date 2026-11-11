@@ -77,6 +77,7 @@ fn text(id: Uuid, z: i64, s: &str) -> Element {
         font_size: 14.0,
         color: "#111111".into(),
         align: TextAlign::Left,
+        font: Default::default(),
         row_pitch: None,
         extra: Default::default(),
     })
@@ -708,4 +709,76 @@ fn notebook_ops_are_idempotent_under_suffix_replay() {
             assert_eq!(got, want, "replay of [{from}..] over state at {upto}");
         }
     }
+}
+
+#[test]
+fn infinite_canvas_switch_merges_without_a_conflict() {
+    let (mut a, mut b) = (Device::new(1), Device::new(2));
+    let base = setup(&mut a, &mut b);
+    let on = |d: &mut Device, infinite| {
+        d.op(DocumentOperation::NotebookCanvasSet {
+            notebook_id: NB,
+            infinite,
+        })
+    };
+    let ao = vec![on(&mut a, true)];
+    assert_eq!(ao[0].schema_version, 4);
+    let bo = vec![on(&mut b, false)];
+    let r = converge(&base, &ao, &bo);
+    assert!(r.conflicts().is_empty());
+    // the highest operation id wins: device 2's
+    assert!(!r.notebook().unwrap().infinite_canvas);
+
+    // a later switch, after seeing both, decides it
+    a.saw(&bo);
+    let later = on(&mut a, true);
+    let mut r = r;
+    assert_eq!(r.apply(&later), Ok(Applied::New));
+    assert!(r.notebook().unwrap().infinite_canvas);
+
+    // the local path agrees and is idempotent
+    let mut nb = Notebook::new(
+        NB,
+        "Lab".into(),
+        PageDefaults::default(),
+        "#3b5b7a".into(),
+        0,
+    );
+    assert_eq!(
+        apply_to_notebook(&mut nb, &later),
+        Ok(NotebookEffect::Changed)
+    );
+    assert!(nb.infinite_canvas);
+    assert_eq!(
+        apply_to_notebook(&mut nb, &later),
+        Ok(NotebookEffect::Unchanged)
+    );
+}
+
+#[test]
+fn pdf_page_elements_must_name_their_own_asset() {
+    let pdf = PdfBackgroundRef {
+        asset_hash: "a".repeat(64),
+        page_index: 2,
+        media_box: [0.0, 0.0, 612.0, 792.0],
+        crop_box: [0.0, 0.0, 612.0, 792.0],
+        rotation: 0,
+    };
+    let mut img = ImageElement {
+        id: Uuid::from_u128(0x40),
+        z: -1,
+        x: -20.0,
+        y: 900.0,
+        width: 612.0,
+        height: 792.0,
+        asset_hash: "a".repeat(64),
+        pdf_page: Some(pdf),
+        extra: Default::default(),
+    };
+    assert!(validate::validate_element(&Element::Image(img.clone())).is_ok());
+    // survives a JSON round trip as `pdfPage`
+    let json = serde_json::to_value(Element::Image(img.clone())).unwrap();
+    assert_eq!(json["pdfPage"]["pageIndex"], 2);
+    img.asset_hash = "b".repeat(64);
+    assert!(validate::validate_element(&Element::Image(img)).is_err());
 }

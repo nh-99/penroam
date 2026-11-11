@@ -36,3 +36,8 @@ if (!(globalThis as any).ResizeObserver) {
     disconnect() {}
   };
 }
+// happy-dom fires `selectionchange` from inside `Selection.collapse`, where browsers queue it.
+// CodeMirror writes the selection during its own update, so with a block widget next to the caret
+// (a table's spreadsheet) the event re-enters that update, and deferring it loops, as happy-dom
+// never reports back the exact selection that was set. Tests set selections through transactions.
+window.addEventListener("selectionchange", (e) => e.stopImmediatePropagation(), true);

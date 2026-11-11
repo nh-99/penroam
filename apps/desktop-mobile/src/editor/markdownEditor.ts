@@ -12,6 +12,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { activeFormats, type FormatAction, formatTransaction, taskToggleAt } from "./markdownFormat";
 import { HEADING_SCALE, rowsFor } from "./markdown";
 import { livePreview, markdownSyntax } from "./markdownPreview";
+import { focusedGrid } from "./sheetGrid";
 import { lineHeight } from "./textLayout";
 
 export interface MarkdownEditorOptions {
@@ -85,9 +86,15 @@ export class MarkdownEditor {
     return this.view.contentDOM.offsetHeight;
   }
 
-  /** The commands that are on at the selection. */
+  /** The commands that are on at the selection, or for the selected cells of a table being worked in. */
   get formats(): FormatAction[] {
-    return activeFormats(this.view.state);
+    return this.grid()?.formats ?? activeFormats(this.view.state);
+  }
+
+  /** The table in this box that has focus, if any. */
+  private grid() {
+    const g = focusedGrid();
+    return g && this.view.dom.contains(g.root) ? g : null;
   }
 
   focus() {
@@ -96,6 +103,9 @@ export class MarkdownEditor {
 
   /** Runs a toolbar command. Always reports handled, as a keyboard shortcut must not fall through. */
   format(action: FormatAction): boolean {
+    // while a table has focus, the toolbar formats its cells
+    const grid = this.grid();
+    if (grid) return grid.formatCommand(action);
     const tr = formatTransaction(this.view.state, action);
     if (tr) this.view.dispatch(tr);
     this.view.focus();

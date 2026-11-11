@@ -147,7 +147,7 @@ describe("colour dialog", () => {
 });
 
 describe("toolbar colours", () => {
-  const state = { tool: "pen", scale: 1, canUndo: false, canRedo: false, selectionCount: 0, selectionHasText: false, selectionTextFree: true, pageHasRows: false, editingText: false, textFormats: [] };
+  const state = { tool: "pen", scale: 1, canUndo: false, canRedo: false, selectionCount: 0, selectionHasText: false, selectionTextFree: true, selectionTextFont: null, pageHasRows: false, editingText: false, textFormats: [] };
   const toolbar = (tool = "pen") => {
     const pinia = createPinia();
     setActivePinia(pinia);

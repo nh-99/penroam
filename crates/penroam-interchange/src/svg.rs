@@ -5,14 +5,18 @@
 //! export. Paint order is the same too: template, ink, images, text. All text
 //! and attribute values are escaped; images are embedded as `data:` URIs and
 //! only with PNG or JPEG types, so the file references nothing outside itself.
+//! For the same reason a page with handwritten text carries Excalifont as a
+//! `data:` font; formatted text names the Liberation faces and their usual
+//! stand-ins, which have the same widths.
 //!
-//! A PDF background can't be drawn here without a PDF renderer, so it is left
-//! out with a warning; annotated PDF export or PNG export keep it.
+//! A PDF background, or a PDF page placed on an infinite canvas, can't be drawn
+//! here without a PDF renderer, so it is left out with a warning; annotated PDF
+//! export or PNG export keep it.
 
 use penroam_core::geometry::{stroke_pieces, Piece};
 use penroam_core::markdown::{self, MathBox, Paint};
-use penroam_core::text::Face;
-use penroam_core::{Element, InkStroke, InkTool, Page, TemplateKind, TextBlock};
+use penroam_core::text::{Face, HAND_BOLD_STROKE, HAND_SLANT};
+use penroam_core::{Element, InkStroke, InkTool, Page, TemplateKind, TextBlock, TextFont};
 use serde::Serialize;
 use std::fmt::Write;
 use ts_rs::TS;
@@ -170,10 +174,15 @@ fn ink(s: &mut String, st: &InkStroke) {
     }
 }
 
+/// The handwritten font, the file the editor loads.
+const HAND_TTF: &[u8] =
+    include_bytes!("../../../apps/desktop-mobile/src/assets/fonts/Excalifont-Regular.ttf");
+
 fn text_block(s: &mut String, t: &TextBlock) -> bool {
     let no_math = |_: &str, _: bool| -> Option<MathBox> { None };
     let p: Paint = markdown::layout(
         &t.text,
+        t.font,
         t.font_size,
         t.width,
         t.row_pitch,
@@ -188,22 +197,46 @@ fn text_block(s: &mut String, t: &TextBlock) -> bool {
         esc(&t.color)
     );
     for r in &p.runs {
+        const SANS: &str = "'Liberation Sans',Helvetica,Arial,sans-serif";
         let (family, weight, style) = match r.face {
-            Face::Regular => ("sans", "", ""),
-            Face::Bold => ("sans", " font-weight=\"bold\"", ""),
-            Face::Italic => ("sans", "", " font-style=\"italic\""),
-            Face::BoldItalic => ("sans", " font-weight=\"bold\"", " font-style=\"italic\""),
-            Face::Mono => ("mono", "", ""),
+            Face::Regular => (SANS, "", ""),
+            Face::Bold => (SANS, " font-weight=\"bold\"", ""),
+            Face::Italic => (SANS, "", " font-style=\"italic\""),
+            Face::BoldItalic => (SANS, " font-weight=\"bold\"", " font-style=\"italic\""),
+            Face::Mono => ("'Liberation Mono',Courier,monospace", "", ""),
+            // Excalifont has one face, so its bold and italic are drawn as the
+            // editor draws them: a stroke around the glyphs, a shear at the baseline.
+            Face::Hand | Face::HandBold | Face::HandItalic | Face::HandBoldItalic => {
+                ("PenroamHand,Excalifont,cursive", "", "")
+            }
         };
-        let family = if family == "mono" {
-            "'Liberation Mono',Courier,monospace"
+        let bold = matches!(r.face, Face::HandBold | Face::HandBoldItalic);
+        let slanted = matches!(r.face, Face::HandItalic | Face::HandBoldItalic);
+        let stroke = if bold {
+            format!(
+                " stroke=\"{}\" stroke-width=\"{}\" stroke-linejoin=\"round\"",
+                esc(&t.color),
+                n(HAND_BOLD_STROKE * r.size)
+            )
         } else {
-            "'Liberation Sans',Helvetica,Arial,sans-serif"
+            String::new()
+        };
+        let (x, y, shear) = if slanted {
+            let deg = -HAND_SLANT.atan().to_degrees();
+            let shear = format!(
+                " transform=\"translate({} {}) skewX({})\"",
+                n(r.x),
+                n(r.y),
+                n(deg)
+            );
+            (0.0, 0.0, shear)
+        } else {
+            (r.x, r.y, String::new())
         };
         let _ = writeln!(
             s,
-            "<text x=\"{}\" y=\"{}\" font-size=\"{}\" font-family=\"{family}\"{weight}{style} xml:space=\"preserve\">{}</text>",
-            n(r.x), n(r.y), n(r.size), esc(&r.text)
+            "<text x=\"{}\" y=\"{}\"{shear} font-size=\"{}\" font-family=\"{family}\"{weight}{style}{stroke} xml:space=\"preserve\">{}</text>",
+            n(x), n(y), n(r.size), esc(&r.text)
         );
     }
     for l in &p.segments {
@@ -238,6 +271,17 @@ pub fn page_to_svg(page: &Page, asset: impl Fn(&str) -> Option<(Vec<u8>, String)
         n(w),
         n(h)
     );
+    let handwritten = page
+        .elements
+        .iter()
+        .any(|e| matches!(e, Element::Text(t) if t.font == TextFont::Handwritten));
+    if handwritten {
+        let _ = writeln!(
+            s,
+            "<style>@font-face{{font-family:PenroamHand;src:url(data:font/ttf;base64,{})}}</style>",
+            base64(HAND_TTF)
+        );
+    }
     template(&mut s, page);
     let mut warnings = Vec::new();
     if page.background.is_some() {
@@ -258,6 +302,10 @@ pub fn page_to_svg(page: &Page, asset: impl Fn(&str) -> Option<(Vec<u8>, String)
         match e {
             Element::Ink(st) => ink(&mut s, st),
             Element::Text(t) => math |= text_block(&mut s, t),
+            Element::Image(i) if i.pdf_page.is_some() => warnings.push(
+                "The PDF pages on this page are not in the SVG. Use PNG or annotated PDF to keep them."
+                    .to_string(),
+            ),
             Element::Image(i) => match asset(&i.asset_hash) {
                 Some((bytes, media)) if matches!(media.as_str(), "image/png" | "image/jpeg") => {
                     let _ = writeln!(

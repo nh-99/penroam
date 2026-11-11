@@ -3,7 +3,16 @@
 // export wrapping on every OS. Rendered text goes through ./markdown.ts; plain
 // wrapping sizes the source view while a block is edited. Verified against
 // tests/fixtures/text-layout-golden.json.
+//
+// Excalifont, the handwritten font, has one face. Its bold and italic are drawn
+// by stroking and shearing that face (see `drawRun`), exactly as the PDF export
+// does, so they keep its widths. `styledFace` sets a character Excalifont lacks
+// in the formatted font instead, so nothing is measured in one font and drawn in
+// another.
 import metricsJson from "../../../../crates/penroam-core/data/text-metrics.json";
+import type { TextFont } from "../generated/TextFont";
+
+type FormattedFace = "regular" | "bold" | "italic" | "boldItalic" | "mono";
 
 interface Metrics {
   unitsPerEm: number;
@@ -13,35 +22,92 @@ interface Metrics {
   firstBaseline: number;
   fallbackWidth: number;
   widths: Record<string, number>;
-  faces: Record<Exclude<Face, "regular">, Record<string, number>>;
+  faces: Record<Exclude<FormattedFace, "regular">, Record<string, number>>;
+  hand: { ascent: number; descent: number; widths: Record<string, number> };
 }
 
-/** A bundled typeface; each has a PDF standard font with the same widths. */
-export type Face = "regular" | "bold" | "italic" | "boldItalic" | "mono";
+/** A bundled typeface: the formatted faces have PDF standard fonts with the same widths, the hand faces are Excalifont. */
+export type Face = FormattedFace | "hand" | "handBold" | "handItalic" | "handBoldItalic";
 
 const M = metricsJson as Metrics;
 const codes = (widths: Record<string, number>) => new Map<number, number>(Object.entries(widths).map(([k, v]) => [Number(k), v]));
 const byCode = codes(M.widths);
+const byHand = codes(M.hand.widths);
 const byFace: Record<Face, Map<number, number>> = {
   regular: byCode,
   bold: codes(M.faces.bold),
   italic: codes(M.faces.italic),
   boldItalic: codes(M.faces.boldItalic),
   mono: codes(M.faces.mono),
+  hand: byHand,
+  handBold: byHand,
+  handItalic: byHand,
+  handBoldItalic: byHand,
 };
 
 export const metrics = { unitsPerEm: M.unitsPerEm, ascent: M.ascent, descent: M.descent };
 export const TEXT_FONT_FAMILY = "PenroamSans";
 export const MONO_FONT_FAMILY = "PenroamMono";
+export const HAND_FONT_FAMILY = "PenroamHand";
 /** Size of code relative to the text around it. */
 export const MONO_SCALE = 0.9;
+/** Shear of the slanted hand faces (`HAND_SLANT` in penroam-core). */
+export const HAND_SLANT = 0.2;
+/** Outline stroke that thickens the bold hand faces, in em (`HAND_BOLD_STROKE` in penroam-core). */
+export const HAND_BOLD_STROKE = 0.045;
 
-/** Canvas font string for a face. */
+export const isHand = (face: Face) => face === "hand" || face === "handBold" || face === "handItalic" || face === "handBoldItalic";
+
+/** The CSS font family a block's text is set in, for the DOM editor and previews. */
+export const fontFamilyOf = (font: TextFont | undefined) => (font === "handwritten" ? `${HAND_FONT_FAMILY}, ${TEXT_FONT_FAMILY}` : TEXT_FONT_FAMILY);
+
+/** Ascender height of a font's text faces, in font units. */
+export const ascentOf = (font: TextFont) => (font === "handwritten" ? M.hand.ascent : M.ascent);
+/** Descender depth of a font's text faces (negative), in font units. */
+export const descentOf = (font: TextFont) => (font === "handwritten" ? M.hand.descent : M.descent);
+
+/** The face for character `c` (`Face::styled` in penroam-core). */
+export function styledFace(font: TextFont, bold: boolean, italic: boolean, mono: boolean, c: string): Face {
+  if (mono) return "mono";
+  const cp = c.codePointAt(0)!;
+  const hand = font === "handwritten" && (byHand.has(cp) || (c === "\t" && byHand.has(32)));
+  if (hand) return bold && italic ? "handBoldItalic" : bold ? "handBold" : italic ? "handItalic" : "hand";
+  return bold && italic ? "boldItalic" : bold ? "bold" : italic ? "italic" : "regular";
+}
+
+/**
+ * Canvas font string for a face. The hand faces always name the one Excalifont face: their
+ * weight and slant come from `drawRun`, never from the browser's synthesis, whose widths
+ * differ between engines.
+ */
 export function canvasFont(face: Face, size: number): string {
   if (face === "mono") return `${size}px ${MONO_FONT_FAMILY}`;
+  if (isHand(face)) return `${size}px ${HAND_FONT_FAMILY}`;
   const style = face === "italic" || face === "boldItalic" ? "italic " : "";
   const weight = face === "bold" || face === "boldItalic" ? "bold " : "";
   return `${style}${weight}${size}px ${TEXT_FONT_FAMILY}`;
+}
+
+/** Draws one laid-out run with its baseline at (`x`, `y`), the same way the PDF export does. */
+export function drawRun(ctx: CanvasRenderingContext2D, face: Face, size: number, text: string, x: number, y: number): void {
+  ctx.font = canvasFont(face, size);
+  if (!isHand(face)) {
+    ctx.fillText(text, x, y);
+    return;
+  }
+  // The layout knows nothing of kerning or ligatures, and neither does the PDF.
+  ctx.save();
+  ctx.fontKerning = "none";
+  if ("textRendering" in ctx) ctx.textRendering = "optimizeSpeed";
+  ctx.translate(x, y);
+  if (face === "handItalic" || face === "handBoldItalic") ctx.transform(1, 0, -HAND_SLANT, 1, 0, 0);
+  ctx.fillText(text, 0, 0);
+  if (face === "handBold" || face === "handBoldItalic") {
+    ctx.lineWidth = HAND_BOLD_STROKE * size;
+    ctx.lineJoin = "round";
+    ctx.strokeText(text, 0, 0);
+  }
+  ctx.restore();
 }
 
 export function advance(ch: string): number {

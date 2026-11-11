@@ -84,6 +84,10 @@ impl ImageSet {
             let Element::Image(image) = element else {
                 continue;
             };
+            // PDF pages are not images: the caller embeds them as form XObjects
+            if image.pdf_page.is_some() {
+                continue;
+            }
             let hash = image.asset_hash.as_str();
             if placed.names.contains_key(hash) {
                 continue;

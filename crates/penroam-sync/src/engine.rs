@@ -1292,6 +1292,18 @@ impl<T: SyncTransport> SyncEngine<T> {
                 None,
             )?;
         }
+        // only when on: a sheet notebook seeds nothing newer than older clients can apply
+        if nb.infinite_canvas {
+            n += self.append_local(
+                Uuid::new_v4(),
+                nb.updated_at,
+                DocumentOperation::NotebookCanvasSet {
+                    notebook_id: nb.id,
+                    infinite: true,
+                },
+                None,
+            )?;
+        }
         Ok(n)
     }
 

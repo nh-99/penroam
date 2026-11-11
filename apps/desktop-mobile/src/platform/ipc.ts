@@ -22,6 +22,7 @@ import type { Folder } from "../generated/Folder";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import type { OperationBatch } from "../generated/OperationBatch";
 import type { Page } from "../generated/Page";
+import type { PdfBackgroundRef } from "../generated/PdfBackgroundRef";
 import type { Paper } from "../generated/Paper";
 import type { RecoveryReport } from "../generated/RecoveryReport";
 import type { Template } from "../generated/Template";
@@ -88,8 +89,10 @@ export const api = {
   libraryStatus: () => call<RecoveryReport>("library_status"),
   listNotebooks: () => call<NotebookSummary[]>("list_notebooks"),
   getNotebook: (id: string) => call<Notebook>("get_notebook", { id }),
-  createNotebook: (title: string, paper: Paper, template: Template, cover?: string, vault?: string) =>
-    call<NotebookAndPage>("create_notebook", { title, paper, template, cover, vault }),
+  createNotebook: (title: string, paper: Paper, template: Template, cover?: string, vault?: string, infiniteCanvas?: boolean) =>
+    call<NotebookAndPage>("create_notebook", { title, paper, template, cover, vault, infiniteCanvas }),
+  /** Infinite canvases on or off; with `collapse`, every page is first gathered onto the first one. */
+  setInfiniteCanvas: (id: string, infinite: boolean, collapse = false) => call<Notebook>("set_infinite_canvas", { id, infinite, collapse }),
   moveNotebookToVault: (id: string, vault: string) => call<Notebook>("move_notebook_to_vault", { id, vault }),
   renameNotebook: (id: string, title: string) => call<Notebook>("rename_notebook", { id, title }),
   listFolders: () => call<Folder[]>("list_folders"),
@@ -133,6 +136,9 @@ export const api = {
   },
   importPdf: (notebookId: string, path: string, fileName?: string, index?: number) =>
     call<{ notebook: Notebook; pages: Page[] }>("import_pdf", { notebookId, path, fileName, index }),
+  /** Adds a PDF to the notebook without making pages, for placing its pages on a canvas. */
+  addPdfAsset: (notebookId: string, path: string, fileName?: string) =>
+    call<{ notebook: Notebook; pages: PdfBackgroundRef[] }>("add_pdf_asset", { notebookId, path, fileName }),
   exportNotebook: (notebookId: string, path: string) => call<{ bytes: number; pages: number }>("export_notebook", { notebookId, path }),
   importNotebook: (path: string) => call<ImportReport>("import_notebook", { path }),
   inspectNotebook: (path: string) => call<ArchiveSummary>("inspect_notebook", { path }),

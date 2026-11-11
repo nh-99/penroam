@@ -28,6 +28,19 @@ pub const NOTEBOOK_SCHEMA_VERSION: u32 = 2;
 /// metadata section). Independent of [`crate::binary::FILE_FORMAT_VERSION`].
 pub const PAGE_SCHEMA_VERSION: u32 = 1;
 
+/// Space left around the content of an infinite canvas page when it is laid
+/// out as a sheet (see [`Page::canvas_as_sheet`]).
+pub const CANVAS_SHEET_MARGIN_PT: f64 = 36.0;
+
+/// Key in [`Page::extra`] that [`Page::canvas_as_sheets`] sets on the sheets after the first of
+/// a ruled canvas column. Exporters draw those sheets ruled from the top, without the header,
+/// since the column's rules run on from the sheet before. Only set on sheets made for export.
+pub const CONTINUED_SHEET_KEY: &str = "penroamContinuedSheet";
+
+/// The bottom part of a sheet, as a fraction of its height, where [`Page::canvas_as_sheets`]
+/// looks for a gap to break in. Higher up, a gap would leave too much of the sheet empty.
+pub const SHEET_BREAK_ZONE: f64 = 0.4;
+
 /// Free-form JSON object used to carry fields this build does not know, so
 /// they survive a load/save round trip.
 pub type Extra = Map<String, Value>;
@@ -93,6 +106,14 @@ pub struct Notebook {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub folder: Option<Uuid>,
+    /// Whether the notebook's pages are infinite canvases: unbounded surfaces
+    /// that grow around their content, instead of sheets of [`Page::size`].
+    /// It is a way of showing the pages, so turning it off again loses
+    /// nothing. Added without a schema bump: older builds keep it in `extra`
+    /// and show the pages as sheets.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub infinite_canvas: bool,
     /// Application metadata (free-form, preserved).
     #[serde(default, skip_serializing_if = "is_empty_map")]
     #[ts(type = "Record<string, unknown>", optional)]
@@ -101,6 +122,10 @@ pub struct Notebook {
     #[serde(flatten)]
     #[ts(skip)]
     pub extra: Extra,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A page in the notebook's trash.
@@ -386,6 +411,55 @@ impl Element {
             Element::Image(i) => i.z,
         }
     }
+
+    /// Mutable stacking position.
+    pub fn z_mut(&mut self) -> &mut i64 {
+        match self {
+            Element::Ink(s) => &mut s.z,
+            Element::Text(t) => &mut t.z,
+            Element::Image(i) => &mut i.z,
+        }
+    }
+
+    /// Approximate bounding box `[x0, y0, x1, y1]` in points: ink points
+    /// padded by half the stroke width, the stored box of text and images.
+    /// Text laid out taller than its stored `height` can reach further down.
+    /// `None` for a stroke without points.
+    pub fn bounds(&self) -> Option<[f64; 4]> {
+        match self {
+            Element::Ink(s) => {
+                let first = s.points.first()?;
+                let mut b = [first.x, first.y, first.x, first.y];
+                for p in &s.points {
+                    b = [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)];
+                }
+                let r = s.width / 2.0;
+                Some([b[0] - r, b[1] - r, b[2] + r, b[3] + r])
+            }
+            Element::Text(t) => Some([t.x, t.y, t.x + t.width, t.y + t.height]),
+            Element::Image(i) => Some([i.x, i.y, i.x + i.width, i.y + i.height]),
+        }
+    }
+
+    /// Moves the element by (`dx`, `dy`) points.
+    pub fn translate(&mut self, dx: f64, dy: f64) {
+        match self {
+            Element::Ink(s) => {
+                for p in &mut s.points {
+                    p.x += dx;
+                    p.y += dy;
+                }
+            }
+            Element::Text(t) => {
+                t.x += dx;
+                t.y += dy;
+            }
+            Element::Image(i) => {
+                i.x += dx;
+                i.y += dy;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -492,6 +566,26 @@ pub enum TextAlign {
     Right,
 }
 
+/// The font a [`TextBlock`] is set in. Code is always in the monospace face.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum TextFont {
+    /// Liberation Sans (Helvetica in PDFs). Blocks written before fonts could
+    /// be chosen have no `font` field and are set in this one.
+    #[default]
+    Formatted,
+    /// Excalifont, a handwriting font. Bold and italic are drawn from its one
+    /// face; characters it lacks fall back to the formatted font.
+    Handwritten,
+}
+
+impl TextFont {
+    fn is_formatted(&self) -> bool {
+        *self == TextFont::Formatted
+    }
+}
+
 /// Multiline Markdown text placed on the page. Layout is deterministic: see
 /// [`crate::markdown`]. `height` is kept in sync with the laid-out content by the
 /// editor; renderers grow it if needed and never clip text.
@@ -521,6 +615,12 @@ pub struct TextBlock {
     /// Line alignment.
     #[serde(default = "default_align")]
     pub align: TextAlign,
+    /// Font. Omitted from the JSON when formatted, so blocks that never chose a
+    /// font stay byte-identical. Added without a schema bump: older builds keep
+    /// the field in `extra` and draw the block in the formatted font.
+    #[serde(default, skip_serializing_if = "TextFont::is_formatted")]
+    #[ts(as = "Option<TextFont>", optional)]
+    pub font: TextFont,
     /// Row pitch in points when the block is locked to the paper's rows: every
     /// line then takes a whole number of rows and its baseline sits on a row.
     /// Absent for freely placed text, which uses the natural line height.
@@ -537,7 +637,8 @@ fn default_align() -> TextAlign {
     TextAlign::Left
 }
 
-/// Minimal raster/vector image placed on a page (asset reference).
+/// An image placed on a page (asset reference), or a page of a PDF asset
+/// when [`ImageElement::pdf_page`] is set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -557,6 +658,14 @@ pub struct ImageElement {
     pub height: f64,
     /// SHA-256 of the image asset in the notebook.
     pub asset_hash: String,
+    /// Set when the asset is a PDF: the page of it to draw, stretched over
+    /// the element's box. This is how PDF pages sit on an infinite canvas,
+    /// where one page can hold a whole document. Its `asset_hash` equals the
+    /// element's. Added without a schema bump: older builds keep it in
+    /// `extra` and show a placeholder, since the asset is not an image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pdf_page: Option<PdfBackgroundRef>,
     /// Unknown fields, preserved verbatim.
     #[serde(flatten)]
     #[ts(skip)]
@@ -621,6 +730,178 @@ impl Page {
         self.elements.iter().map(Element::z).max().unwrap_or(0)
     }
 
+    /// Lowest `z` of any element (0 for an empty page).
+    pub fn min_z(&self) -> i64 {
+        self.elements.iter().map(Element::z).min().unwrap_or(0)
+    }
+
+    /// The union of the elements' [`Element::bounds`], or `None` for a page
+    /// without content.
+    pub fn content_bounds(&self) -> Option<[f64; 4]> {
+        self.elements
+            .iter()
+            .filter_map(Element::bounds)
+            .reduce(|a, b| {
+                [
+                    a[0].min(b[0]),
+                    a[1].min(b[1]),
+                    a[2].max(b[2]),
+                    a[3].max(b[3]),
+                ]
+            })
+    }
+
+    /// The area an infinite canvas page shows when it is drawn as a sheet
+    /// (exports, printing): its content with a `margin` around it, or the
+    /// page's own size when it has no content. `[x0, y0, x1, y1]` in points.
+    ///
+    /// A column ([`Page::is_canvas_column`]) is the page's width from the
+    /// origin and at least the page's height, down to its content's end with
+    /// the `margin` below; content beside or above it, from before the paper
+    /// was ruled, widens it rather than being cut off.
+    pub fn canvas_extent(&self, margin: f64) -> [f64; 4] {
+        let (w, h) = (self.size.width, self.size.height);
+        match self.content_bounds() {
+            Some(b) if self.is_canvas_column() => [
+                b[0].min(0.0),
+                b[1].min(0.0),
+                b[2].max(w),
+                (b[3] + margin).max(h),
+            ],
+            Some(b) => [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin],
+            None => [0.0, 0.0, w, h],
+        }
+    }
+
+    /// True when this page, on an infinite canvas, is a column: ruled paper
+    /// keeps the page's width, header and margin line and is infinite only
+    /// downward. Grid, dotted and blank canvases have no edges. Matches the
+    /// editor's `isCanvasColumn`.
+    pub fn is_canvas_column(&self) -> bool {
+        self.template.kind == TemplateKind::Ruled
+    }
+
+    /// True for a sheet of a canvas column after its first (see
+    /// [`CONTINUED_SHEET_KEY`]): its rules start at the top, with no header.
+    pub fn continues_column(&self) -> bool {
+        self.extra.get(CONTINUED_SHEET_KEY) == Some(&Value::Bool(true))
+    }
+
+    /// An infinite canvas page as a sheet that exports and printing can lay
+    /// out: sized to its content with a `margin` around it (and to its PDF
+    /// background, which becomes a PDF page element), with everything moved
+    /// so the top-left corner is at the origin. The corner sits on a whole
+    /// template pitch, so the paper's lines stay where the editor drew them.
+    pub fn canvas_as_sheet(&self, margin: f64) -> Page {
+        let mut b = self.canvas_extent(margin);
+        if self.background.is_some() {
+            b = [
+                b[0].min(0.0),
+                b[1].min(0.0),
+                b[2].max(self.size.width),
+                b[3].max(self.size.height),
+            ];
+        }
+        let pitch = self.template.spacing.max(1.0);
+        let (x0, y0) = (
+            (b[0] / pitch).floor() * pitch,
+            (b[1] / pitch).floor() * pitch,
+        );
+        let mut sheet = self.clone();
+        sheet.paper = Paper::Custom;
+        sheet.size = Size {
+            width: (b[2] - x0).max(1.0),
+            height: (b[3] - y0).max(1.0),
+        };
+        for e in &mut sheet.elements {
+            e.translate(-x0, -y0);
+        }
+        if let Some(bg) = sheet.background.take() {
+            let size = bg.display_size();
+            let z = self.min_z() - 1;
+            sheet.elements.insert(
+                0,
+                Element::Image(ImageElement {
+                    // derived from the page id, so that the same page always gives the same sheet
+                    id: Uuid::from_u128(self.id.as_u128() ^ 1),
+                    z,
+                    x: -x0,
+                    y: -y0,
+                    width: size.width,
+                    height: size.height,
+                    asset_hash: bg.asset_hash.clone(),
+                    pdf_page: Some(bg),
+                    extra: Extra::new(),
+                }),
+            );
+        }
+        sheet
+    }
+
+    /// An infinite canvas page as sheets of `paper`'s proportions, top to bottom, for PDF
+    /// export and printing. Each sheet is as wide as the content with its `margin` (at least
+    /// `paper.width`), so nothing is shrunk or cut sideways; a viewer or printer scales the
+    /// sheets to the paper. A break goes in the lowest gap between elements in the bottom
+    /// [`SHEET_BREAK_ZONE`] of a sheet, on a whole template pitch, so lines of text and placed
+    /// PDF pages aren't split; with no such gap the break falls at the sheet's end and
+    /// whatever crosses it shows on both sheets, clipped. Always at least one sheet.
+    ///
+    /// A column ([`Page::is_canvas_column`]) is already the page's width, so its sheets are
+    /// pages of the column, and those after the first are marked with
+    /// [`CONTINUED_SHEET_KEY`] so they are ruled from the top.
+    pub fn canvas_as_sheets(&self, margin: f64, paper: Size) -> Vec<Page> {
+        let whole = self.canvas_as_sheet(margin);
+        let width = whole.size.width.max(paper.width);
+        let height = width * paper.height / paper.width;
+        let pitch = self.template.spacing.max(1.0);
+        // vertical extent of every element, for finding gaps to break in
+        let spans: Vec<(f64, f64)> = whole
+            .elements
+            .iter()
+            .filter_map(Element::bounds)
+            .map(|b| (b[1], b[3]))
+            .collect();
+        let crossed = |y: f64| spans.iter().find(|(top, bottom)| *top < y && y < *bottom);
+        let mut sheets = Vec::new();
+        let mut top = 0.0;
+        loop {
+            let mut end = top + height;
+            if end < whole.size.height {
+                // walk up from the sheet's end until nothing straddles the break
+                let lowest = top + height * (1.0 - SHEET_BREAK_ZONE);
+                let mut cut = ((top + height) / pitch).floor() * pitch;
+                while let Some((t, _)) = crossed(cut) {
+                    cut = (t / pitch).floor() * pitch;
+                }
+                if cut > lowest {
+                    end = cut;
+                }
+            }
+            let mut sheet = whole.clone();
+            sheet.size = Size { width, height };
+            sheet.elements = whole
+                .elements
+                .iter()
+                .filter(|e| e.bounds().is_some_and(|b| b[3] > top && b[1] < end))
+                .cloned()
+                .map(|mut e| {
+                    e.translate(0.0, -top);
+                    e
+                })
+                .collect();
+            if self.is_canvas_column() && !sheets.is_empty() {
+                sheet
+                    .extra
+                    .insert(CONTINUED_SHEET_KEY.into(), Value::Bool(true));
+            }
+            sheets.push(sheet);
+            if end >= whole.size.height {
+                return sheets;
+            }
+            top = end;
+        }
+    }
+
     /// Hashes of every asset the page uses (images and PDF background).
     pub fn asset_refs(&self) -> Vec<&str> {
         let mut v: Vec<&str> = self
@@ -661,6 +942,7 @@ impl Notebook {
             cover,
             assets: Vec::new(),
             folder: None,
+            infinite_canvas: false,
             metadata: Extra::new(),
             extra: Extra::new(),
         }

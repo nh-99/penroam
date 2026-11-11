@@ -14,7 +14,7 @@ use crate::document::{ImportError, ImportLoss, ImportedDocument, ImportedPage, K
 use crate::limits;
 use penroam_core::markdown::{self, MathBox};
 use penroam_core::validate::limits::{MAX_PAGES, MAX_TEXT_BYTES};
-use penroam_core::{Element, Paper, Size, Template, TextAlign, TextBlock};
+use penroam_core::{Element, Paper, Size, Template, TextAlign, TextBlock, TextFont};
 use pulldown_cmark::{Event, Parser, Tag};
 use uuid::Uuid;
 
@@ -119,7 +119,16 @@ pub(crate) fn blocks(text: &str) -> Vec<String> {
 
 fn height(text: &str, width: f64) -> f64 {
     let no_math = |_: &str, _: bool| -> Option<MathBox> { None };
-    markdown::layout(text, FONT_SIZE, width, None, TextAlign::Left, &no_math).height
+    markdown::layout(
+        text,
+        TextFont::Formatted,
+        FONT_SIZE,
+        width,
+        None,
+        TextAlign::Left,
+        &no_math,
+    )
+    .height
 }
 
 /// Whether `block` fits on one page as it is. Callers with structure of their
@@ -234,6 +243,7 @@ pub(crate) fn paginate(source: Vec<String>) -> Result<Vec<ImportedPage>, ImportE
                     font_size: FONT_SIZE,
                     color: INK.into(),
                     align: TextAlign::Left,
+                    font: Default::default(),
                     row_pitch: None,
                     extra: Default::default(),
                 })],

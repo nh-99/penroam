@@ -11,10 +11,12 @@ import type { EditorState, Tool } from "../editor/engine";
 import type { FormatAction } from "../editor/markdownFormat";
 import { HIGHLIGHTER_WIDTHS, PEN_WIDTHS, TEXT_SIZES, useSettings } from "../stores/settings";
 import { modKey } from "../platform/device";
+import type { TextFont } from "../generated/TextFont";
+import { fontFamilyOf } from "../editor/textLayout";
 import { useSideScroll } from "../composables/useSideScroll";
 
 const props = defineProps<{ state: EditorState; compact?: boolean }>();
-const emit = defineEmits<{ tool: [t: Tool]; format: [a: FormatAction]; undo: []; redo: []; zoomIn: []; zoomOut: []; fit: []; deleteSelection: []; editText: []; restyle: [s: { color?: string; fontSize?: number }]; freePlacement: [free: boolean] }>();
+const emit = defineEmits<{ tool: [t: Tool]; format: [a: FormatAction]; undo: []; redo: []; zoomIn: []; zoomOut: []; fit: []; deleteSelection: []; editText: []; restyle: [s: { color?: string; fontSize?: number; font?: TextFont }]; freePlacement: [free: boolean] }>();
 const settings = useSettings();
 const mod = modKey();
 const strip = ref<HTMLElement | null>(null);
@@ -98,6 +100,18 @@ function toggleRowLock() {
   if (selecting.value) emit("freePlacement", free);
   else settings.s.textFreePlacement = free;
 }
+// Two fonts: handwritten for notes that should look written, formatted for a typeset look.
+// Like the row lock, this sets new text with the Text tool and changes the selection otherwise.
+const fonts: { f: TextFont; label: string }[] = [
+  { f: "handwritten", label: "Handwritten" },
+  { f: "formatted", label: "Formatted" },
+];
+const showFont = computed(() => props.state.tool === "text" || (selecting.value && props.state.selectionHasText));
+const activeFont = computed(() => (selecting.value ? props.state.selectionTextFont : settings.s.textFont));
+function setFont(f: TextFont) {
+  if (selecting.value) emit("restyle", { font: f });
+  else settings.s.textFont = f;
+}
 function setSize(v: number) {
   const t = props.state.tool;
   if (t === "highlighter") settings.s.highlighterWidth = v;
@@ -153,6 +167,17 @@ function setSize(v: number) {
             </button>
           </div>
         </template>
+      </template>
+
+      <template v-if="showFont && !state.editingText">
+        <div class="mx-1.5 h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+        <div class="flex items-center gap-0.5" role="radiogroup" aria-label="Font">
+          <button v-for="x in fonts" :key="x.f" type="button" role="radio" class="touch-target inline-flex shrink-0 items-center justify-center rounded-xl px-1 hover:bg-surface-2"
+            :class="activeFont === x.f ? 'bg-brand-soft ring-1 ring-brand/40 epaper:bg-black epaper:text-white' : ''"
+            :aria-checked="activeFont === x.f" :aria-label="`${x.label} font`" :title="`${x.label} font`" @click="setFont(x.f)">
+            <span class="text-lg leading-none" :style="{ fontFamily: fontFamilyOf(x.f) }">Aa</span>
+          </button>
+        </div>
       </template>
 
       <template v-if="showRowLock && !state.editingText">

@@ -7,15 +7,23 @@
 // This is a preview, not the layout of record. The finished block is drawn by `markdown.ts`, which
 // has its own parser and is checked against penroam-core. Lezer is only used here, and where the
 // two parsers differ the preview is the one that is approximate. Formulas are the exception to
-// parser independence: they share `scanMath`, so `$a*b*c$` can't turn italic here. Tables and
-// formulas stay as source while editing, tables in the monospace face so their columns line up.
-// See docs/architecture/overview.md.
+// parser independence: they share `scanMath`, so `$a*b*c$` can't turn italic here. Formulas stay
+// as source while editing.
+//
+// A table at the top level shows as a spreadsheet (sheetGrid.ts), a block widget over its lines.
+// It shows as source instead, in the monospace face so its columns line up, while the selection
+// is on its lines after typing there (that is how a new table gets written) or after the grid's
+// Markdown button. Opening a box never counts as typing, so a table at the end of a note, where
+// the caret starts, still opens as a grid. Tables inside lists and quotes always show as source,
+// as the grid can't write their line prefixes. See docs/architecture/overview.md.
 import { commonmarkLanguage, markdown } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { type EditorState, type Extension, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 import { type MarkdownConfig, Strikethrough, Table, TaskList } from "@lezer/markdown";
 import { HEADING_SCALE, scanMath } from "./markdown";
+import { SheetWidget, sheetTheme, showTableSource } from "./sheetGrid";
 import { MONO_FONT_FAMILY, MONO_SCALE } from "./textLayout";
 
 const DOLLAR = 36;
@@ -102,10 +110,35 @@ function activeLines(state: EditorState): Set<number> {
   return lines;
 }
 
+/**
+ * Whether tables the selection is on show as source: set by typing or deleting and by the grid's
+ * Markdown button, and cleared once the selection leaves every table.
+ */
+const tableSourceField = StateField.define<boolean>({
+  create: () => false,
+  update(on, tr) {
+    if (tr.effects.some((e) => e.is(showTableSource))) return true;
+    if (tr.docChanged && (tr.isUserEvent("input") || tr.isUserEvent("delete"))) return true;
+    if (on && (tr.selection || tr.docChanged) && !onTable(tr.state)) return false;
+    return on;
+  },
+});
+
+/** Whether the selection touches a table's lines. */
+function onTable(state: EditorState): boolean {
+  const tree = ensureSyntaxTree(state, state.doc.length, 250) ?? syntaxTree(state);
+  return state.selection.ranges.some((r) => {
+    for (let n: SyntaxNode | null = tree.resolveInner(r.head, -1); n; n = n.parent) if (n.name === "Table") return true;
+    for (let n: SyntaxNode | null = tree.resolveInner(r.head, 1); n; n = n.parent) if (n.name === "Table") return true;
+    return false;
+  });
+}
+
 /** All the preview's decorations for a state. Works without a view. */
 export function previewDecorations(state: EditorState): DecorationSet {
   const doc = state.doc;
   const active = activeLines(state);
+  const tableSource = state.field(tableSourceField, false) ?? false;
   // Boxes are short, so parsing to the end now beats redrawing when a background parse lands.
   const tree = ensureSyntaxTree(state, doc.length, 250) ?? syntaxTree(state);
   const out: Range<Decoration>[] = [];
@@ -210,6 +243,14 @@ export function previewDecorations(state: EditorState): DecorationSet {
           eachLine("cm-md-codeblock", n.from, n.to);
           return false;
         case "Table": {
+          const first = doc.lineAt(n.from);
+          const last = doc.lineAt(n.to > n.from && doc.lineAt(n.to).from === n.to ? n.to - 1 : n.to);
+          let touched = false;
+          for (let l = first.number; l <= last.number; l++) touched ||= active.has(l);
+          if (n.node.parent?.name === "Document" && !(tableSource && touched)) {
+            out.push(Decoration.replace({ widget: new SheetWidget(doc.sliceString(first.from, last.to)), block: true }).range(first.from, last.to));
+            return false;
+          }
           eachLine("cm-md-table", n.from, n.to);
           const header = n.node.getChild("TableHeader");
           if (header) mark("cm-md-strong", header.from, header.to);
@@ -225,7 +266,7 @@ export function previewDecorations(state: EditorState): DecorationSet {
 }
 
 function lineKey(state: EditorState): string {
-  return [...activeLines(state)].join(",");
+  return `${state.field(tableSourceField, false) ? "s" : ""}${[...activeLines(state)].join(",")}`;
 }
 
 const previewField = StateField.define<{ key: string; set: DecorationSet }>({
@@ -276,5 +317,5 @@ const previewTheme = EditorView.theme({
 
 /** Formatting as you type, in a CodeMirror editor that also has [`markdownSyntax`]. */
 export function livePreview(): Extension {
-  return [previewField, previewTheme];
+  return [tableSourceField, previewField, previewTheme, sheetTheme];
 }

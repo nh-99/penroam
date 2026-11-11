@@ -32,7 +32,8 @@ pub struct TextExport {
     pub strokes_omitted: u32,
     /// Images not in the output.
     pub images_omitted: u32,
-    /// Pages with a PDF background, whose content isn't in the output.
+    /// PDF pages (page backgrounds, and PDF pages placed on infinite
+    /// canvases) whose content isn't in the output.
     pub pdf_pages_omitted: u32,
     /// Pages where recognised handwriting text was included.
     pub recognized_pages: u32,
@@ -102,7 +103,13 @@ pub fn export_text(
         let images = page
             .elements
             .iter()
-            .filter(|e| matches!(e, Element::Image(_)))
+            .filter(|e| matches!(e, Element::Image(i) if i.pdf_page.is_none()))
+            .count() as u32;
+        // PDF pages on an infinite canvas count like PDF backgrounds
+        let pdf_pages = page
+            .elements
+            .iter()
+            .filter(|e| matches!(e, Element::Image(i) if i.pdf_page.is_some()))
             .count() as u32;
         let heading = format!("Page {}", i + 1);
         match format {
@@ -128,7 +135,7 @@ pub fn export_text(
             None => r.strokes_omitted += ink,
         }
         r.images_omitted += images;
-        r.pdf_pages_omitted += page.background.is_some() as u32;
+        r.pdf_pages_omitted += page.background.is_some() as u32 + pdf_pages;
     }
     if r.strokes_omitted > 0 {
         r.warnings.push(format!(
@@ -149,7 +156,7 @@ pub fn export_text(
     }
     if r.pdf_pages_omitted > 0 {
         r.warnings.push(format!(
-            "{} page(s) have a PDF background that is not in this file.",
+            "{} PDF page(s) are not in this file.",
             r.pdf_pages_omitted
         ));
     }

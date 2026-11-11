@@ -19,9 +19,13 @@ account, a server or a subscription.
   handwriting.
 - **Markdown and LaTeX.** Text boxes understand Markdown, including tables and task lists, and
   LaTeX formulas. They look the same on screen, in exported PDFs and on paper.
+- **Spreadsheets in notes.** Tables work as spreadsheets, with formulas, checkboxes, sorting
+  and filtering, in the handwritten font too, and are saved as plain Markdown tables.
 - **Annotate PDFs.** Import a PDF as pages, then write and type on it. Export an annotated PDF
   in which your ink stays sharp vector lines. The original PDF is kept unchanged.
-- **Paper that suits the note.** Letter or A4 pages, blank, ruled, grid or dotted.
+- **Paper that suits the note.** Letter or A4 pages, blank, ruled, grid or dotted, or an
+  infinite canvas in any of those styles: ruled paper that never runs out of lines, or blank,
+  grid and dotted paper with no edges.
   Add, reorder, delete and restore pages from the sidebar.
 - **Never lose work.** Every stroke is saved to disk as you go, and the indicator in the top
   bar tells you when it has been. If the app or computer crashes, your notebook reopens with
@@ -83,7 +87,8 @@ Building the Android app needs the Android SDK and NDK. See
 
 **Notebooks.** Click **New notebook** and choose a title, cover colour, paper size and page
 style. To rename, recolour or delete a notebook, open the **⋮** menu on its card. Deleted
-notebooks go to the **Trash**, where you can restore them or delete them for good.
+notebooks go to the **Trash**, where you can restore them or delete them for good. On a phone,
+the folder, import and trash buttons are in the **⋮** menu at the top of the library.
 
 **Folders.** Click the folder button at the top of the library to make a folder, then open a
 notebook's **⋮** menu and choose **Move to folder…**. Folders can hold other folders, and a new
@@ -151,6 +156,13 @@ sliders or type a hex value such as `#1d4ed8`. To change which colours the toolb
 one, and **Reset** to go back to the original set. Pen and text share one set of colours, the
 highlighter has its own, and ink you've already drawn doesn't change.
 
+**Handwritten or formatted text.** Text is handwritten by default, in the Excalifont
+typeface. With the Text tool, the two **Aa** buttons in the toolbar choose the font for new text:
+**Handwritten**, or **Formatted** for a cleaner, typeset look. With text boxes selected, the same
+buttons change their font. Lists, checkboxes, links and the rest of the formatting work the same
+in both, code stays in a monospace font, and PDF and SVG exports keep the font you chose. Text
+boxes from earlier versions of Penroam stay formatted.
+
 **Typing on rows.** On ruled and dotted paper, text sits on the paper's rows: each line lands
 on a row, large text takes more than one row, and dragging a text box moves it a row at a time.
 The rows button in the toolbar turns this off, so new text can go anywhere on the page. With a
@@ -167,7 +179,8 @@ match left edges, centres and right edges, and free text also matches tops and b
 the colour and size controls in the toolbar while you edit: bold, italic, headings, lists,
 checkboxes, links, tables and more. `Ctrl+B`, `Ctrl+I` and `Ctrl+K` (`Cmd` on macOS) do bold,
 italic and links. Formatting appears as you type, and the Markdown symbols only show on the line
-you're on. Formulas and tables stay as you wrote them until you finish the box. Press `Enter`
+you're on. Formulas stay as you wrote them until you finish the box, and tables become
+spreadsheets (see below). Press `Enter`
 for a new line, which carries a list on, and leave a blank line for a gap. While you edit, dragging inside the box selects text; drag the area just around it
 to move the box instead.
 
@@ -178,7 +191,7 @@ to move the box instead.
 | `- item`, `1. item`, `- [ ] task`, `- [x] done` | Lists and task lists |
 | `> quote` | A quotation |
 | ` ``` ` on the lines above and below | A block of code |
-| `\| a \| b \|`, then `\|---\|---\|`, then rows | A table |
+| `\| a \| b \|`, then `\|---\|---\|`, then rows | A table, which works as a spreadsheet |
 | `---` | A horizontal line |
 | `[text](https://example.com)`, `<https://example.com>` | A link |
 | `$E = mc^2$` | An inline formula |
@@ -188,6 +201,50 @@ Formulas use LaTeX with the AMS math environments. One Penroam can't draw, such 
 command, is shown as you wrote it. A dollar sign followed by a digit or a space stays a dollar
 sign, and `\$` always does. Images show their description, because Penroam doesn't fetch
 anything from the web for a note.
+
+**Spreadsheets.** Every table in a text box is a small spreadsheet. Use the table button in the
+formatting toolbar, or type one in Markdown; once you click away from what you typed, it turns
+into a grid you can work in like any spreadsheet. The cells are written in the box's font, so a
+table in a handwritten box stays handwritten.
+
+* **Entering data.** Click a cell (tap it with a pen or finger) and start typing to replace it,
+  or press `Enter`, `F2`, double-click or tap it again to change what's there. `Enter` and
+  `Tab` move down and across, the arrow keys move around, and `Tab` in the last cell adds a row.
+  `Esc` cancels a change. `Delete` clears the selected cells, `Shift` with the arrows or a drag
+  selects several, and `Ctrl+D` fills the top cell down. `Ctrl+C` and `Ctrl+V` copy and paste
+  blocks of cells, to and from other spreadsheet apps too. `Ctrl+Z` undoes.
+* **Kinds of value.** Numbers can be written as `1,234.5`, `-3` or `12%`, and amounts of money
+  as `$9.99`, `$ 9.99`, `9.99 €` or `($9.99)` for a negative amount, with `$`, `€`, `£` or `¥`.
+  Dates are `2026-11-10` or `11/10/2026`. A cell holding just `[ ]` or `[x]` is a checkbox:
+  click it or press `Space` to tick it, and tap it on the finished page as well.
+* **Formatting.** The bar above the grid shows the source of the cell you're on and formats the
+  selected cells: bold, italic and strikethrough; currency (pick the symbol), percentage,
+  thousands separators and fewer or more decimals, which turn `5` into `$5.00` or `0.12` into
+  `12%`; and the column's alignment. The bold, italic and strikethrough buttons in the main
+  toolbar and `Ctrl+B` / `Ctrl+I` format the selected cells too. A bold number is still a number,
+  so it sorts and adds up as one. Number formats change numbers only: a formula's result takes
+  the format of the numbers it's made from.
+* **Formulas.** Start a cell with `=`: `=B2*C2`, `=SUM(B2:B5)`, `=ROUND(AVERAGE(C2:C9), 2)`.
+  Columns are lettered from `A` and rows numbered from `1`, which is the header row, so the
+  first row of data is row 2. While you write a formula, click another cell to put in its
+  reference. You can use `+ - * / ^`, brackets and `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`,
+  `PRODUCT`, `ROUND` and `ABS`. Results take the style of what they add up, so a total of
+  prices shows as money. The finished note shows the results; the bar above the grid shows the
+  formula of the cell you're on. A problem shows as a code in the cell, such as `#DIV/0!`, or
+  `#CYCLE!` for a formula that depends on itself.
+* **Sorting and filtering.** Each column's header has a sort arrow: tap it to sort by that
+  column, and again to sort the other way. The arrow points the way the column is sorted. The
+  arrows in the bar sort by the column you're on. The menu button next to the arrow (or the
+  column letter above the grid) also aligns, formats, inserts and deletes columns, and a row
+  number does the same for rows. Sorting understands numbers, money, dates and checkboxes,
+  leaves empty cells at the bottom and keeps a totals row (a row whose formulas read other rows)
+  where it is. The filter button in the bar adds a row where you can type what to look for in
+  each column: some text, a comparison such as `>10`, `<=$5`, `>=2026-01-01` or `!=done`, or
+  `yes`/`no` for checkboxes. Filters only hide rows while you work in the grid; the note itself
+  keeps every row.
+* **The Markdown stays.** A table is saved as an ordinary Markdown table, so it reads well in any
+  other app. The Markdown button at the end of the bar shows the table's source to edit by
+  hand. Tables inside lists and quotations stay as source.
 
 **Opening links.** Links are underlined. To open one in your browser or mail app, tap it with a
 finger (when the pen is set to draw and fingers move the page) or with the hand tool, or
@@ -224,9 +281,25 @@ middle of the window is the one you're writing on. The sidebar, the arrows in th
 `PgUp` / `PgDn` jump straight to a page. To see one page at a time instead, use the page
 buttons at the bottom right of the canvas.
 
+**Infinite canvas.** A canvas is a page with no edges: write, type and pan in any direction and it
+grows with you. Tick **Infinite canvas** when you create a notebook, or choose **Page template →
+Infinite canvas** in the top bar to switch a notebook either way. Blank, grid and dotted paper
+have no edges at all. Ruled paper stays the page's width, with its header and margin line, and
+goes on downward for as long as you write. A canvas notebook can still have several pages,
+each a canvas of its own; the page sidebar starts closed there, and the sidebar button opens it.
+When you turn the canvas on for a notebook with several pages, Penroam asks whether to keep them
+or combine them onto one canvas, one below the other. Combining moves the emptied pages to the
+notebook's trash, so you can restore them. Turning the canvas off again shows the pages as sheets
+and changes nothing on them; anything beyond a sheet's edge is still there when you turn it back
+on. **Fit** shows everything on the canvas, or on ruled paper the page's width. Annotated PDF
+export and printing lay a canvas out on pages of the notebook's paper size, breaking between
+lines where they can; PNG and SVG export give one picture of the whole canvas.
+
 **PDFs.** Click **Import PDF as pages** in the top bar to add every page of a PDF to the
-notebook, then write on it like any other page. To get the PDF back with your notes on it,
-choose **Export → Annotated PDF**.
+notebook, then write on it like any other page. On an infinite canvas the button is **Import PDF
+onto this canvas**: the whole document goes onto the open canvas, below what's already there,
+and you write on it the same way. Use **Undo** to take it off again. To get the PDF back with
+your notes on it, choose **Export → Annotated PDF**.
 
 **Printing.** Press `Ctrl+P` in a notebook, or choose **Print…** from the **Export** menu in the
 top bar or from a notebook's **⋮** menu in the library. Your system's print dialog opens, so
@@ -324,7 +397,7 @@ Developer documentation lives in [docs/](docs/). Start with
 ## License
 
 Penroam is licensed under the [MPL-2.0](https://www.mozilla.org/MPL/2.0/).
-The bundled Liberation Sans font is under the SIL Open Font License 1.1, and PDF.js is under
+The bundled Liberation Sans and Excalifont fonts are under the SIL Open Font License 1.1, and PDF.js is under
 Apache-2.0. The Android build fetches the proprietary BOOX Onyx SDK from Onyx's official
 repository to support BOOX pens.
 

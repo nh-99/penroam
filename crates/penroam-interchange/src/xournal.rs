@@ -44,7 +44,7 @@ use penroam_core::markdown::{self, MathBox};
 use penroam_core::validate::{limits as model, validate_element};
 use penroam_core::{
     text, Element, ImageElement, InkPoint, InkStroke, InkTool, Size, Template, TemplateKind,
-    TextAlign, TextBlock,
+    TextAlign, TextBlock, TextFont,
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
@@ -432,7 +432,16 @@ fn block(
         _ => TextAlign::Left,
     };
     let no_math = |_: &str, _: bool| -> Option<MathBox> { None };
-    let height = markdown::layout(&content, font_size, width, None, align, &no_math).height;
+    let height = markdown::layout(
+        &content,
+        TextFont::Formatted,
+        font_size,
+        width,
+        None,
+        align,
+        &no_math,
+    )
+    .height;
     Some(Element::Text(TextBlock {
         id: Uuid::new_v4(),
         z,
@@ -444,6 +453,7 @@ fn block(
         font_size,
         color: color(a.get("color")).map_or("#000000".into(), |c| c.0),
         align,
+        font: Default::default(),
         row_pitch: None,
         extra: Default::default(),
     }))
@@ -524,6 +534,7 @@ fn formula_block(a: &BTreeMap<String, String>, z: i64, log: &mut LossLog) -> Opt
         font_size,
         color: color(a.get("color")).map_or("#000000".into(), |c| c.0),
         align: TextAlign::Left,
+        font: Default::default(),
         row_pitch: None,
         extra: Default::default(),
     }))
@@ -561,6 +572,7 @@ fn image(
         width,
         height,
         asset_hash,
+        pdf_page: None,
         extra: Default::default(),
     }))
 }

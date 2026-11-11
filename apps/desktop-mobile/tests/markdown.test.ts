@@ -12,7 +12,7 @@ const math = (tex: string, display: boolean): MathBox | null =>
 
 describe("task checkboxes", () => {
   const math = () => null;
-  const tasks = (text: string) => layoutMarkdownWithTargets(text, 12, 400, null, "left", math).tasks;
+  const tasks = (text: string) => layoutMarkdownWithTargets(text, "formatted", 12, 400, null, "left", math).tasks;
   const tick = (text: string, i = 0) => toggledTask(text, tasks(text)[i]);
 
   it("ticks and unticks the marker in the source and nothing else", () => {
@@ -34,6 +34,14 @@ describe("task checkboxes", () => {
     expect(tick(text, 1)).toBe("$$a\nb$$\n\n- [ ] $x$ and more\n- [x] \u{1F600} $y$");
   });
 
+  it("ticks checkboxes in table cells", () => {
+    expect(tick("| a | b |\n|---|---|\n| [ ] | x |")).toBe("| a | b |\n|---|---|\n| [x] | x |");
+    // past an escaped pipe, and on a later row
+    expect(tick("|a|b|\n|-|-|\n|x \\| y|[x]|\n|z|[ ]|", 1)).toBe("|a|b|\n|-|-|\n|x \\| y|[x]|\n|z|[x]|");
+    expect(tick("| $x$ | [X] |\n|---|---|")).toBe("| $x$ | [ ] |\n|---|---|");
+    expect(tasks("| a |\n|---|\n| [x] done |")).toEqual([]);
+  });
+
   it("gives no box to anything that isn't a marker it can find in the source", () => {
     expect(tasks("[ ] not in a list")).toEqual([]);
     expect(tasks("- plain")).toEqual([]);
@@ -43,20 +51,20 @@ describe("task checkboxes", () => {
 
 describe("Markdown layout (same golden as penroam-core)", () => {
   for (const c of golden) {
-    it(`${JSON.stringify(c.text).slice(0, 60)} at ${c.fontSize} pt, ${c.width} wide, pitch ${c.rowPitch}`, () => {
-      const p = layoutMarkdown(c.text, c.fontSize, c.width, c.rowPitch, c.align, math);
+    it(`${JSON.stringify(c.text).slice(0, 60)} ${c.font} at ${c.fontSize} pt, ${c.width} wide, pitch ${c.rowPitch}`, () => {
+      const p = layoutMarkdown(c.text, c.font, c.fontSize, c.width, c.rowPitch, c.align, math);
       expect(p).toEqual(c.paint);
     });
   }
 });
 
 describe("link boxes", () => {
-  const links = (text: string, width = 400) => layoutMarkdownWithTargets(text, 12, width, null, "left", math).links;
+  const links = (text: string, width = 400) => layoutMarkdownWithTargets(text, "formatted", 12, width, null, "left", math).links;
   it("covers the link text and carries the address", () => {
     const [box, ...rest] = links("see [the docs](https://penroam.ink/docs) here");
     expect(rest).toEqual([]);
     expect(box.href).toBe("https://penroam.ink/docs");
-    const runs = layoutMarkdown("see [the docs](https://penroam.ink/docs) here", 12, 400, null, "left", math).runs;
+    const runs = layoutMarkdown("see [the docs](https://penroam.ink/docs) here", "formatted", 12, 400, null, "left", math).runs;
     expect(box.x0).toBeGreaterThan(runs[0].x);
     expect(box.y0).toBeLessThan(runs[0].y);
     expect(box.y1).toBeGreaterThan(runs[0].y);
@@ -102,8 +110,8 @@ describe("row locking", () => {
 
 describe("hostile input", () => {
   it("survives deep nesting", () => {
-    expect(() => layoutMarkdown(`${"> ".repeat(100000)}x`, 16, 400, null, "left", math)).not.toThrow();
-    expect(() => layoutMarkdown(`${"- ".repeat(5000)}x`, 16, 400, null, "left", math)).not.toThrow();
+    expect(() => layoutMarkdown(`${"> ".repeat(100000)}x`, "formatted", 16, 400, null, "left", math)).not.toThrow();
+    expect(() => layoutMarkdown(`${"- ".repeat(5000)}x`, "formatted", 16, 400, null, "left", math)).not.toThrow();
     expect(MAX_DEPTH).toBe(16);
   });
 });

@@ -54,6 +54,22 @@ export class PdfCache {
   }
 }
 
+/**
+ * Renders one PDF page at `res` device px per pt, for PDF pages placed on a canvas as
+ * elements. Unlike `PdfPageRenderer` a call is never superseded, since many pages render
+ * side by side; the caller decides what to render and when.
+ */
+export async function renderPdfPage(cache: PdfCache, ref: PdfBackgroundRef, res: number): Promise<HTMLCanvasElement> {
+  const doc = await cache.get(ref.assetHash);
+  const page = await doc.getPage(ref.pageIndex + 1);
+  const viewport = page.getViewport({ scale: res });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(viewport.width));
+  canvas.height = Math.max(1, Math.round(viewport.height));
+  await page.render({ canvas, viewport }).promise;
+  return canvas;
+}
+
 export class PdfPageRenderer {
   private task: RenderTask | null = null;
   private seq = 0;

@@ -36,6 +36,7 @@ fn text(z: i64, y: f64, s: &str) -> Element {
         font_size: 14.0,
         color: "#1d4ed8".into(),
         align: TextAlign::Left,
+        font: Default::default(),
         row_pitch: None,
         extra: Default::default(),
     })

@@ -77,6 +77,7 @@ fn notebook(lib: &mut Library, title: &str) -> (Uuid, Vec<Uuid>) {
                 width: 10.0,
                 height: 10.0,
                 asset_hash: asset.sha256.clone(),
+                pdf_page: None,
                 extra: Default::default(),
             }));
         }
@@ -483,6 +484,7 @@ fn a_failed_import_leaves_nothing_behind() {
         width: 1.0,
         height: 1.0,
         asset_hash: "a".repeat(64),
+        pdf_page: None,
         extra: Default::default(),
     });
     let r = l.create_notebook_with(

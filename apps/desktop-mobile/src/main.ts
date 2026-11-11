@@ -34,7 +34,7 @@ window.addEventListener("unhandledrejection", (e) => recordUiError("promise", e.
 // Text blocks are measured with bundled metrics and drawn with the bundled
 // fonts; wait for them so the first canvas paint uses the right glyphs.
 const fontReady = document.fonts
-  ? Promise.all(["16px PenroamSans", "bold 16px PenroamSans", "italic 16px PenroamSans", "italic bold 16px PenroamSans", "16px PenroamMono"].map((f) => document.fonts.load(f))).catch(() => undefined)
+  ? Promise.all(["16px PenroamSans", "bold 16px PenroamSans", "italic 16px PenroamSans", "italic bold 16px PenroamSans", "16px PenroamMono", "16px PenroamHand"].map((f) => document.fonts.load(f))).catch(() => undefined)
   : undefined;
 
 void Promise.resolve(fontReady).finally(() => {
