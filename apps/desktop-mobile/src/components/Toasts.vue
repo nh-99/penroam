@@ -5,7 +5,7 @@ const ui = useUi();
 </script>
 
 <template>
-  <div class="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-2 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]" aria-live="polite" role="status">
+  <div class="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-2 p-4 pb-[calc(1rem+var(--pr-safe-bottom))]" aria-live="polite" role="status">
     <div
       v-for="t in ui.toasts"
       :key="t.id"

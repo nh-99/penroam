@@ -6,6 +6,9 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { isMobile } from "./platform/device";
 import { startPowerReports } from "./platform/power";
 import { recordUiError } from "./platform/diagnostics";
+import { startNativeInsets } from "./platform/insets";
+
+startNativeInsets();
 
 // Release WebViews on Android/iOS have no visible console: forward warnings,
 // errors and unhandled rejections to the Rust log (logcat / device console).

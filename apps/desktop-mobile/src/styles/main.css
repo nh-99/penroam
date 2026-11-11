@@ -168,17 +168,26 @@ pre,
   -webkit-user-select: text;
 }
 
+/* Safe-area insets. On Android the activity also passes the system bars and the bottom
+   gesture area as --pr-native-inset-* (see platform/insets.ts), because the WebView's env()
+   values miss them; take whichever is larger. */
+:root {
+  --pr-safe-top: max(env(safe-area-inset-top), var(--pr-native-inset-top, 0px));
+  --pr-safe-right: max(env(safe-area-inset-right), var(--pr-native-inset-right, 0px));
+  --pr-safe-bottom: max(env(safe-area-inset-bottom), var(--pr-native-inset-bottom, 0px));
+  --pr-safe-left: max(env(safe-area-inset-left), var(--pr-native-inset-left, 0px));
+}
 .safe-top {
-  padding-top: env(safe-area-inset-top);
+  padding-top: var(--pr-safe-top);
 }
 /* Replaces any bottom padding; for padded elements add the inset with
-   pb-[calc(<padding>+env(safe-area-inset-bottom))] instead. */
+   pb-[calc(<padding>+var(--pr-safe-bottom))] instead. */
 .safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: var(--pr-safe-bottom);
 }
 .safe-x {
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
+  padding-left: var(--pr-safe-left);
+  padding-right: var(--pr-safe-right);
 }
 
 .touch-target {

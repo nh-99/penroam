@@ -8,6 +8,9 @@ release notes and stops if the version has no entry.
 * New: duplicate a notebook with **Duplicate** in the **⋮** menu on its card. The copy is called
   "*title* (copy)" and goes in the same folder, or the same vault. It has every page and
   attachment, but starts with an empty trash and no version history.
+* Fixed: on Android phones, the pen toolbar at the bottom sat on the system navigation area, so
+  swiping along it could switch apps or go home. The toolbar, dialogs and notices now stay clear
+  of the navigation bar and the gesture area.
 
 ## 0.1.0-beta.8
 
