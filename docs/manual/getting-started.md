@@ -4,9 +4,8 @@
 
 ## Installing Penroam
 
-See [Install](../../README.md#install) in the README. Penroam has been tested on Linux and on
-Android BOOX e-ink tablets; the [release matrix](../platforms/release-matrix.md) has the status of
-every platform.
+See [Install](../../README.md#install) in the README. Penroam runs on Windows, macOS, Linux,
+iPhone and iPad, and Android, including BOOX e-ink tablets.
 
 ## The guided tour
 

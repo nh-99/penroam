@@ -9,6 +9,51 @@ server or a subscription.
 
 ![A notebook page with handwritten notes, a highlighted formula, a sketched diagram and a typed note](docs/images/editor.png)
 
+## Getting started
+
+Penroam is in beta. It runs on Windows, macOS, Linux, iPhone and iPad, and Android, including
+BOOX e-ink tablets.
+
+### Install
+
+**Windows, macOS and Linux.** Download the file for your system from the
+[releases page](https://github.com/nh-99/penroam/releases):
+
+| System | File | How to install |
+|---|---|---|
+| Windows (x86-64) | `…-setup.exe` | Run it. The installer isn't signed yet, so if Windows SmartScreen stops it, choose **More info → Run anyway**. |
+| macOS (Apple Silicon) | `.dmg` | Open it and drag Penroam to **Applications**. The app isn't notarized yet, so the first time, open it from **System Settings → Privacy & Security → Open Anyway**. |
+| Linux (x86-64) | `.AppImage` or `.deb` | Make the AppImage executable (`chmod +x Penroam*.AppImage`) and run it, or install the `.deb` with `sudo apt install ./Penroam*.deb`. |
+
+When it starts, the AppImage adds Penroam to your app menu and keeps the entry pointing at it if
+you move the file. To uninstall, choose **Remove from app menu** in **Settings → Advanced**, then
+delete the AppImage.
+
+**iPhone and iPad.** Penroam is in testing on TestFlight. Install
+[TestFlight](https://apps.apple.com/app/testflight/id899247664) from the App Store, then
+[open an issue](https://github.com/nh-99/penroam/issues/new/choose) to ask for an invitation.
+
+**Android and BOOX.** Penroam is in a closed testing group on Google Play.
+[Open an issue](https://github.com/nh-99/penroam/issues/new/choose) to ask to join, then install it
+from Google Play. You can also install the `android-arm64.apk` from the
+[releases page](https://github.com/nh-99/penroam/releases) directly.
+
+**From source.** See the [developer README](docs/README.md) and
+[docs/development.md](docs/development.md). A build you make yourself is listed as
+**Penroam Developer**, so it doesn't replace a release you've also installed.
+
+### Your first notebook
+
+The first time you open Penroam, a short guided tour shows you around. You can take it again at any
+time from **Settings → General**.
+
+1. Click **New notebook**, give it a title and choose the paper.
+2. Pick the pen (`P`) and write. The highlighter is `M`, the eraser `E` and the text tool `T`.
+3. Add pages with **+**, and import a PDF with the button next to it.
+4. Find anything with the magnifying glass (`Ctrl+K`, or `Cmd+K` on a Mac).
+
+There is no save button: everything is saved as you write.
+
 ## Why Penroam
 
 - **It feels like writing on paper.** Pressure-sensitive ink, a highlighter and an eraser,
@@ -125,52 +170,9 @@ to each.
 
 More in [Settings](docs/manual/settings.md).
 
-## Install
+## User manual
 
-Penroam hasn't published ready-made installers yet, so for now you build it from source.
-It has been tested on **Linux** and on **Android BOOX** e-ink tablets. Windows, macOS and
-iPad versions build from the same code but haven't been tested on those systems yet. The
-[release matrix](docs/platforms/release-matrix.md) has the status of each platform.
-
-### Linux
-
-You need [Rust](https://rustup.rs), [Node.js](https://nodejs.org) 24 with
-[pnpm](https://pnpm.io) 10, and the WebKitGTK development package (on Debian/Ubuntu:
-`sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev librsvg2-dev`).
-
-```bash
-git clone https://github.com/nh-99/penroam.git
-cd penroam
-pnpm install
-pnpm tauri build --no-bundle
-./target/release/penroam-app
-```
-
-`pnpm tauri build` also makes an AppImage in `target/release/bundle/appimage/`. When it starts,
-the AppImage adds Penroam to your app menu and keeps the entry pointing at it if you move the file.
-A build you make yourself is listed as **Penroam Developer**, so it doesn't replace an official
-release you've also installed.
-To uninstall, choose **Remove from app menu** in **Settings → Advanced**, then delete the AppImage.
-
-### Android and BOOX
-
-Building the Android app needs the Android SDK and NDK. See
-[docs/development.md](docs/development.md) for the steps. Then install the APK with
-`adb install`.
-
-## Using Penroam
-
-The first time you open Penroam, a short guided tour shows you around. You can take it again at any
-time from **Settings → General**.
-
-1. Click **New notebook**, give it a title and choose the paper.
-2. Pick the pen (`P`) and write. The highlighter is `M`, the eraser `E` and the text tool `T`.
-3. Add pages with **+**, and import a PDF with the button next to it.
-4. Find anything with the magnifying glass (`Ctrl+K`).
-
-There is no save button: everything is saved as you write.
-
-The **[user manual](docs/manual/README.md)** explains everything else:
+The **[user manual](docs/manual/README.md)** explains everything:
 
 * [Getting started](docs/manual/getting-started.md)
 * [Your library](docs/manual/library.md): notebooks, folders and the trash
