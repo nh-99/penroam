@@ -14,6 +14,8 @@ Describe what the code actually does instead. For example, write "the operation 
 
 `docs/` only describes the code as it is now:
 
+* `docs/README.md`: the developer README: setting up, and links to every developer doc
+* `docs/manual/`: the user manual, one chapter per topic, linked from `docs/manual/README.md`
 * `docs/architecture/overview.md`: design
 * `docs/formats/` and `docs/protocol/`: contracts
 * `docs/platforms/`: per-platform build notes and known risks
@@ -29,14 +31,17 @@ research do not belong in the repository. The agent-docs playbook asks for
 `agent-docs/results/` instead, which is git-ignored and local only. Earlier reports are in
 `agent-docs/archive/`. Raw benchmark output goes in the git-ignored `benchmarks/`.
 
-## README is for users
+## README and manual are for users
 
-`README.md` covers only what Penroam is, screenshots, how to install it and how to use it.
-Developer material goes in `docs/development.md`.
+`README.md` covers only what Penroam is, screenshots, how to install it, a short quick start and
+links into the user manual. Developer material goes in `docs/README.md` and
+`docs/development.md`.
 
-When a user-visible feature lands or changes, update the README's usage section in the same
-change. If the UI changed, also regenerate the screenshots with `tools/screenshots/capture.sh`
-(on Windows, `node tools/screenshots/capture-windows.mjs`).
+When a user-visible feature lands or changes, update the manual chapter that covers it (and the
+README if it's one of the highlights there) in the same change. Keep the guided tour's steps
+(`apps/desktop-mobile/src/components/tourSteps.ts`) accurate too. If the UI changed, also
+regenerate the screenshots with `tools/screenshots/capture.sh` (on Windows,
+`node tools/screenshots/capture-windows.mjs`).
 Never describe features that do not exist yet as available.
 
 ## Code documentation

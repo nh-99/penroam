@@ -18,7 +18,7 @@ tests/fixtures/        geometry/text goldens, benchmark scenes, PDF fixture, .pr
 fuzz/                  cargo-fuzz targets
 benchmarks/            raw benchmark output (local only, git-ignored)
 tools/                 Linux E2E driver, BOOX check script, .penroam comparison, screenshots, font metrics, search evaluation corpus
-docs/                  architecture, formats, protocol, platforms, development, README images
+docs/                  developer docs (start at docs/README.md), user manual (docs/manual/), images
 ```
 
 ## Build and run
@@ -307,26 +307,36 @@ outputs Tauri gets wrong:
 * it writes the iOS asset catalog with light, dark and tinted icons
   ([`platforms/ipad.md`](platforms/ipad.md#on-a-mac)).
 
-It also refreshes the in-app logo and the README logo. Regenerate the README screenshots
+It also refreshes the in-app logo and the README logo. Regenerate the screenshots
 afterwards, because the library header shows the logo.
 
-## README screenshots
+## README and manual screenshots
 
-`tools/screenshots/capture.sh` regenerates the README images in `docs/images/`. Run it
-whenever the UI changes, and update the README's usage section in the same change. Here is
-what the script does:
+`tools/screenshots/capture.sh` regenerates the images in `docs/images/` that the README and the
+[user manual](manual/README.md) show. Run it whenever the UI changes, and update the manual
+chapter that covers the change in the same commit. Here is what the script does:
 
 1. It writes a demo PDF (`make_pdf.py`).
 2. It builds a demo library with
    `cargo run -p penroam-storage --example demo_library`. The library contains handwriting
    drawn from the public-domain Hershey script stroke font in `hershey-script.json`, made by
-   `extract_hershey.py`. It also has typed text, highlights, sketches and an annotated PDF.
+   `extract_hershey.py`. It also has typed text, highlights, sketches, an annotated PDF, a lab
+   write-up with a formula and a spreadsheet table, and an infinite canvas notebook.
 3. It opens the release app on that library in a 2560×1800 Xephyr display with
    `GDK_SCALE=2`, drives it with `session.txt` through the E2E driver above, and stores the
-   captures at 1600 px wide.
+   captures at 62.5% (a whole window is 1600 px wide).
 
-The session's click coordinates assume the current layout. If a button moves, update
-`session.txt`. It needs Xephyr, ImageMagick and the XTest headers.
+Every `shot NAME` line in `session.txt` becomes `docs/images/NAME.png`; `shot NAME X Y W H` keeps
+only that area, in the session's coordinates. Both scripts read the list of shots from the
+session, so adding a shot only takes a `shot` line. The session's click coordinates assume the
+current layout and the order of the demo notebooks. If a button moves, update `session.txt`. It
+needs Xephyr, ImageMagick and the XTest headers.
+
+The demo library isn't empty, so the guided tour doesn't start by itself; the session opens it
+from **Settings → General → Take the tour** for the tour shots. The `search` shot only shows a
+handwriting result when the app can read handwriting: on Windows through the system recognizer,
+elsewhere once the handwriting model has downloaded, which needs a network connection on the
+first run.
 
 On Windows, run `node tools/screenshots/capture-windows.mjs` instead (set `SKIP_BUILD=1` to
 reuse an existing release build). It takes the first two steps above, then starts the release

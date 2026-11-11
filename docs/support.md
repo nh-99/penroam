@@ -1,6 +1,6 @@
 # Getting help
 
-Start with [known issues](known-issues.md) and the [usage guide](../README.md#using-penroam).
+Start with the [user manual](manual/README.md) and [known issues](known-issues.md).
 
 To report a bug, [open an issue](https://github.com/nh-99/penroam/issues/new/choose). In Penroam, go
 to **Settings → About → Show diagnostic report**, read it, and paste it into the issue. It holds

@@ -15,6 +15,7 @@ Rust dependencies.
 
 ## Building and testing
 
+The [developer README](docs/README.md) covers setting up, and links to every developer document;
 [docs/development.md](docs/development.md) covers building, tests and tooling. Nothing in this
 repository needs a private repository or a credential. Before opening a pull request:
 
@@ -35,9 +36,9 @@ pnpm typecheck && pnpm lint && pnpm test
   nothing may send data without the user asking for it.
 * **Documented code.** Every module has a `//!` header, and every public item a `///` comment.
   Explain why, not what.
-* **Honest claims.** The README describes only what exists, and a device is listed as tested only
-  after a person has tested it. If you change something users see, update the README's usage
-  section in the same pull request.
+* **Honest claims.** The README and the user manual describe only what exists, and a device is
+  listed as tested only after a person has tested it. If you change something users see, update
+  the [user manual](docs/manual/README.md) in the same pull request.
 
 ## Device testing
 
