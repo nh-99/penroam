@@ -102,10 +102,17 @@ fn build(app: &AppHandle, state: &State<'_, AppState>) -> R<(StagedFile, BackupM
         .open(&staged.0)
         .map_err(io_err)?;
     let mut w = BackupWriter::new(f, GENERATOR).map_err(storage)?;
+    let staging = lock(state)?.staging_dir();
     for (i, id) in ids.iter().enumerate() {
         report(app, "Saving notebooks", i, ids.len());
-        // a fresh lock per notebook: an open editor keeps saving in between
-        w.add_notebook(&mut *lock(state)?, *id).map_err(storage)?;
+        // A short lock per page and asset read, never while encoding or compressing, so an open
+        // editor keeps saving while the backup runs.
+        let left_out = w
+            .add_notebook_from(&mut crate::commands::Unlocked(state), &staging, *id)
+            .map_err(storage)?;
+        if let Some(warning) = left_out {
+            lock(state)?.recovery.warnings.push(warning);
+        }
     }
     let folders = serde_json::to_vec(lock(state)?.folders()).map_err(|e| invalid(e.to_string()))?;
     w.add_extra(FOLDERS, &folders).map_err(storage)?;

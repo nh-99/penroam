@@ -18,12 +18,13 @@ use crate::AppState;
 use penroam_core::folder::Folder;
 use penroam_core::*;
 use penroam_storage::{
-    ApplyOutcome, ArchiveSummary, ErrorCode, ExportOptions, HistoryPoint, HistoryRetention,
-    HistoryStats, ImportReport, NewAsset, NewPage, NotebookRestore, NotebookSummary,
-    RecoveryReport, StorageError,
+    ApplyOutcome, ArchiveSource, ArchiveSummary, ErrorCode, ExportOptions, HistoryPoint,
+    HistoryRetention, HistoryStats, ImportReport, NewAsset, NewPage, NotebookRestore,
+    NotebookSummary, RecoveryReport, StorageError,
 };
 use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 use std::str::FromStr;
 use tauri::ipc::Response;
 use tauri::{AppHandle, Manager, State};
@@ -658,6 +659,47 @@ impl Drop for StagedFile {
     }
 }
 
+/// Reads the library one short lock at a time, for exports, printing and backups. Saves wait for
+/// the library lock, so these never hold it while pages are decoded, encoded, compressed or
+/// rendered, and never read through the editor's page cache, which would push out (and so write
+/// to disk) the pages being edited.
+pub(crate) struct Unlocked<'a>(pub(crate) &'a AppState);
+
+impl Unlocked<'_> {
+    fn lib(&self) -> penroam_storage::Result<std::sync::MutexGuard<'_, penroam_storage::Library>> {
+        self.0
+            .lib
+            .lock()
+            .map_err(|_| penroam_storage::StorageError::Io("library lock poisoned".into()))
+    }
+
+    /// The asset's record and its bytes, read and checked without the lock.
+    fn asset_bytes(&self, nb: Uuid, hash: &str) -> penroam_storage::Result<(Asset, Vec<u8>)> {
+        let (asset, path) = self.lib()?.asset_file(nb, hash)?;
+        Ok((asset, penroam_storage::read_asset_file(&path, hash)?))
+    }
+}
+
+impl penroam_storage::ArchiveSource for Unlocked<'_> {
+    fn notebook(&mut self, id: Uuid) -> penroam_storage::Result<Notebook> {
+        Ok(self.lib()?.notebook(id)?.clone())
+    }
+
+    fn page(&mut self, nb: Uuid, page: Uuid) -> penroam_storage::Result<Page> {
+        let read = self.lib()?.prepare_page_read(nb, page)?;
+        match read.finish() {
+            Ok(p) => Ok(p),
+            // the snapshot was being replaced, or is damaged: the library's own source reads
+            // again under the lock, with the full recovery path as the last resort
+            Err(_) => penroam_storage::ArchiveSource::page(&mut *self.lib()?, nb, page),
+        }
+    }
+
+    fn asset(&mut self, nb: Uuid, hash: &str) -> penroam_storage::Result<(Asset, PathBuf)> {
+        self.lib()?.asset_file(nb, hash)
+    }
+}
+
 /// Size of an exported archive.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -677,8 +719,7 @@ pub fn export_notebook(
     path: String,
 ) -> R<ExportResult> {
     let (buf, pages) = {
-        let mut lib = lib!(state);
-        let tmp = lib
+        let tmp = lib!(state)
             .staging_dir()
             .join(format!("export-{}.penroam", Uuid::new_v4()));
         let mut f = std::fs::OpenOptions::new()
@@ -687,7 +728,13 @@ pub fn export_notebook(
             .create_new(true)
             .open(&tmp)
             .map_err(io_err)?;
-        let res = lib.export_archive(notebook_id, &mut f, GENERATOR);
+        let res = penroam_storage::export_archive_from(
+            &mut Unlocked(&state),
+            notebook_id,
+            &mut f,
+            GENERATOR,
+            &ExportOptions::default(),
+        );
         let out = res.and_then(|m| {
             f.seek(SeekFrom::Start(0))?;
             let mut buf = Vec::new();
@@ -718,7 +765,13 @@ pub fn export_pages(
         pages: Some(pages),
         ..Default::default()
     };
-    let m = lib!(state).export_archive_with(notebook_id, &mut out, GENERATOR, &opts)?;
+    let m = penroam_storage::export_archive_from(
+        &mut Unlocked(&state),
+        notebook_id,
+        &mut out,
+        GENERATOR,
+        &opts,
+    )?;
     let buf = out.into_inner();
     write_user_file(&app, &path, &buf)?;
     Ok(ExportResult {
@@ -925,15 +978,15 @@ fn export_text_of(
     format: penroam_interchange::text_export::TextFormat,
 ) -> R<penroam_interchange::text_export::TextExport> {
     let (title, pages) = {
-        let mut lib = lib!(state);
-        let nb = lib.notebook(notebook_id)?.clone();
+        let mut src = Unlocked(state);
+        let nb = src.notebook(notebook_id)?;
         let ids: Vec<Uuid> = match only {
             Some(p) => vec![p],
             None => nb.page_order.clone(),
         };
         let mut pages = Vec::with_capacity(ids.len());
         for p in ids {
-            pages.push(lib.load_page(notebook_id, p)?);
+            pages.push(src.page(notebook_id, p)?);
         }
         (nb.title, pages)
     };
@@ -1001,18 +1054,12 @@ pub fn export_page_svg(
     path: String,
 ) -> R<Vec<String>> {
     let r = {
-        let mut lib = lib!(state);
-        let canvas = lib.notebook(notebook_id)?.infinite_canvas;
-        let page = sheet_of(lib.load_page(notebook_id, page_id)?, canvas);
-        let types: std::collections::HashMap<String, String> = lib
-            .notebook(notebook_id)?
-            .assets
-            .iter()
-            .map(|a| (a.sha256.clone(), a.media_type.clone()))
-            .collect();
-        let lib = &*lib;
+        let mut src = Unlocked(&state);
+        let canvas = src.notebook(notebook_id)?.infinite_canvas;
+        let page = sheet_of(src.page(notebook_id, page_id)?, canvas);
         penroam_interchange::svg::page_to_svg(&page, |h| {
-            Some((lib.read_asset(notebook_id, h).ok()?, types.get(h)?.clone()))
+            let (asset, bytes) = src.asset_bytes(notebook_id, h).ok()?;
+            Some((bytes, asset.media_type))
         })
     };
     write_user_file(&app, &path, r.svg.as_bytes())?;
@@ -1261,15 +1308,15 @@ pub fn import_notebook(
 
 /// Renders a notebook's live pages as a PDF with vector ink and text over the original PDF
 /// backgrounds; an infinite canvas page becomes as many PDF pages as it needs. Returns, for
-/// each PDF page, the notebook page it shows, and holds the library lock only for the
-/// duration of this call.
+/// each PDF page, the notebook page it shows. Takes the library lock only for each page and
+/// asset it reads, never while rendering.
 fn render_pdf(
     state: &State<'_, AppState>,
     notebook_id: Uuid,
     math: &[penroam_pdf::RenderedMath],
 ) -> R<(Vec<u8>, penroam_pdf::ExportReport, Vec<Uuid>)> {
-    let mut lib = lib!(state);
-    let nb = lib.notebook(notebook_id)?;
+    let mut src = Unlocked(state);
+    let nb = src.notebook(notebook_id)?;
     let (ids, canvas) = (nb.page_order.clone(), nb.infinite_canvas);
     let paper = nb.defaults.paper.size().unwrap_or(Size {
         width: 612.0,
@@ -1279,7 +1326,7 @@ fn render_pdf(
     // one entry per PDF page: a canvas can take several
     let mut order = Vec::with_capacity(ids.len());
     for p in &ids {
-        let page = lib.load_page(notebook_id, *p)?;
+        let page = src.page(notebook_id, *p)?;
         if canvas {
             for sheet in page.canvas_as_sheets(CANVAS_SHEET_MARGIN_PT, paper) {
                 pages.push(sheet);
@@ -1290,9 +1337,9 @@ fn render_pdf(
             order.push(*p);
         }
     }
-    let lib = &*lib;
-    let (bytes, report) =
-        penroam_pdf::export_annotated(&pages, math, |h| lib.read_asset(notebook_id, h).ok())?;
+    let (bytes, report) = penroam_pdf::export_annotated(&pages, math, |h| {
+        src.asset_bytes(notebook_id, h).ok().map(|(_, b)| b)
+    })?;
     Ok((bytes, report, order))
 }
 
@@ -1303,11 +1350,11 @@ pub fn notebook_math(
     state: State<'_, AppState>,
     notebook_id: Uuid,
 ) -> R<Vec<penroam_core::markdown::MathSpan>> {
-    let mut lib = lib!(state);
-    let order = lib.notebook(notebook_id)?.page_order.clone();
+    let mut src = Unlocked(&state);
+    let order = src.notebook(notebook_id)?.page_order;
     let mut seen = std::collections::HashSet::new();
     for p in order {
-        for e in lib.load_page(notebook_id, p)?.elements {
+        for e in src.page(notebook_id, p)?.elements {
             if let penroam_core::Element::Text(t) = e {
                 seen.extend(penroam_core::markdown::math_in(&t.text));
             }

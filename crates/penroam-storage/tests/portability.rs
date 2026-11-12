@@ -576,3 +576,72 @@ fn unzip_all_nested(bytes: &[u8]) -> Vec<u8> {
     }
     out
 }
+
+/// An [`ArchiveSource`] that lets the editor change the notebook before the first page is read,
+/// as it can while an app exports with a lock per read.
+type Edit<'a> = Box<dyn FnOnce(&mut Library) + 'a>;
+
+struct EditsDuringExport<'a> {
+    lib: &'a mut Library,
+    edit: Option<Edit<'a>>,
+}
+
+impl ArchiveSource for EditsDuringExport<'_> {
+    fn notebook(&mut self, id: Uuid) -> Result<Notebook> {
+        ArchiveSource::notebook(&mut *self.lib, id)
+    }
+    fn page(&mut self, nb: Uuid, page: Uuid) -> Result<Page> {
+        if let Some(edit) = self.edit.take() {
+            edit(self.lib);
+        }
+        ArchiveSource::page(&mut *self.lib, nb, page)
+    }
+    fn asset(&mut self, nb: Uuid, hash: &str) -> Result<(Asset, std::path::PathBuf)> {
+        ArchiveSource::asset(&mut *self.lib, nb, hash)
+    }
+}
+
+#[test]
+fn an_archive_stays_valid_when_the_notebook_changes_during_the_export() {
+    let (_d, mut l) = lib();
+    let (nb, pages) = notebook(&mut l, "Busy");
+    let second = pages[1];
+    let mut src = EditsDuringExport {
+        lib: &mut l,
+        // after the export has its notebook record: a new image, placed on a page not read yet
+        edit: Some(Box::new(move |lib: &mut Library| {
+            let asset = lib
+                .add_asset(nb, b"\x89PNG added during the export", "image/png", None)
+                .unwrap();
+            let revision = lib.load_page(nb, second).unwrap().revision;
+            let image = Element::Image(ImageElement {
+                id: Uuid::new_v4(),
+                z: 9,
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+                asset_hash: asset.sha256,
+                pdf_page: None,
+                extra: Default::default(),
+            });
+            lib.apply_page_operations(nb, second, &add(revision, vec![image]))
+                .unwrap();
+        })),
+    };
+    let mut out = Cursor::new(Vec::new());
+    let manifest =
+        export_archive_from(&mut src, nb, &mut out, "test", &ExportOptions::default()).unwrap();
+    drop(src);
+    // the page read after the edit has the image, and the archive carries its asset
+    assert!(manifest.assets.iter().any(|a| a.media_type == "image/png"));
+    let bytes = out.into_inner();
+    l.verify_archive(Cursor::new(bytes.clone())).unwrap();
+    let report = l.import_archive(Cursor::new(bytes)).unwrap();
+    let copy = report.notebook.id;
+    let page = l.load_page(copy, second).unwrap();
+    assert!(page
+        .elements
+        .iter()
+        .any(|e| matches!(e, Element::Image(i) if i.z == 9)));
+}

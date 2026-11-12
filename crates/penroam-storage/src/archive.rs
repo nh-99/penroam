@@ -22,9 +22,15 @@
 //! stay format 2. [`Library::verify_archive`] runs the import checks without
 //! changing the library. What an archive is for, compared with PDF export,
 //! backups and sync, is set out in `docs/formats/portability.md`.
+//!
+//! Export reads through an [`ArchiveSource`], one page and one asset at a time, so an app that
+//! keeps the library behind a lock can take it once per read and encode and compress without
+//! it ([`export_archive_from`]). The page list and the notebook record are fixed when the export
+//! starts. A page edited while the export runs is written as it was when it was read, and every
+//! asset an exported page refers to is in the archive, so the result is always a valid archive.
 
 use crate::error::{Result, StorageError};
-use crate::library::{sha256_hex, Library};
+use crate::library::{read_asset_file, sha256_hex, Library};
 use penroam_core::migrate::notebook_from_value;
 use penroam_core::validate::{is_sha256_hex, validate_notebook, validate_page};
 use penroam_core::*;
@@ -32,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, Write};
+use std::path::PathBuf;
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -226,118 +233,7 @@ impl Library {
         generator: &str,
         options: &ExportOptions,
     ) -> Result<Manifest> {
-        let nb = self.notebook(nb_id)?.clone();
-        let order: Vec<Uuid> = match &options.pages {
-            None => nb.page_order.clone(),
-            Some(wanted) => {
-                if let Some(p) = wanted.iter().find(|p| !nb.page_order.contains(p)) {
-                    return Err(StorageError::NotFound(format!("page {p}")));
-                }
-                let keep: HashSet<&Uuid> = wanted.iter().collect();
-                nb.page_order
-                    .iter()
-                    .copied()
-                    .filter(|p| keep.contains(p))
-                    .collect()
-            }
-        };
-        let trashed: Vec<Uuid> = if options.include_trash {
-            nb.trashed_pages.iter().map(|t| t.id).collect()
-        } else {
-            Vec::new()
-        };
-        let mut zip = zip::ZipWriter::new(out);
-        let stored = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
-        let deflated = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .large_file(true);
-        zip.start_file("mimetype", stored).map_err(zerr)?;
-        zip.write_all(MIMETYPE.as_bytes())?;
-
-        let mut pages = Vec::new();
-        let mut trashed_pages = Vec::new();
-        let mut used_assets: Vec<String> = Vec::new();
-        for (pid, is_trashed) in order
-            .iter()
-            .map(|p| (*p, false))
-            .chain(trashed.iter().map(|p| (*p, true)))
-        {
-            let bytes = self.with_page(nb_id, pid, |p| {
-                for a in p.asset_refs() {
-                    if !used_assets.iter().any(|u| u == a) {
-                        used_assets.push(a.to_string());
-                    }
-                }
-                penroam_core::binary::encode_page(p)
-            })?;
-            let path = format!("pages/{pid}.prp");
-            zip.start_file(&path, deflated).map_err(zerr)?;
-            zip.write_all(&bytes)?;
-            let entry = ManifestPage {
-                id: pid,
-                path,
-                sha256: sha256_hex(&bytes),
-                bytes: bytes.len() as u64,
-            };
-            if is_trashed {
-                trashed_pages.push(entry);
-            } else {
-                pages.push(entry);
-            }
-        }
-        let mut assets = Vec::new();
-        for hash in &used_assets {
-            let meta = nb
-                .assets
-                .iter()
-                .find(|a| &a.sha256 == hash)
-                .ok_or_else(|| {
-                    StorageError::Corrupt(format!("page references unknown asset {hash}"))
-                })?;
-            let bytes = self.read_asset(nb_id, hash)?;
-            let path = format!("assets/{hash}");
-            zip.start_file(&path, deflated).map_err(zerr)?;
-            zip.write_all(&bytes)?;
-            assets.push(ManifestAsset {
-                sha256: hash.clone(),
-                path,
-                media_type: meta.media_type.clone(),
-                byte_size: bytes.len() as u64,
-            });
-        }
-        let mut snapshot = nb.clone();
-        snapshot.page_order = order;
-        if !options.include_trash {
-            snapshot.trashed_pages.clear();
-            snapshot.deleted_at = None;
-        }
-        let exported: HashSet<Uuid> = snapshot.all_page_ids().collect();
-        snapshot.order_keys.retain(|p, _| exported.contains(p));
-        snapshot.assets.retain(|a| used_assets.contains(&a.sha256));
-        let manifest = Manifest {
-            format: FORMAT.into(),
-            format_version: FORMAT_VERSION,
-            schema_version: NOTEBOOK_SCHEMA_VERSION,
-            generator: generator.into(),
-            exported_at: if options.deterministic {
-                nb.updated_at
-            } else {
-                now_ms()
-            },
-            notebook: serde_json::to_value(&snapshot)
-                .map_err(|e| StorageError::Io(e.to_string()))?,
-            pages,
-            assets,
-            trashed_pages,
-        };
-        zip.start_file("manifest.json", deflated).map_err(zerr)?;
-        zip.write_all(
-            &serde_json::to_vec_pretty(&manifest).map_err(|e| StorageError::Io(e.to_string()))?,
-        )?;
-        let mut w = zip.finish().map_err(zerr)?;
-        w.flush()?;
-        Ok(manifest)
+        export_archive_from(self, nb_id, out, generator, options)
     }
 
     /// Imports a `.penroam` archive as a new notebook.
@@ -747,4 +643,171 @@ fn read_entry<R: Read + Seek>(
         )));
     }
     Ok(buf)
+}
+
+/// Where an export reads a notebook from. [`Library`] is one. An app that keeps the library
+/// behind a lock implements it to take the lock for each call, so the editor can keep saving
+/// while a large notebook is encoded and compressed.
+pub trait ArchiveSource {
+    /// The notebook record as it is now.
+    fn notebook(&mut self, id: Uuid) -> Result<Notebook>;
+    /// A page with all its journaled edits, live or trashed.
+    fn page(&mut self, nb: Uuid, page: Uuid) -> Result<Page>;
+    /// An asset's record and the path of its file, which the export reads itself (see
+    /// [`Library::asset_file`]). `NotFound` when the notebook doesn't list it.
+    fn asset(&mut self, nb: Uuid, hash: &str) -> Result<(Asset, PathBuf)>;
+}
+
+impl ArchiveSource for Library {
+    fn notebook(&mut self, id: Uuid) -> Result<Notebook> {
+        Ok(Library::notebook(self, id)?.clone())
+    }
+
+    fn page(&mut self, nb: Uuid, page: Uuid) -> Result<Page> {
+        // A detached read leaves the editor's page cache alone; going through the cache would
+        // push its pages out and checkpoint them. The cached load is the fallback because it
+        // runs the full recovery path for a damaged snapshot.
+        match self.read_page_detached(nb, page) {
+            Ok(p) => Ok(p),
+            Err(StorageError::Corrupt(_)) => self.load_page(nb, page),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn asset(&mut self, nb: Uuid, hash: &str) -> Result<(Asset, PathBuf)> {
+        self.asset_file(nb, hash)
+    }
+}
+
+/// [`Library::export_archive_with`] reading through `src`. See the module docs for what it
+/// guarantees when the notebook changes during the export.
+///
+/// Errors: `NotFound` when `options.pages` names something that is not a live page, or a page
+/// is purged during the export; `Corrupt` for unreadable pages or assets.
+pub fn export_archive_from<W: Write + Seek>(
+    src: &mut impl ArchiveSource,
+    nb_id: Uuid,
+    out: W,
+    generator: &str,
+    options: &ExportOptions,
+) -> Result<Manifest> {
+    let nb = src.notebook(nb_id)?;
+    let order: Vec<Uuid> = match &options.pages {
+        None => nb.page_order.clone(),
+        Some(wanted) => {
+            if let Some(p) = wanted.iter().find(|p| !nb.page_order.contains(p)) {
+                return Err(StorageError::NotFound(format!("page {p}")));
+            }
+            let keep: HashSet<&Uuid> = wanted.iter().collect();
+            nb.page_order
+                .iter()
+                .copied()
+                .filter(|p| keep.contains(p))
+                .collect()
+        }
+    };
+    let trashed: Vec<Uuid> = if options.include_trash {
+        nb.trashed_pages.iter().map(|t| t.id).collect()
+    } else {
+        Vec::new()
+    };
+    let mut zip = zip::ZipWriter::new(out);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let deflated = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(true);
+    zip.start_file("mimetype", stored).map_err(zerr)?;
+    zip.write_all(MIMETYPE.as_bytes())?;
+
+    let mut pages = Vec::new();
+    let mut trashed_pages = Vec::new();
+    let mut used_assets: Vec<String> = Vec::new();
+    for (pid, is_trashed) in order
+        .iter()
+        .map(|p| (*p, false))
+        .chain(trashed.iter().map(|p| (*p, true)))
+    {
+        let page = src.page(nb_id, pid)?;
+        for a in page.asset_refs() {
+            if !used_assets.iter().any(|u| u == a) {
+                used_assets.push(a.to_string());
+            }
+        }
+        let bytes = penroam_core::binary::encode_page(&page);
+        drop(page);
+        let path = format!("pages/{pid}.prp");
+        zip.start_file(&path, deflated).map_err(zerr)?;
+        zip.write_all(&bytes)?;
+        let entry = ManifestPage {
+            id: pid,
+            path,
+            sha256: sha256_hex(&bytes),
+            bytes: bytes.len() as u64,
+        };
+        if is_trashed {
+            trashed_pages.push(entry);
+        } else {
+            pages.push(entry);
+        }
+    }
+    let mut assets = Vec::new();
+    // records of assets added after the export started, by a page read later
+    let mut added: Vec<Asset> = Vec::new();
+    for hash in &used_assets {
+        let (meta, file) = match src.asset(nb_id, hash) {
+            Ok(found) => found,
+            Err(StorageError::NotFound(_)) => {
+                return Err(StorageError::Corrupt(format!(
+                    "page references unknown asset {hash}"
+                )))
+            }
+            Err(e) => return Err(e),
+        };
+        let bytes = read_asset_file(&file, hash)?;
+        if !nb.assets.iter().any(|a| &a.sha256 == hash) {
+            added.push(meta.clone());
+        }
+        let path = format!("assets/{hash}");
+        zip.start_file(&path, deflated).map_err(zerr)?;
+        zip.write_all(&bytes)?;
+        assets.push(ManifestAsset {
+            sha256: hash.clone(),
+            path,
+            media_type: meta.media_type.clone(),
+            byte_size: bytes.len() as u64,
+        });
+    }
+    let mut snapshot = nb.clone();
+    snapshot.page_order = order;
+    if !options.include_trash {
+        snapshot.trashed_pages.clear();
+        snapshot.deleted_at = None;
+    }
+    let exported: HashSet<Uuid> = snapshot.all_page_ids().collect();
+    snapshot.order_keys.retain(|p, _| exported.contains(p));
+    snapshot.assets.retain(|a| used_assets.contains(&a.sha256));
+    snapshot.assets.extend(added);
+    let manifest = Manifest {
+        format: FORMAT.into(),
+        format_version: FORMAT_VERSION,
+        schema_version: NOTEBOOK_SCHEMA_VERSION,
+        generator: generator.into(),
+        exported_at: if options.deterministic {
+            nb.updated_at
+        } else {
+            now_ms()
+        },
+        notebook: serde_json::to_value(&snapshot).map_err(|e| StorageError::Io(e.to_string()))?,
+        pages,
+        assets,
+        trashed_pages,
+    };
+    zip.start_file("manifest.json", deflated).map_err(zerr)?;
+    zip.write_all(
+        &serde_json::to_vec_pretty(&manifest).map_err(|e| StorageError::Io(e.to_string()))?,
+    )?;
+    let mut w = zip.finish().map_err(zerr)?;
+    w.flush()?;
+    Ok(manifest)
 }

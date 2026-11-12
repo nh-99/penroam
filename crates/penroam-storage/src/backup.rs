@@ -26,7 +26,9 @@
 //! * Nested archives are unpacked to files in the staging folder, with sizes
 //!   enforced while copying, so a backup can be larger than memory.
 
-use crate::archive::{ArchiveSummary, ExportOptions, ImportOptions};
+use crate::archive::{
+    export_archive_from, ArchiveSource, ArchiveSummary, ExportOptions, ImportOptions,
+};
 use crate::error::{Result, StorageError};
 use crate::library::Library;
 use penroam_core::{now_ms, Timestamp};
@@ -335,35 +337,54 @@ impl<W: Write + Seek> BackupWriter<W> {
     /// listed in [`BackupManifest::unreadable`] and a notebook that no longer
     /// exists is skipped. Errors only for failures of the backup file itself.
     pub fn add_notebook(&mut self, lib: &mut Library, id: Uuid) -> Result<()> {
-        let title = match lib.notebook(id) {
-            Ok(n) => n.title.clone(),
-            Err(StorageError::NotFound(_)) => return Ok(()),
+        let staging = lib.staging_dir();
+        if let Some(warning) = self.add_notebook_from(lib, &staging, id)? {
+            lib.recovery.warnings.push(warning);
+        }
+        Ok(())
+    }
+
+    /// [`BackupWriter::add_notebook`] reading through `src`, so the caller can hold its library
+    /// lock only for each read (see [`ArchiveSource`]). `staging` is the library's staging
+    /// folder. Returns the warning to record when the notebook was left out.
+    pub fn add_notebook_from(
+        &mut self,
+        src: &mut impl ArchiveSource,
+        staging: &Path,
+        id: Uuid,
+    ) -> Result<Option<String>> {
+        let title = match src.notebook(id) {
+            Ok(n) => n.title,
+            Err(StorageError::NotFound(_)) => return Ok(None),
             Err(e) => return Err(e),
         };
-        let tmp = TempFile(
-            lib.staging_dir()
-                .join(format!("backup-{}.penroam", Uuid::new_v4())),
-        );
+        let tmp = TempFile(staging.join(format!("backup-{}.penroam", Uuid::new_v4())));
         let mut file = open_temp(&tmp.0)?;
         let opts = ExportOptions {
             include_trash: true,
             deterministic: true,
             ..Default::default()
         };
-        match lib.export_archive_with(id, &mut file, &self.generator, &opts) {
+        let mut exported = export_archive_from(src, id, &mut file, &self.generator, &opts);
+        if let Err(StorageError::NotFound(_)) = exported {
+            // a page purged while this notebook was being read: read it again from the start
+            file.set_len(0)?;
+            file.seek(SeekFrom::Start(0))?;
+            exported = export_archive_from(src, id, &mut file, &self.generator, &opts);
+        }
+        match exported {
             Ok(_) => {}
+            Err(StorageError::NotFound(_)) if src.notebook(id).is_err() => return Ok(None),
             // the disk filling up is a failure of the backup, not of this notebook
             Err(e @ (StorageError::StorageFull(_) | StorageError::Io(_))) => return Err(e),
             Err(e) => {
-                lib.recovery
-                    .warnings
-                    .push(format!("notebook {id} left out of the backup: {e}"));
+                let warning = format!("notebook {id} left out of the backup: {e}");
                 self.unreadable.push(BackupProblem {
                     id,
                     title,
                     error: e.to_string(),
                 });
-                return Ok(());
+                return Ok(Some(warning));
             }
         }
         file.seek(SeekFrom::Start(0))?;
@@ -386,7 +407,7 @@ impl<W: Write + Seek> BackupWriter<W> {
             sha256,
             bytes,
         });
-        Ok(())
+        Ok(None)
     }
 
     /// Adds app data that isn't part of any notebook, such as search corrections.

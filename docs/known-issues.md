@@ -5,8 +5,11 @@ notes. If you find one, please report it: see [support](support.md).
 
 ## Everywhere
 
-* **Automatic backups only run while Penroam is open.** Each notebook is locked separately, so a
-  backup isn't one single instant across the library. Close open notebooks first if you need that.
+* **Automatic backups only run while Penroam is open.**
+* **A backup or export isn't one single instant.** You can keep writing while one runs, so each
+  page is saved as it was when the backup or export reached it. A page you edit at the same time
+  may be in it from just before or just after that edit. Close open notebooks first if you need
+  a fixed moment.
 * **A backup, export or WebDAV copy isn't encrypted.** Keep these files somewhere you trust.
   Penroam warns you if the notebooks are synced.
 

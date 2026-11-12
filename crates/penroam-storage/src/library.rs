@@ -2363,17 +2363,23 @@ impl Library {
 
     /// Reads an asset of a notebook, verifying its checksum (`Corrupt` on mismatch).
     pub fn read_asset(&self, nb_id: Uuid, hash: &str) -> Result<Vec<u8>> {
-        let nb = self.notebook(nb_id)?;
-        if !nb.assets.iter().any(|a| a.sha256 == hash) {
-            return Err(StorageError::NotFound(format!("asset {hash}")));
-        }
-        let bytes = fs::read(self.asset_path(nb_id, hash))?;
-        if sha256_hex(&bytes) != hash {
-            return Err(StorageError::Corrupt(format!(
-                "asset {hash} does not match its checksum"
-            )));
-        }
-        Ok(bytes)
+        read_asset_file(&self.asset_file(nb_id, hash)?.1, hash)
+    }
+
+    /// An asset's record and the path of its file, for reading it without the library (see
+    /// [`read_asset_file`]). Asset files are named by their checksum and never change, and a
+    /// live notebook's are only removed when the notebook is purged, so the path stays good.
+    ///
+    /// Errors: `NotFound` for an unknown notebook, or an asset the notebook doesn't list.
+    pub fn asset_file(&self, nb_id: Uuid, hash: &str) -> Result<(Asset, PathBuf)> {
+        let asset = self
+            .notebook(nb_id)?
+            .assets
+            .iter()
+            .find(|a| a.sha256 == hash)
+            .cloned()
+            .ok_or_else(|| StorageError::NotFound(format!("asset {hash}")))?;
+        Ok((asset, self.asset_path(nb_id, hash)))
     }
 
     // ---------------------------------------------------------- thumbnails --
@@ -2711,4 +2717,18 @@ impl PageRead {
         }
         Ok(page)
     }
+}
+
+/// Reads an asset file found with [`Library::asset_file`], verifying its checksum.
+///
+/// Errors: `Io` if it can't be read (`NotFound` once its notebook is purged), `Corrupt` when the
+/// bytes don't match `hash`.
+pub fn read_asset_file(path: &Path, hash: &str) -> Result<Vec<u8>> {
+    let bytes = fs::read(path)?;
+    if sha256_hex(&bytes) != hash {
+        return Err(StorageError::Corrupt(format!(
+            "asset {hash} does not match its checksum"
+        )));
+    }
+    Ok(bytes)
 }
