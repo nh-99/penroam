@@ -15,6 +15,8 @@ const state = {
   pageHasRows: false,
   editingText: false,
   textFormats: [],
+  rulerShown: false,
+  rulerAngle: 0,
   saveState: "saved",
   saveError: null,
   nativeActive: false,

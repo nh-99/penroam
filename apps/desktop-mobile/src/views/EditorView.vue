@@ -239,6 +239,10 @@ function onKey(e: KeyboardEvent) {
   } else if (!m && !e.altKey) {
     const tools: Record<string, Tool> = { p: "pen", m: "highlighter", e: "eraser", v: "select", l: "lasso", t: "text", h: "hand" };
     if (tools[k]) ed.setTool(tools[k]);
+    else if (k === "r") {
+      if (!e.repeat) ed.toggleRuler();
+    }
+    else if ((k === "[" || k === "]") && st.rulerShown) ed.rotateRulerStep(k === "]" ? 1 : -1);
     else if (k === "delete" || k === "backspace") ed.deleteSelection();
     else if (k === "escape") ed.clearSelection();
     else if (k === "enter" && st.selectionHasText) {
@@ -309,7 +313,7 @@ watch(narrow, (n) => {
           <IconBtn class="hidden sm:inline-flex" label="Settings" @click="showSettings = true"><Settings :size="20" /></IconBtn>
         </div>
       </div>
-      <Toolbar v-if="!narrow" class="border-t border-line" :state="st" @tool="setTool" @format="host.editor.value?.formatText($event)" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()"
+      <Toolbar v-if="!narrow" class="border-t border-line" :state="st" @tool="setTool" @format="host.editor.value?.formatText($event)" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()" @ruler="host.editor.value?.toggleRuler()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
         @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" @free-placement="(f) => host.editor.value?.setSelectionFreePlacement(f)" />
       <CloudBanner compact class="border-t border-b-0" />
@@ -354,7 +358,7 @@ watch(narrow, (n) => {
 
     <!-- bottom tray on narrow screens -->
     <footer v-if="narrow" class="safe-bottom relative z-30 border-t border-line bg-surface">
-      <Toolbar compact :state="st" @tool="setTool" @format="host.editor.value?.formatText($event)" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()"
+      <Toolbar compact :state="st" @tool="setTool" @format="host.editor.value?.formatText($event)" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()" @ruler="host.editor.value?.toggleRuler()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
         @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" @free-placement="(f) => host.editor.value?.setSelectionFreePlacement(f)" />
     </footer>

@@ -38,6 +38,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     selectionHasText: false, selectionTextFree: true, selectionTextFont: null, pageHasRows: false,
     editingText: false,
     textFormats: [],
+    rulerShown: false,
+    rulerAngle: 0,
     saveState: "saved",
     saveError: null,
     nativeActive: false,

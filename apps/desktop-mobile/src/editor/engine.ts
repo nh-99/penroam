@@ -17,6 +17,12 @@
 // Ruled paper makes the canvas a column (`column`): the page's width with its header and margin
 // line, infinite only downward. The extent then spans the column's width and grows down, the
 // view is kept on the column, and text is placed and sized as on a sheet.
+//
+// The ruler (`setRuler`) is a screen-space overlay with its own canvas above the ink
+// previews. Presses on it are routed in `onDown` by `rulerPress`; a stroke that starts at its
+// edge keeps a copy of the ruler and projects every sample onto that edge before it becomes a
+// page point (`rulerSample`). Native ink layers cannot do that, so they stay hidden while the
+// ruler shows. Moving or turning the ruler never touches the session or the undo history.
 import type { Element } from "../generated/Element";
 import type { InkPoint } from "../generated/InkPoint";
 import type { InkStroke } from "../generated/InkStroke";
@@ -42,7 +48,7 @@ import {
   type Rect,
 } from "./geometry";
 import { newId } from "./ids";
-import { classifyPointer, PALM_CONTACT_PX, PENCIL_CURVE, penErases, pressureArrived, pressureCapable, samplePoint, type PenOnlyMode } from "./input";
+import { classifyPointer, PALM_CONTACT_PX, PENCIL_CURVE, penErases, pressureArrived, pressureCapable, samplePoint, type PenOnlyMode, type RawSample } from "./input";
 import { PdfCache, PdfPageRenderer, renderPdfPage } from "./pdf";
 import { drawText, elementBounds, linkAt, PageRenderer, paintOf, pdfPageKey, shownColor, taskAt, textBounds, type Ink, type Text } from "./renderer";
 import type { PageSession, SaveState } from "./session";
@@ -50,6 +56,7 @@ import { rowsFor, toggledTask, type TaskBox } from "./markdown";
 import { MarkdownEditor } from "./markdownEditor";
 import type { FormatAction } from "./markdownFormat";
 import { onMathReady } from "./math";
+import { DIAL_RADIUS_PX, fingerTurn, moveBy, normaliseAngle, outsideDialDeadZone, projectToEdge, reachFor, rotateAbout, RULER_HALF_WIDTH_PX, rulerPress, stepAngle, tickLayout, twoFingerTransform, type Ruler, type RulerSide } from "./ruler";
 import { alignment, SNAP_DISTANCE_PX, type Guide, type TextEdges } from "./snap";
 import { isCanvasColumn, rowPitchOf, snapToRow } from "./templates";
 import { ascentOf, contentHeight, descentOf, firstBaseline, fontFamilyOf, lineHeight, metrics } from "./textLayout";
@@ -121,6 +128,10 @@ export interface EditorState {
   saveError: string | null;
   nativeActive: boolean;
   penSeen: boolean;
+  /** The on-screen ruler is shown. */
+  rulerShown: boolean;
+  /** The ruler's angle in degrees, in [0, 180). */
+  rulerAngle: number;
 }
 
 export interface EditorCallbacks {
@@ -206,7 +217,16 @@ interface ActiveStroke {
   stableDrawn: number;
   coalesced: number;
   predicted: InkPoint[];
+  /** The ruler edge this stroke is locked to: a copy, so moving the ruler can't bend it. */
+  ruler?: { r: Ruler; side: RulerSide };
 }
+
+/** A press turning or carrying the ruler. Positions are viewport CSS px. */
+type RulerDrag =
+  /** `from` is null until the pointer has left the dial's dead zone. */
+  | { kind: "rotate"; pointerId: number; start: Ruler; from: [number, number] | null }
+  /** `turn`: how far two fingers have turned since `from`, unwrapped (see `fingerTurn`). */
+  | { kind: "move"; start: Ruler; fingers: Map<number, { from: [number, number]; at: [number, number] }>; turn: number };
 
 interface EraseGesture {
   pointerId: number;
@@ -261,6 +281,7 @@ export class InkEditor {
   private editFrame: HTMLDivElement;
   private activeCv: HTMLCanvasElement;
   private tailCv: HTMLCanvasElement;
+  private rulerCv: HTMLCanvasElement;
   private actx: CanvasRenderingContext2D;
   private tctx: CanvasRenderingContext2D;
   private dpr = 1;
@@ -321,6 +342,17 @@ export class InkEditor {
   private pdfBusy = false;
   /** The page last handed to `onScrollToPage`, until a session opens. */
   private scrollRequested: string | null = null;
+  // ruler
+  private rulerShown = false;
+  /** Null until first shown with a laid-out viewport, which places it in the middle. */
+  private ruler: Ruler | null = null;
+  private rulerDrag: RulerDrag | null = null;
+  /** The ruler canvas needs drawing on the next frame. */
+  private rulerDirty = false;
+  /** The scale the ruler's ticks were last drawn for. */
+  private rulerDrawnScale = 0;
+  /** The ruler was shown while a native pen stroke was in flight: hide the layer at pen-up. */
+  private nativeHideAtLift = false;
 
   constructor(
     private viewport: HTMLElement,
@@ -370,6 +402,9 @@ export class InkEditor {
     };
     this.activeCv = mkScreen();
     this.tailCv = mkScreen();
+    this.rulerCv = mkScreen();
+    this.rulerCv.classList.add("penroam-ruler");
+    this.rulerCv.style.display = "none";
     const desync = { desynchronized: true } as CanvasRenderingContext2DSettings;
     this.actx = this.activeCv.getContext("2d", desync)!;
     this.tctx = this.tailCv.getContext("2d", desync)!;
@@ -494,6 +529,8 @@ export class InkEditor {
       saveError: this.session?.lastError ?? null,
       nativeActive: this.nativeVisible,
       penSeen: this.penSeen,
+      rulerShown: this.rulerShown,
+      rulerAngle: this.ruler?.angle ?? 0,
     });
   }
 
@@ -650,6 +687,7 @@ export class InkEditor {
 
   /** Draws everything again after a change in how pages look. */
   private redrawLook() {
+    this.markRulerDirty();
     // the other pages' pictures were drawn the old way
     this.strip.dropImages();
     if (this.session) {
@@ -710,7 +748,7 @@ export class InkEditor {
     const first = this.viewW === 0;
     this.viewW = r.width;
     this.viewH = r.height;
-    for (const c of [this.activeCv, this.tailCv]) {
+    for (const c of [this.activeCv, this.tailCv, this.rulerCv]) {
       c.width = Math.max(1, Math.round(r.width * this.dpr));
       c.height = Math.max(1, Math.round(r.height * this.dpr));
     }
@@ -722,6 +760,12 @@ export class InkEditor {
       this.applyTransform(false);
     }
     if (this.native && this.nativeMounted) this.nativeCall((n) => n.setBounds(this.surfaceRect()));
+    if (this.rulerShown) {
+      // a viewport that shrank must not leave the ruler's dial out of reach
+      if (this.ruler) this.ruler = this.clampRuler(this.ruler);
+      else this.placeRuler();
+      this.markRulerDirty(); // resizing a canvas clears it
+    }
   }
 
   private fitTransform(mode: "width" | "page"): ViewTransform {
@@ -891,6 +935,8 @@ export class InkEditor {
     this.world.style.setProperty("--inv", String(1 / scale));
     this.renderer.setView(this.transform);
     this.emit({ scale });
+    // ticks measure the page, so they follow the zoom; panning leaves them as they are
+    if (this.rulerShown && scale !== this.rulerDrawnScale) this.markRulerDirty();
     if (notifyNative) this.syncNativeTransform();
     if (this.continuous) {
       this.strip.el.style.transform = css;
@@ -1353,6 +1399,7 @@ export class InkEditor {
     const cls = classifyPointer(e, { penOnly: this.settings.penOnly, penSeen: this.penSeen, penDown: penActive, drawingActive: busy, touches: this.touches.size, palmPx: this.settings.palmContactPx });
     if (cls === "ignore") return;
     if (e.pointerType === "pen") this.penDown = true;
+    if (this.rulerDown(e, tool, cls, busy)) return;
     if (e.pointerType === "touch" && this.fingerDraw) {
       // the drawing finger becomes the first half of the pinch, so it must stop drawing
       const first = this.abandonFingerDraw(PINCH_GRACE_MS)!;
@@ -1438,6 +1485,7 @@ export class InkEditor {
         if (from) this.beginSelect(from);
       }
     }
+    if (this.rulerDrag && this.rulerMove(e)) return;
     if (this.touches.has(e.pointerId) || this.pan?.pointerId === e.pointerId) {
       if (e.type === "pointermove") this.navigate(e);
       return;
@@ -1454,7 +1502,7 @@ export class InkEditor {
       if (this.hasPredicted) {
         const pr: PointerEvent[] = (e as any).getPredictedEvents?.() ?? [];
         // predicted samples are an ephemeral preview only; never stored
-        a.predicted = pr.map((pe) => samplePoint(pe, this.rect!, this.transform, a.t0, false, this.settings.pencilCurve));
+        a.predicted = pr.map((pe) => samplePoint(this.rulerSample(a, pe), this.rect!, this.transform, a.t0, false, this.settings.pencilCurve));
       }
       this.scheduleFrame();
       return;
@@ -1472,6 +1520,7 @@ export class InkEditor {
   private onUp(e: PointerEvent, cancelled: boolean) {
     if (e.pointerType === "pen") this.liftPen();
     if (this.fingerDraw?.pointerId === e.pointerId) this.fingerDraw = null;
+    if (this.rulerDrag && this.rulerUp(e.pointerId)) return;
     const tap = this.linkTap?.pointerId === e.pointerId ? this.linkTap : null;
     if (tap) {
       this.linkTap = null;
@@ -1496,7 +1545,7 @@ export class InkEditor {
     if (this.active?.pointerId === e.pointerId) {
       if (cancelled) return this.cancelStroke();
       const a = this.active;
-      const p = samplePoint(e, this.rect!, this.transform, a.t0, false, this.settings.pencilCurve);
+      const p = samplePoint(this.rulerSample(a, e), this.rect!, this.transform, a.t0, false, this.settings.pencilCurve);
       const last = a.stroke.points[a.stroke.points.length - 1];
       if (!last || last.x !== p.x || last.y !== p.y) a.stroke.points.push(p);
       return this.finishStroke();
@@ -1508,6 +1557,14 @@ export class InkEditor {
   private liftPen() {
     this.penDown = false;
     this.penLiftedAt = performance.now();
+    this.flushNativeHide();
+  }
+
+  /** Applies a native-layer switch held back until the pen lifted (see `setRuler`). */
+  private flushNativeHide() {
+    if (!this.nativeHideAtLift) return;
+    this.nativeHideAtLift = false;
+    this.updateNative();
   }
 
   /**
@@ -1532,6 +1589,7 @@ export class InkEditor {
 
   private onLostCapture(e: PointerEvent) {
     // lost capture mid-stroke (e.g. window lost focus): keep what was drawn, never orphan it
+    if (this.rulerDrag && this.rulerUp(e.pointerId)) return;
     if (this.active?.pointerId === e.pointerId) this.finishStroke();
     else if (this.erase?.pointerId === e.pointerId) this.finishErase();
     else if (this.drag?.pointerId === e.pointerId) this.finishDrag();
@@ -1542,6 +1600,10 @@ export class InkEditor {
     if (this.active) this.finishStroke();
     if (this.erase) this.finishErase();
     if (this.drag) this.cancelDrag();
+    if (this.rulerDrag) {
+      this.rulerDrag = null;
+      this.markRulerDirty(); // takes the angle readout away
+    }
     this.fingerDraw = null;
     this.touches.clear();
     this.pinch = null;
@@ -1550,6 +1612,7 @@ export class InkEditor {
     this.taskTap = null;
     this.penDown = false;
     this.spaceDown = false;
+    this.flushNativeHide();
   }
 
   private onWheel(e: WheelEvent) {
@@ -1619,6 +1682,7 @@ export class InkEditor {
   private beginStroke(e: PointerEvent, tool: "pen" | "highlighter") {
     const kind = e.pointerType || "mouse";
     const hl = tool === "highlighter";
+    const ruler = this.rulerLock(e);
     const stroke: Ink = {
       type: "ink",
       id: newId(),
@@ -1639,16 +1703,17 @@ export class InkEditor {
         pointerHeight: e.height,
         userAgent: navigator.userAgent,
         ...(this.settings.pencilCurve && kind === "pen" ? { pressureCurve: PENCIL_CURVE } : {}),
+        ...(ruler ? { ruler: { angle: ruler.r.angle } } : {}),
       },
       points: [],
     };
-    this.active = { stroke, pointerId: e.pointerId, t0: e.timeStamp, stableDrawn: 0, coalesced: 0, predicted: [] };
+    this.active = { stroke, pointerId: e.pointerId, t0: e.timeStamp, stableDrawn: 0, coalesced: 0, predicted: [], ruler };
     this.addSample(this.active, e, false);
     this.scheduleFrame();
   }
 
   private addSample(a: ActiveStroke, e: PointerEvent, coalesced: boolean) {
-    const p = samplePoint(e, this.rect!, this.transform, a.t0, coalesced, this.settings.pencilCurve);
+    const p = samplePoint(this.rulerSample(a, e), this.rect!, this.transform, a.t0, coalesced, this.settings.pencilCurve);
     const pts = a.stroke.points;
     const last = pts[pts.length - 1];
     if (last && last.x === p.x && last.y === p.y && last.pressure === p.pressure) return;
@@ -1682,6 +1747,7 @@ export class InkEditor {
     const a = this.active;
     if (a) this.drawActive(a);
     if (this.drag) this.drawDrag();
+    if (this.rulerDirty) this.drawRuler();
   }
 
   private drawActive(a: ActiveStroke) {
@@ -2440,6 +2506,290 @@ export class InkEditor {
     this.session?.redo();
   }
 
+
+  // ========================================================== ruler ==
+
+  /**
+   * Shows or hides the on-screen ruler. The first time it shows, it lies across the middle of
+   * the view at 0°; after that it comes back where it was left. While it shows, the native ink
+   * layers are hidden so that strokes can lock to its edge.
+   */
+  setRuler(shown: boolean) {
+    if (shown === this.rulerShown) return;
+    this.rulerShown = shown;
+    if (this.rulerDrag) this.rulerDrag = null;
+    if (shown) {
+      if (this.ruler) this.ruler = this.clampRuler(this.ruler);
+      else this.placeRuler();
+    }
+    this.rulerCv.style.display = shown ? "" : "none";
+    this.markRulerDirty();
+    this.emit({ rulerShown: shown, rulerAngle: this.ruler?.angle ?? 0 });
+    // Hiding the native layer mid-stroke cancels the stroke there (iOS keeps it only if it
+    // has a few points), so a stroke in flight finishes first. BOOX reports no pen-down to us,
+    // so there this only helps if its pen also reached the web view.
+    if (shown && this.penDown && this.nativeVisible) this.nativeHideAtLift = true;
+    else this.updateNative();
+  }
+
+  /** Shows the ruler if it is hidden, and hides it if it shows. */
+  toggleRuler() {
+    this.setRuler(!this.rulerShown);
+  }
+
+  /** Turns the shown ruler to the next (`dir` 1) or previous (`dir` -1) 15° detent. */
+  rotateRulerStep(dir: 1 | -1) {
+    if (!this.rulerShown || !this.ruler) return;
+    this.placeRulerAt({ ...this.ruler, angle: stepAngle(this.ruler.angle, dir) });
+  }
+
+  /** Where the ruler lies, in viewport CSS px; null while it is hidden. */
+  get rulerPlacement(): Ruler | null {
+    return this.rulerShown && this.ruler ? { ...this.ruler } : null;
+  }
+
+  /** The first placement: across the middle of the view, once the view has a size. */
+  private placeRuler() {
+    if (this.viewW > 0 && this.viewH > 0) this.ruler = { cx: this.viewW / 2, cy: this.viewH / 2, angle: 0 };
+  }
+
+  /** `r` with its centre kept inside the view, so its dial can always be reached. */
+  private clampRuler(r: Ruler): Ruler {
+    if (this.viewW <= 0 || this.viewH <= 0) return r;
+    return { cx: Math.min(this.viewW, Math.max(0, r.cx)), cy: Math.min(this.viewH, Math.max(0, r.cy)), angle: normaliseAngle(r.angle) };
+  }
+
+  private placeRulerAt(r: Ruler) {
+    const before = this.ruler?.angle;
+    this.ruler = this.clampRuler(r);
+    this.markRulerDirty();
+    if (this.ruler.angle !== before) this.emit({ rulerAngle: this.ruler.angle });
+  }
+
+  private markRulerDirty() {
+    if (this.rulerDirty) return;
+    this.rulerDirty = true;
+    this.scheduleFrame();
+  }
+
+  /**
+   * Starts turning or carrying the ruler if this press is for it, and says whether it was.
+   * A second finger joining a one-finger carry turns the ruler as well. Other presses while
+   * the ruler is held go on as usual, so a pen can draw along a ruler a finger holds.
+   */
+  private rulerDown(e: PointerEvent, tool: Tool, cls: "draw" | "navigate", busy: boolean): boolean {
+    const r = this.ruler;
+    if (!this.rulerShown || !r) return false;
+    const p = this.viewportPoint(e);
+    const d = this.rulerDrag;
+    if (d) {
+      if (e.pointerType !== "touch" || d.kind !== "move") return false;
+      // a third finger on a ruler held by two would otherwise pan the page under it
+      if (d.fingers.size >= 2) {
+        e.preventDefault();
+        return true;
+      }
+      e.preventDefault();
+      this.capture(e);
+      // both fingers start from where they are now, and the ruler from where it is now
+      for (const f of d.fingers.values()) f.from = f.at;
+      d.fingers.set(e.pointerId, { from: p, at: p });
+      d.start = r;
+      d.turn = 0;
+      this.markRulerDirty(); // shows the angle readout
+      return true;
+    }
+    if (busy || (e.pointerType === "mouse" && e.button !== 0)) return false;
+    // a finger joining a pan or pinch, or a drawing finger's partner, is part of that gesture
+    if (e.pointerType === "touch" && (this.touches.size > 0 || this.fingerDraw)) return false;
+    const press = rulerPress(r, p[0], p[1], rulerPointer(e.pointerType), cls === "draw" && (tool === "pen" || tool === "highlighter"));
+    if (!press || press.kind === "draw") return false; // drawing locks in beginStroke
+    e.preventDefault();
+    this.capture(e);
+    this.rulerDrag = press.kind === "rotate" ? { kind: "rotate", pointerId: e.pointerId, start: r, from: outsideDialDeadZone(r, p) ? p : null } : { kind: "move", start: r, fingers: new Map([[e.pointerId, { from: p, at: p }]]), turn: 0 };
+    if (press.kind === "rotate") this.markRulerDirty();
+    return true;
+  }
+
+  /** Follows a pointer that holds the ruler; false when `e` is some other pointer. */
+  private rulerMove(e: PointerEvent): boolean {
+    const d = this.rulerDrag!;
+    const held = d.kind === "rotate" ? d.pointerId === e.pointerId : d.fingers.has(e.pointerId);
+    if (!held) return false;
+    // one event stream only
+    if (e.type !== "pointermove") return true;
+    const p = this.viewportPoint(e);
+    if (d.kind === "rotate") {
+      // a press near the centre measures its angle from where it first leaves the dead zone
+      if (!d.from) {
+        if (outsideDialDeadZone(d.start, p)) d.from = p;
+      } else this.placeRulerAt(rotateAbout(d.start, d.from, p));
+      return true;
+    }
+    d.fingers.get(e.pointerId)!.at = p;
+    const [a, b] = [...d.fingers.values()];
+    if (b) {
+      d.turn = fingerTurn(d.turn, a.from, b.from, a.at, b.at);
+      this.placeRulerAt(twoFingerTransform(d.start, a.from, b.from, a.at, b.at, d.turn));
+    } else this.placeRulerAt(moveBy(d.start, a.from, a.at));
+    return true;
+  }
+
+  /** Lets go of the ruler with `pointerId`; false when that pointer wasn't holding it. */
+  private rulerUp(pointerId: number): boolean {
+    const d = this.rulerDrag!;
+    if (d.kind === "rotate") {
+      if (d.pointerId !== pointerId) return false;
+      this.rulerDrag = null;
+    } else {
+      if (!d.fingers.delete(pointerId)) return false;
+      if (d.fingers.size === 0) this.rulerDrag = null;
+      else {
+        // the finger left behind carries on from where the ruler is now
+        for (const f of d.fingers.values()) f.from = f.at;
+        d.start = this.ruler!;
+        d.turn = 0;
+      }
+    }
+    this.markRulerDirty();
+    return true;
+  }
+
+  /** The angle readout shows while the ruler is being turned. */
+  private rulerTurning(): boolean {
+    const d = this.rulerDrag;
+    return !!d && (d.kind === "rotate" || d.fingers.size > 1);
+  }
+
+  /** The ruler edge a stroke starting with `e` locks to, if it starts close enough to one. */
+  private rulerLock(e: PointerEvent): ActiveStroke["ruler"] {
+    const r = this.ruler;
+    if (!this.rulerShown || !r) return undefined;
+    const [x, y] = this.viewportPoint(e);
+    const press = rulerPress(r, x, y, rulerPointer(e.pointerType), true);
+    return press?.kind === "draw" ? { r: { ...r }, side: press.side } : undefined;
+  }
+
+  /**
+   * `e` as the stroke records it: on a locked stroke, moved onto the ruler's edge in viewport
+   * space, before the page conversion. Pressure, tilt and timing are kept.
+   */
+  private rulerSample(a: ActiveStroke, e: PointerEvent): RawSample {
+    if (!a.ruler) return e;
+    const rect = this.rect!;
+    const [x, y] = projectToEdge(a.ruler.r, a.ruler.side, e.clientX - rect.left, e.clientY - rect.top);
+    return { clientX: x + rect.left, clientY: y + rect.top, pressure: e.pressure, tiltX: e.tiltX, tiltY: e.tiltY, twist: e.twist, timeStamp: e.timeStamp, pointerType: e.pointerType };
+  }
+
+  /**
+   * Draws the ruler in screen space: the band, centimetre ticks for the page at the current
+   * zoom, the dial, and the angle while it turns. In the ePaper theme it is solid, with no
+   * translucency, and it only redraws when it moves, turns or the zoom changes.
+   */
+  private drawRuler() {
+    this.rulerDirty = false;
+    const cv = this.rulerCv;
+    const ctx = cv.getContext("2d")!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const r = this.ruler;
+    if (!this.rulerShown || !r) return;
+    const { scale } = this.transform;
+    this.rulerDrawnScale = scale;
+    const { mono, dark } = this.settings;
+    const css = getComputedStyle(this.viewport);
+    const token = (name: string, light: string, darkValue: string) => css.getPropertyValue(name).trim() || (dark ? darkValue : light);
+    const ink = mono ? "#000000" : token("--pr-ink", "#1f2328", "#e8e6e1");
+    const fill = mono ? "#ffffff" : token("--pr-surface", "#ffffff", "#202327");
+    const brand = mono ? "#000000" : token("--pr-brand", "#073b8a", "#7da4ec");
+    const h = RULER_HALF_WIDTH_PX;
+    const reach = reachFor(r, this.viewW, this.viewH);
+    const d = this.dpr;
+    // Flat, without a shadow: it redraws on every zoom step of a pinch, and a blurred shadow
+    // along the whole band is too slow for that. Clipped to the view, which is all that shows.
+    ctx.save(); // the clip must not outlive this drawing
+    ctx.setTransform(d, 0, 0, d, 0, 0);
+    ctx.beginPath();
+    ctx.rect(0, 0, this.viewW, this.viewH);
+    ctx.clip();
+    ctx.translate(r.cx, r.cy);
+    ctx.rotate((r.angle * Math.PI) / 180);
+
+    ctx.fillStyle = fill;
+    // see-through enough to show the writing under it
+    ctx.globalAlpha = mono ? 1 : 0.86;
+    ctx.fillRect(-reach, -h, reach * 2, h * 2);
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = mono ? 2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(-reach, -h);
+    ctx.lineTo(reach, -h);
+    ctx.moveTo(-reach, h);
+    ctx.lineTo(reach, h);
+    ctx.stroke();
+
+    const ticks = tickLayout(scale, reach);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const t of ticks) {
+      const len = t.kind === "cm" ? 12 : t.kind === "half" ? 8 : 5;
+      ctx.moveTo(t.at, -h);
+      ctx.lineTo(t.at, -h + len);
+      ctx.moveTo(t.at, h);
+      ctx.lineTo(t.at, h - len);
+    }
+    ctx.stroke();
+    ctx.fillStyle = ink;
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    // past 90° the band's top edge faces down the screen: turn the numbers to stay upright
+    const flip = r.angle > 90;
+    for (const t of ticks) {
+      if (t.label === undefined) continue;
+      if (!flip) {
+        ctx.fillText(String(t.label), t.at, -h + 20);
+        continue;
+      }
+      ctx.save();
+      ctx.translate(t.at, -h + 20);
+      ctx.rotate(Math.PI);
+      ctx.fillText(String(t.label), 0, 0);
+      ctx.restore();
+    }
+
+    ctx.beginPath();
+    ctx.arc(0, 0, DIAL_RADIUS_PX, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = brand;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // the dial's line shows which way the ruler runs
+    ctx.beginPath();
+    ctx.moveTo(-DIAL_RADIUS_PX + 4, 0);
+    ctx.lineTo(DIAL_RADIUS_PX - 4, 0);
+    ctx.stroke();
+
+    if (this.rulerTurning()) {
+      ctx.setTransform(d, 0, 0, d, 0, 0);
+      const label = `${Math.round(r.angle) % 180}°`;
+      ctx.font = "600 13px system-ui, sans-serif";
+      const w = ctx.measureText(label).width + 16, ph = 24;
+      // above the dial, or below it at the top of the view
+      const py = r.cy - h - ph - 8 >= 4 ? r.cy - h - ph - 8 : r.cy + h + 8;
+      const px = Math.min(Math.max(4, r.cx - w / 2), Math.max(4, this.viewW - w - 4));
+      roundedRect(ctx, px, py, w, ph, ph / 2);
+      ctx.fillStyle = ink;
+      ctx.fill();
+      ctx.fillStyle = fill;
+      ctx.fillText(label, px + w / 2, py + ph / 2);
+    }
+    ctx.restore();
+  }
+
   // =================================================== native ink ==
 
   setNativeSurface(n: NativeInkSurface | null) {
@@ -2488,7 +2838,8 @@ export class InkEditor {
   }
 
   private wantNative(): boolean {
-    if (!this.native || !this.settings.useNativeInk || !this.session || this.overlayBlocked || this.edit) return false;
+    // native layers draw strokes themselves and cannot lock them to the ruler
+    if (!this.native || !this.settings.useNativeInk || !this.session || this.overlayBlocked || this.edit || this.rulerShown) return false;
     if (this.native.kind === "ios-pencil") return this.tool === "pen" || this.tool === "highlighter";
     return DRAW_TOOLS.includes(this.tool);
   }
@@ -2678,4 +3029,20 @@ export class InkEditor {
       requestAnimationFrame(step);
     });
   }
+}
+
+/** The ruler's kind of pointer for a PointerEvent's `pointerType`. */
+function rulerPointer(type: string): "pen" | "mouse" | "touch" {
+  return type === "pen" || type === "touch" ? type : "mouse";
+}
+
+/** A rounded rectangle path; `CanvasRenderingContext2D.roundRect` is missing on older WebViews. */
+function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
 }

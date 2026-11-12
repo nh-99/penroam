@@ -21,6 +21,8 @@ On macOS, use `Cmd` wherever this page says `Ctrl`.
 | `L` | Lasso |
 | `T` | Text |
 | `H` | Pan |
+| `R` | Show or hide the ruler |
+| `[` / `]` | Turn the ruler to the previous / next 15° (while it is shown) |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` or `Ctrl+Y` | Redo |
 | `Ctrl+A` | Select everything on the page |

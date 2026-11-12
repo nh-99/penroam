@@ -4,7 +4,7 @@
 // never floats over the canvas, so native ink overlays can't cover it). When it doesn't fit it
 // scrolls sideways, with arrows at each end because there is no scrollbar to show that it can.
 import { computed, ref } from "vue";
-import { Pen, Highlighter, Eraser, MousePointer2, LassoSelect, Type, Hand, Undo2, Redo2, ZoomIn, ZoomOut, Scan, Trash, SquarePen, Rows3, Bold, Italic, Strikethrough, Code, Sigma, Heading1, Heading2, Heading3, List, ListOrdered, ListChecks, Quote, SquareCode, Link, Minus, Table, ChevronLeft, ChevronRight, Palette } from "@lucide/vue";
+import { Pen, Highlighter, Eraser, MousePointer2, LassoSelect, Type, Hand, Undo2, Redo2, ZoomIn, ZoomOut, Scan, Trash, SquarePen, Rows3, Bold, Italic, Strikethrough, Code, Sigma, Heading1, Heading2, Heading3, List, ListOrdered, ListChecks, Quote, SquareCode, Link, Minus, Table, ChevronLeft, ChevronRight, Palette, Ruler } from "@lucide/vue";
 import IconBtn from "./ui/IconBtn.vue";
 import ColorDialog from "./ColorDialog.vue";
 import type { EditorState, Tool } from "../editor/engine";
@@ -16,7 +16,7 @@ import { fontFamilyOf } from "../editor/textLayout";
 import { useSideScroll } from "../composables/useSideScroll";
 
 const props = defineProps<{ state: EditorState; compact?: boolean }>();
-const emit = defineEmits<{ tool: [t: Tool]; format: [a: FormatAction]; undo: []; redo: []; zoomIn: []; zoomOut: []; fit: []; deleteSelection: []; editText: []; restyle: [s: { color?: string; fontSize?: number; font?: TextFont }]; freePlacement: [free: boolean] }>();
+const emit = defineEmits<{ tool: [t: Tool]; format: [a: FormatAction]; undo: []; redo: []; zoomIn: []; zoomOut: []; fit: []; deleteSelection: []; editText: []; restyle: [s: { color?: string; fontSize?: number; font?: TextFont }]; freePlacement: [free: boolean]; ruler: [] }>();
 const settings = useSettings();
 const mod = modKey();
 const strip = ref<HTMLElement | null>(null);
@@ -133,6 +133,8 @@ function setSize(v: number) {
           <component :is="x.icon" :size="20" />
         </IconBtn>
       </div>
+      <!-- a toggle rather than a tool: it works alongside whichever tool is active -->
+      <IconBtn v-if="!(compact && state.editingText)" label="Ruler" shortcut="R" :active="state.rulerShown" @click="emit('ruler')"><Ruler :size="20" /></IconBtn>
 
       <!-- Pressing a button must not take focus: leaving the box ends the edit. -->
       <div v-if="state.editingText" class="flex items-center gap-0.5" role="group" aria-label="Text formatting" @mousedown.prevent>

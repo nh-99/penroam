@@ -50,6 +50,11 @@ notes. If you find one, please report it: see [support](support.md).
 
 * **BOOX:** the partial screen refresh after erasing hasn't been tried on a device. If erased ink
   leaves ghosting, turn the page or zoom to force a full refresh.
+* **BOOX:** while the ruler is shown, ink is drawn by the standard pen layer instead of the device's
+  low-latency one, so it refreshes more slowly. It returns when you hide the ruler. Show the ruler
+  with the pen lifted: turning it on in the middle of a stroke may lose that stroke.
+* **iPad:** while the ruler is shown, the Apple Pencil goes through the web path rather than the
+  native capture, so pressure and latency differ until you hide it.
 * **iPad:** template lines and PDF pages can look soft at high zoom. Ink stays sharp.
 * **Samsung S Pen, other Android tablets, Windows, macOS:** the pen code hasn't been run on real
   hardware. See the [release matrix](platforms/release-matrix.md).

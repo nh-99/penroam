@@ -45,6 +45,29 @@ On a touchscreen, **Settings → General → Touch input** decides what your fin
 * **Pen only**: fingers always pan and zoom.
 * **Fingers draw**: one finger draws, two fingers pan and zoom.
 
+## Ruler
+
+The ruler button after the tools (or `R`) shows an on-screen ruler for straight lines and exact
+angles. It works with the pen and highlighter, and `R` hides it again. It isn't saved in the
+notebook; it stays where you left it while you move between pages.
+
+* **Move it:** drag the ruler with a finger or the mouse. It stays put on the screen while you pan
+  or zoom the page, like a real ruler lying on the paper.
+* **Rotate it:** drag the dial in the middle, or put two fingers on the ruler and turn them (this
+  moves it at the same time). The angle clicks into every 15° when you get close, and a label shows
+  it in degrees while you turn this way. With the keyboard, `[` and `]` step to the previous or next 15°.
+* **Draw along it:** with a pen, start a stroke anywhere on the ruler, or with any input just
+  beside either edge, and the whole stroke runs exactly along the nearer edge. A stroke that starts
+  further away is never straightened, even if it crosses the ruler later. The pen itself never moves
+  the ruler, except when you drag the dial.
+* **Measure:** the centimetre marks measure the page, so they match the paper at any zoom.
+
+Fingers move and turn the ruler even in pen-only mode, so you can hold it with a finger while you
+draw with the pen. Hiding and showing it again keeps its last position and angle.
+
+With a mouse or finger, pressing on the ruler moves it whatever the tool is. To erase, select or type
+under it, move the ruler away first, or use the pen.
+
 ## Undo and zoom
 
 Undo and redo with `Ctrl+Z` / `Ctrl+Shift+Z`, or the arrows in the toolbar. Zoom with `Ctrl` and the

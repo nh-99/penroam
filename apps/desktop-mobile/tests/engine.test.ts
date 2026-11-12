@@ -961,3 +961,302 @@ describe("infinite canvas pictures", () => {
     expect(canvasSheetRect(ruled([long]), true)).toEqual([0, 0, 612, 792]);
   });
 });
+
+describe("ruler", () => {
+  const touch = { pointerType: "touch", pointerId: 21, pressure: 0.5 };
+  const touch2 = { pointerType: "touch", pointerId: 22, pressure: 0.5 };
+  const mouse = { pointerType: "mouse", pointerId: 31 };
+  const inks = () => session.page.elements.filter((el) => el.type === "ink") as any[];
+  const states: any[] = [];
+  const ruler = () => ed.rulerPlacement!;
+
+  beforeEach(() => {
+    states.length = 0;
+    (ed as any).cb.onState = (s: any) => states.push(s);
+  });
+
+  it("toggles, starts across the middle of the view at 0 degrees and reports its state", () => {
+    expect(ed.rulerPlacement).toBeNull();
+    ed.toggleRuler();
+    expect(ruler()).toEqual({ cx: 400, cy: 300, angle: 0 });
+    expect(states).toContainEqual(expect.objectContaining({ rulerShown: true, rulerAngle: 0 }));
+    ed.toggleRuler();
+    expect(ed.rulerPlacement).toBeNull();
+    expect(states.at(-1)).toMatchObject({ rulerShown: false });
+  });
+
+  it("locks a pen stroke that starts near an edge onto that edge, keeping pressure", () => {
+    ed.setRuler(true);
+    ed.setTransform({ scale: 2, ox: 10, oy: 20 });
+    ptr("pointerdown", 100, 300 + 28 + 10, { pressure: 0.3 });
+    move(200, 300 + 28 + 25, { pressure: 0.5 });
+    move(300, 300 + 28 - 5, { pressure: 0.7 });
+    ptr("pointerup", 400, 300 + 28 + 40, { pressure: 0.4 });
+    const [s] = inks();
+    expect(s.input.ruler).toEqual({ angle: 0 });
+    // every sample lies on the edge line y = 328 px, i.e. page y = (328 - 20) / 2
+    for (const p of s.points) expect(p.y).toBeCloseTo(154, 3);
+    expect(s.points.map((p: any) => p.x)).toEqual([45, 95, 145, 195]);
+    expect(s.points.slice(0, 3).map((p: any) => p.pressure)).toEqual([0.3, 0.5, 0.7]);
+  });
+
+  it("locks a stroke at an angle and keeps it on the line however far it wanders", () => {
+    ed.setRuler(true);
+    for (let i = 0; i < 3; i++) ed.rotateRulerStep(1); // 45 degrees
+    expect(ruler().angle).toBe(45);
+    // side -1 of a 45 degree ruler through (400, 300) is up and to the right
+    const n = Math.SQRT1_2;
+    const sx = 400 - 200 * n + 30 * n, sy = 300 - 200 * n - 30 * n;
+    drawLine(sx, sy, sx + 150, sy + 60);
+    const [s] = inks();
+    expect(s.input.ruler).toEqual({ angle: 45 });
+    for (const p of s.points) expect(p.y - p.x - (300 - 400) + 28 / n).toBeCloseTo(0, 2);
+  });
+
+  it("does not lock a stroke that starts far from the ruler, even if it crosses it", () => {
+    ed.setRuler(true);
+    drawLine(100, 200, 100, 400);
+    const [s] = inks();
+    expect(s.input.ruler).toBeUndefined();
+    expect(s.points[0]).toMatchObject({ x: 100, y: 200 });
+    expect(s.points.at(-1)).toMatchObject({ x: 100, y: 400 });
+  });
+
+  it("never locks the eraser or the select tool", () => {
+    drawLine(50, 340, 300, 340);
+    ed.setRuler(true);
+    ed.setTool("eraser");
+    drawLine(100, 335, 100, 345);
+    expect(inks()).toHaveLength(0);
+  });
+
+  it("moves under the mouse on the band without touching the history", () => {
+    ed.setRuler(true);
+    ptr("pointerdown", 600, 310, mouse);
+    ptr("pointermove", 650, 360, mouse);
+    ptr("pointerup", 650, 360, mouse);
+    expect(ruler()).toEqual({ cx: 450, cy: 350, angle: 0 });
+    expect(inks()).toHaveLength(0);
+    expect(session.canUndo).toBe(false);
+    expect(ed.transform).toMatchObject({ ox: 0, oy: 0 });
+  });
+
+  it("stays put under the pen, which draws instead", () => {
+    ed.setRuler(true);
+    drawLine(600, 310, 700, 310);
+    expect(ruler()).toEqual({ cx: 400, cy: 300, angle: 0 });
+    const [s] = inks();
+    expect(s.input.ruler).toEqual({ angle: 0 });
+    for (const p of s.points) expect(p.y).toBe(328);
+  });
+
+  it("turns on the dial with detents, for the pen too", () => {
+    ed.setRuler(true);
+    const a = (deg: number) => [400 + 15 * Math.cos((deg * Math.PI) / 180), 300 + 15 * Math.sin((deg * Math.PI) / 180)] as const;
+    ptr("pointerdown", 415, 300);
+    move(...a(32));
+    expect(ruler().angle).toBe(30);
+    move(...a(37));
+    expect(ruler().angle).toBeCloseTo(37);
+    ptr("pointerup", ...a(37));
+    expect(inks()).toHaveLength(0);
+    expect(states).toContainEqual({ rulerAngle: 30 });
+  });
+
+  it("measures a dial turn from where a press near the centre leaves the dead zone", () => {
+    ed.setRuler(true);
+    ptr("pointerdown", 401, 301, mouse);
+    ptr("pointermove", 401, 305, mouse); // jitter by the centre: no swing
+    expect(ruler().angle).toBe(0);
+    ptr("pointermove", 400, 312, mouse); // leaves the dead zone straight down: the reference
+    expect(ruler().angle).toBe(0);
+    ptr("pointermove", 388, 300, mouse); // a quarter turn on from there
+    expect(ruler().angle).toBe(0 + 90);
+    ptr("pointerup", 388, 300, mouse);
+  });
+
+  it("turns with two fingers past 180 degrees without the centre jumping", () => {
+    ed.setRuler(true);
+    const c = { x: 400, y: 300 };
+    const at = (deg: number, sign: 1 | -1) => [c.x + sign * 100 * Math.cos((deg * Math.PI) / 180), c.y + sign * 100 * Math.sin((deg * Math.PI) / 180)] as const;
+    ptr("pointerdown", ...at(0, -1), touch);
+    ptr("pointerdown", ...at(0, 1), touch2);
+    for (let deg = 10; deg <= 200; deg += 10) {
+      ptr("pointermove", ...at(deg, -1), touch);
+      ptr("pointermove", ...at(deg, 1), touch2);
+      // the centre sits between the fingers the whole way round
+      expect(ruler().cx).toBeCloseTo(400);
+      expect(ruler().cy).toBeCloseTo(300);
+    }
+    expect(ruler().angle).toBeCloseTo(20);
+    ptr("pointerup", ...at(200, -1), touch);
+    ptr("pointerup", ...at(200, 1), touch2);
+  });
+
+  it("is moved by a finger in pen-only mode and turned by two", () => {
+    ed.setSettings({ penOnly: "on" });
+    ed.setRuler(true);
+    ptr("pointerdown", 300, 300, touch);
+    ptr("pointerdown", 500, 300, touch2);
+    ptr("pointermove", 500, 300 + 200 * Math.tan(Math.PI / 12), touch2);
+    expect(ruler().angle).toBe(15);
+    ptr("pointerup", 500, 300, touch2);
+    ptr("pointermove", 320, 300, touch);
+    ptr("pointerup", 320, 300, touch);
+    // it went with the fingers' midpoint, then with the finger left on it
+    expect(ruler().angle).toBe(15);
+    expect(ruler().cx).toBeCloseTo(420);
+    expect(ruler().cy).toBeCloseTo(300 + 100 * Math.tan(Math.PI / 12));
+    expect(ed.transform).toMatchObject({ scale: 1, ox: 0, oy: 0 });
+    expect(inks()).toHaveLength(0);
+  });
+
+  it("stays in the view and does not move with the page", () => {
+    ed.setRuler(true);
+    ptr("pointerdown", 600, 310, mouse);
+    ptr("pointermove", 5000, -900, mouse);
+    ptr("pointerup", 5000, -900, mouse);
+    expect(ruler()).toMatchObject({ cx: 800, cy: 0 });
+    ed.setTransform({ scale: 3, ox: -200, oy: -50 });
+    expect(ruler()).toMatchObject({ cx: 800, cy: 0 });
+  });
+
+  it("is kept inside the view when the view shrinks or turns", () => {
+    ed.setRuler(true);
+    ptr("pointerdown", 600, 310, mouse);
+    ptr("pointermove", 900, 600, mouse);
+    ptr("pointerup", 900, 600, mouse);
+    expect(ruler()).toMatchObject({ cx: 700, cy: 590 });
+    vp.getBoundingClientRect = () => ({ left: 0, top: 0, width: 600, height: 400, right: 600, bottom: 400, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    (ed as any).resize();
+    expect(ruler()).toEqual({ cx: 600, cy: 400, angle: 0 });
+  });
+
+  it("keeps its place across hiding and pages, and drops a drag on cancel", () => {
+    ed.setRuler(true);
+    ed.rotateRulerStep(-1);
+    ed.setRuler(false);
+    ed.rotateRulerStep(1); // hidden: nothing to turn
+    ed.setRuler(true);
+    expect(ruler().angle).toBe(165);
+    ptr("pointerdown", 400, 300, mouse);
+    ed.cancelGestures();
+    ptr("pointermove", 500, 300, mouse);
+    expect(ruler()).toMatchObject({ cx: 400, cy: 300, angle: 165 });
+  });
+
+  /** A sample event carrying coalesced and predicted samples, as Chromium delivers them. */
+  function richMove(x: number, y: number, coalesced: [number, number][], predicted: [number, number][]) {
+    const mk = (type: string, px: number, py: number) => new PointerEvent(type, { clientX: px, clientY: py, pointerId: 1, pointerType: "pen", pressure: 0.6, buttons: 1, bubbles: true, cancelable: true });
+    const e = mk((ed as any).sampleEvent, x, y);
+    (e as any).getCoalescedEvents = () => coalesced.map(([cx, cy]) => mk("pointermove", cx, cy));
+    (e as any).getPredictedEvents = () => predicted.map(([px, py]) => mk("pointermove", px, py));
+    vp.dispatchEvent(e);
+  }
+
+  it("locks coalesced and predicted samples to the edge too", () => {
+    (ed as any).hasCoalesced = true;
+    (ed as any).hasPredicted = true;
+    ed.setRuler(true);
+    ptr("pointerdown", 100, 335);
+    richMove(160, 350, [[120, 340], [140, 320], [160, 350]], [[180, 360], [200, 300]]);
+    const active = (ed as any).active;
+    expect(active.predicted.map((p: any) => p.y)).toEqual([328, 328]);
+    expect(active.predicted.map((p: any) => p.x)).toEqual([180, 200]);
+    ptr("pointerup", 170, 345);
+    const [s] = inks();
+    expect(s.points.map((p: any) => [p.x, p.y])).toEqual([[100, 328], [120, 328], [140, 328], [160, 328], [170, 328]]);
+    expect(s.points.filter((p: any) => p.flags === 2)).toHaveLength(3);
+    expect(s.input.coalescedSamples).toBe(3);
+  });
+
+  it("lets go of the ruler on pointercancel and on lost capture", () => {
+    ed.setRuler(true);
+    ptr("pointerdown", 415, 300, mouse);
+    ptr("pointercancel", 415, 300, mouse);
+    ptr("pointermove", 400, 315, mouse);
+    expect(ruler().angle).toBe(0);
+    ptr("pointerdown", 600, 310, mouse);
+    ptr("pointermove", 610, 320, mouse);
+    vp.dispatchEvent(new PointerEvent("lostpointercapture", { pointerId: mouse.pointerId, pointerType: "mouse", bubbles: true }));
+    ptr("pointermove", 700, 400, mouse);
+    expect(ruler()).toEqual({ cx: 410, cy: 310, angle: 0 });
+    // and the next press is an ordinary one again
+    ptr("pointerup", 700, 400, mouse);
+    drawLine(100, 100, 200, 100, mouse);
+    expect(inks()).toHaveLength(1);
+  });
+
+  it("ignores a third finger while two hold the ruler", () => {
+    const touch3 = { pointerType: "touch", pointerId: 23, pressure: 0.5 };
+    ed.setRuler(true);
+    ptr("pointerdown", 300, 300, touch);
+    ptr("pointerdown", 500, 300, touch2);
+    ptr("pointerdown", 600, 100, touch3);
+    ptr("pointermove", 650, 180, touch3);
+    ptr("pointerup", 650, 180, touch3);
+    expect(ed.transform).toMatchObject({ scale: 1, ox: 0, oy: 0 });
+    expect(ruler()).toEqual({ cx: 400, cy: 300, angle: 0 });
+    expect(inks()).toHaveLength(0);
+  });
+
+  it("lets a native Pencil stroke in flight finish before hiding the native layer", async () => {
+    let handlers: NativeHandlers | null = null;
+    const noop = async () => {};
+    const surface: NativeInkSurface = {
+      kind: "ios-pencil",
+      ownsCommittedInk: false,
+      capabilities: {},
+      mount: async (_r, _t, _tool, _s, h) => void (handlers = h),
+      unmount: noop,
+      setBounds: noop,
+      setViewportTransform: noop,
+      setTool: noop,
+      setVisible: noop,
+      loadCommittedInk: noop,
+      addStrokes: noop,
+      removeStrokes: noop,
+      commitAck: noop,
+      metrics: async () => ({}),
+    };
+    ed.setNativeSurface(surface);
+    await vi.waitFor(() => expect(ed.nativeIsVisible).toBe(true));
+    handlers!.penState(true);
+    ed.setRuler(true);
+    expect(ed.nativeIsVisible).toBe(true);
+    handlers!.penState(false);
+    expect(ed.nativeIsVisible).toBe(false);
+    // with the pen up, it switches at once
+    ed.setRuler(false);
+    expect(ed.nativeIsVisible).toBe(true);
+    ed.setRuler(true);
+    expect(ed.nativeIsVisible).toBe(false);
+  });
+
+  it("hides the native pen layer while it shows", async () => {
+    const noop = async () => {};
+    const surface: NativeInkSurface = {
+      kind: "boox",
+      ownsCommittedInk: true,
+      capabilities: {},
+      mount: noop,
+      unmount: noop,
+      setBounds: noop,
+      setViewportTransform: noop,
+      setTool: noop,
+      setVisible: noop,
+      loadCommittedInk: noop,
+      addStrokes: noop,
+      removeStrokes: noop,
+      commitAck: noop,
+      metrics: async () => ({}),
+    };
+    ed.setNativeSurface(surface);
+    await vi.waitFor(() => expect(ed.nativeIsVisible).toBe(true));
+    ed.setRuler(true);
+    expect(ed.nativeIsVisible).toBe(false);
+    expect(states).toContainEqual(expect.objectContaining({ nativeActive: false }));
+    ed.setRuler(false);
+    expect(ed.nativeIsVisible).toBe(true);
+  });
+});

@@ -118,6 +118,9 @@ The page is shown here as JSON — the form used over IPC, in operations, and in
   to 1e-4). Predicted samples are never stored. `pressure` is normalised 0..1 (mouse 0.5); raw
   platform ranges live in `input` (e.g. `maxTouchPressure` from Onyx; `maximumForce` and
   `pressureCurve` from Apple Pencil, whose strokes are stored through a curve).
+  A stroke drawn along the on-screen ruler stores its samples already projected onto the ruler's
+  edge (pressure, tilt and timing unchanged) and records `"ruler": { "angle": <degrees> }` in
+  `input`; the unprojected positions are not kept.
 * `flags`: bit 1 = pressure was an estimate refined later (iOS), bit 2 = sample came from a
   coalesced event list.
 * Rendering (all ports): width = `pressure ? max(0.5, width·(0.4 + 1.2·p)) : width`; midpoint
