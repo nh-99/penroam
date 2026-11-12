@@ -8,7 +8,7 @@ import Toasts from "./components/Toasts.vue";
 import Tour from "./components/Tour.vue";
 import ImportResultsDialog from "./components/ImportResultsDialog.vue";
 import PlaintextExportDialog from "./components/PlaintextExportDialog.vue";
-import UpgradeDialog from "./components/UpgradeDialog.vue";
+import PlansDialog from "./components/PlansDialog.vue";
 import { useLibrary } from "./stores/library";
 import { useSettings } from "./stores/settings";
 import { useUi } from "./stores/ui";
@@ -140,7 +140,7 @@ onBeforeUnmount(() => {
   <Tour v-if="tour.active" :key="tour.active" :name="tour.active" />
   <PlaintextExportDialog v-if="lib.plaintextQuestion" @answer="(ok) => lib.plaintextQuestion?.(ok)" />
   <ImportResultsDialog v-if="lib.importResults" :results="lib.importResults" @close="lib.importResults = null" />
-  <UpgradeDialog v-if="sync.upgradeOpen" />
+  <PlansDialog v-if="sync.upgradeOpen" />
   <div v-if="lib.busy" class="fixed inset-0 z-[70] flex items-center justify-center bg-black/20 epaper:bg-white/70" role="alert" aria-busy="true">
     <div class="w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-line bg-surface px-5 py-4 text-sm shadow-lg">
       <div class="flex items-center gap-3"><LoaderCircle :size="18" class="shrink-0 animate-spin" /><span class="min-w-0">{{ lib.progress?.label ?? lib.busy }}</span></div>

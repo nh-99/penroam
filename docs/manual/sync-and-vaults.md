@@ -53,11 +53,22 @@ Things to know:
 
 ## Cloud storage
 
-Every account includes some free storage. For more, choose a plan in **Settings → Sync**.
+Every account includes some free storage. Open **Settings → Sync** to see your plan and how much
+storage you've used under **Penroam Cloud**.
 
-* On a computer, plans open a payment page in your browser.
-* On iPhone and iPad they're App Store subscriptions, billed by Apple: manage or cancel them with
-  **Manage subscription**, and use **Restore purchases** if a plan doesn't appear.
+To get more, choose **Compare plans**, which appears when your build can sell a plan. A window titled
+**Penroam Cloud plans** sets the free storage beside each plan and lists
+what every plan includes: plans differ only in storage and price, and sync, vaults, editing and
+export are the same on all of them (see **Included in every plan**). When storage is nearly full or full, the **Get more storage**
+button in the banner opens the same window.
+
+* On a computer, **Choose** on a plan opens a payment page in your browser. After paying, choose
+  **I've paid, check again** if the plan doesn't show up.
+* On iPhone and iPad they're App Store subscriptions, billed by Apple: use **Subscribe**, manage or
+  cancel with **Manage subscription**, and use **Restore purchases** if a plan doesn't appear.
+
+If storage fills up, uploads pause and your notes stay on your devices; delete notebooks you no
+longer need or choose a plan with more storage.
 
 One account has one plan, whichever way you bought it. Deleting your account stops a plan bought on
 a computer, but only you can cancel an App Store subscription, so do that too or you'll keep being

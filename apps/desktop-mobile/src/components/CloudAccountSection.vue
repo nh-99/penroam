@@ -4,13 +4,12 @@
 // Desktop builds sell through Stripe in the browser and store builds through the app store; the
 // backend sends each only what it may offer.
 import { computed, onMounted, ref } from "vue";
-import { CreditCard, ExternalLink, HardDrive, RefreshCw, Trash2, Undo2 } from "@lucide/vue";
+import { CreditCard, ExternalLink, HardDrive, RefreshCw, RotateCcw, Trash2, Undo2 } from "@lucide/vue";
 import Btn from "./ui/Btn.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
-import StorePlans from "./StorePlans.vue";
 import { diagnosticsApi } from "../platform/diagnostics";
 import { useSync } from "../stores/sync";
-import { describePlan, describeReadOnly, formatBytes, storeManaged, usageFraction } from "../platform/sync";
+import { canBuy, describePlan, describeReadOnly, formatBytes, storeManaged, usageFraction } from "../platform/sync";
 
 const sync = useSync();
 const deleting = ref(false);
@@ -79,16 +78,18 @@ async function confirmDelete() {
       <ExternalLink :size="16" />Manage subscription
     </Btn>
 
-    <StorePlans />
-
-    <!-- desktop builds only: the backend sends no offers or billing links on mobile -->
-    <div v-if="a.offers.length" class="space-y-1.5 pt-1">
-      <div v-for="o in a.offers" :key="o.id" class="flex flex-wrap items-center gap-2">
-        <Btn variant="primary" :disabled="sync.accountBusy" @click="sync.openBilling('subscribe', o.id)">
-          <CreditCard :size="16" />{{ o.name }}: {{ formatBytes(o.quotaBytes) }}, {{ o.priceLabel }}
-        </Btn>
+    <!-- every purchase happens in the plans dialog; this card only summarises -->
+    <Btn v-if="canBuy(a)" variant="primary" :disabled="sync.accountBusy" @click="sync.showUpgrade()">
+      <HardDrive :size="16" />Compare plans
+    </Btn>
+    <!-- store builds always keep restore and the legal links, even when the store returned no products -->
+    <div v-if="a.storePurchases" class="space-y-1.5">
+      <p v-if="sync.storeMessage" class="text-xs leading-relaxed" role="status">{{ sync.storeMessage }}</p>
+      <div class="flex flex-wrap gap-2">
+        <Btn variant="ghost" :disabled="sync.accountBusy" @click="sync.restorePurchases()"><RotateCcw :size="16" />Restore purchases</Btn>
+        <Btn variant="ghost" @click="diagnosticsApi.openHelp('terms')"><ExternalLink :size="16" />Terms of use</Btn>
+        <Btn variant="ghost" @click="diagnosticsApi.openHelp('privacy')"><ExternalLink :size="16" />Privacy</Btn>
       </div>
-      <p class="text-xs text-muted">Opens the payment page in your browser. Sync and local notes keep working whatever you choose.</p>
     </div>
     <Btn v-if="a.canManageBilling" variant="outline" :disabled="sync.accountBusy" @click="sync.openBilling('manage_billing')">
       <CreditCard :size="16" />Manage plan and billing

@@ -47,7 +47,7 @@ export const useSync = defineStore("sync", () => {
   const accountBusy = ref(false);
   /** The outcome of the last store purchase or restore. */
   const storeMessage = ref<string | null>(null);
-  /** The plan picker ("More cloud storage") is open. */
+  /** The plan picker ("Penroam Cloud plans") is open. */
   const upgradeOpen = ref(false);
   /** Banner kinds the user closed in this run; a new kind shows again. */
   const dismissedNotices = ref<string[]>([]);
@@ -138,7 +138,8 @@ export const useSync = defineStore("sync", () => {
       // at the next scheduled attempt
       if (was && !was.writable && account.value?.writable && status.value?.phase === "quotaExceeded") void syncApi.syncNow().catch(() => {});
       // subscribed (no more offers): the picker has done its job
-      if (!account.value?.offers.length) upgradeOpen.value = false;
+      // (store builds carry storeOffers, not offers, so test what can be bought, not one list)
+      if (!account.value || !canBuy(account.value)) upgradeOpen.value = false;
     } catch (e) {
       accountError.value = (e as Error).message ?? String(e);
     }

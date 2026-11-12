@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canBuy, cloudNotice, describePlan, describeReadOnly, describeRestore, describeStorePurchase, formatBytes, storeManaged, usageFraction, type AccountView } from "../src/platform/sync";
+import { canBuy, cloudNotice, describePlan, describeReadOnly, describeRestore, describeStorePurchase, formatBytes, planTiers, storeManaged, usageFraction, type AccountView } from "../src/platform/sync";
 
 function view(p: Partial<AccountView> = {}): AccountView {
   return {
@@ -62,6 +62,60 @@ describe("store purchases", () => {
     expect(describeRestore({ ...r, applied: 1 })).toBe("Your purchases are restored.");
     expect(describeRestore({ ...r, waiting: 1 })).toContain("Try again");
     expect(describeRestore({ ...r, conflicts: 1, message: "another account" })).toBe("another account");
+  });
+});
+
+describe("plan tiers", () => {
+  const GB = 1024 ** 3;
+  const stripe = [
+    { id: "yearly", name: "Penroam Cloud", priceLabel: "$39 / year", quotaBytes: 5 * GB },
+    { id: "monthly", name: "Penroam Cloud", priceLabel: "$3.99 / month", quotaBytes: 5 * GB },
+    { id: "big", name: "Penroam Cloud Plus", priceLabel: "$9 / month", quotaBytes: 50 * GB },
+  ];
+
+  it("is just the free allowance when nothing is for sale", () => {
+    expect(planTiers(view())).toEqual([{ free: true, quotaBytes: 100 * 1024 * 1024, prices: [], current: true }]);
+  });
+
+  it("groups monthly and yearly under one storage size, ascending", () => {
+    const t = planTiers(view({ offers: stripe }));
+    expect(t.map((x) => x.quotaBytes)).toEqual([100 * 1024 * 1024, 5 * GB, 50 * GB]);
+    expect(t[1].prices).toEqual([
+      { id: "yearly", label: "$39 / year" },
+      { id: "monthly", label: "$3.99 / month" },
+    ]);
+    expect(t[2].prices).toHaveLength(1);
+    expect(t.map((x) => x.current)).toEqual([true, false, false]);
+  });
+
+  it("marks the paid tier that matches the account's storage as current", () => {
+    const t = planTiers(view({ planStatus: "active", quotaBytes: 5 * GB, offers: stripe }));
+    expect(t.map((x) => x.current)).toEqual([false, true, false]);
+  });
+
+  it("uses store offers, with the period in the label, on store builds", () => {
+    const t = planTiers(view({ purchasesAllowed: false, storePurchases: true, storeOffers: [offer, { ...offer, id: "y", price: "$39", period: "year" }], offers: stripe }));
+    expect(t).toHaveLength(2);
+    expect(t[1].prices).toEqual([
+      { id: "m", name: "Penroam Cloud", label: "$3.99 per month" },
+      { id: "y", name: "Penroam Cloud", label: "$39 per year" },
+    ]);
+  });
+
+  it("agrees with canBuy: whenever something can be bought, a tier has a price", () => {
+    const cases = [
+      view({ offers: stripe }),
+      view({ purchasesAllowed: false, storePurchases: true, storeOffers: [offer] }),
+      view({ purchasesAllowed: false, storeOffers: [offer] }),
+      view({ purchasesAllowed: false, offers: stripe }),
+      view({ storePurchases: true, storeOffers: [] }),
+    ];
+    for (const c of cases) expect(planTiers(c).some((t) => t.prices.length > 0)).toBe(canBuy(c));
+  });
+
+  it("shows nothing purchasable where this build can't sell", () => {
+    expect(planTiers(view({ purchasesAllowed: false, offers: stripe })).every((t) => t.prices.length === 0)).toBe(true);
+    expect(planTiers(view({ purchasesAllowed: false, offers: stripe }))).toHaveLength(1);
   });
 });
 
@@ -157,6 +211,8 @@ const api = vi.hoisted(() => ({
   requestDeletion: vi.fn(async () => ({ eraseAfterMs: Date.UTC(2026, 11, 3) })),
   cancelDeletion: vi.fn(async () => {}),
   syncNow: vi.fn(async () => {}),
+  storePurchase: vi.fn(async () => ({ status: "cancelled", message: null })),
+  storeRestore: vi.fn(async () => ({ applied: 0, conflicts: 0, waiting: 0, message: null })),
   storeReconcile: vi.fn(async () => ({ applied: 0, conflicts: 0, waiting: 0, message: null })),
   info: vi.fn(async () => ({ available: true, configured: true, status: null, defaultServerUrl: "", devBuild: false })),
 }));
@@ -179,13 +235,32 @@ async function panel(v: AccountView) {
 }
 
 describe("Penroam Cloud panel", () => {
-  it("desktop: offers open the checkout with the offer id, never a price", async () => {
+  it("desktop: the card summarises and 'Compare plans' opens the plans dialog without inline offers", async () => {
     const w = await panel(view({ offers: [{ id: "cloud-monthly", name: "Penroam Cloud", priceLabel: "$3.99 / month", quotaBytes: 5 * 1024 ** 3 }] }));
     expect(w.text()).toContain("Free storage");
     expect(w.text()).toContain("0 bytes of 100 MB used");
-    const buy = w.findAll("button").find((b) => b.text().includes("$3.99 / month"))!;
-    await buy.trigger("click");
-    expect(api.openBilling).toHaveBeenCalledWith("subscribe", "cloud-monthly");
+    expect(w.text()).not.toContain("$3.99");
+    const { useSync } = await import("../src/stores/sync");
+    const s = useSync();
+    await w.findAll("button").find((b) => b.text().includes("Compare plans"))!.trigger("click");
+    expect(s.upgradeOpen).toBe(true);
+    w.unmount();
+  });
+
+  it("store build with no products still offers restore, terms and privacy in settings", async () => {
+    api.storeRestore.mockClear();
+    const w = await panel(view({ purchasesAllowed: false, storePurchases: true, storeOffers: [] }));
+    expect(w.findAll("button").some((b) => b.text().includes("Compare plans"))).toBe(false);
+    for (const l of ["Terms of use", "Privacy"]) expect(w.text()).toContain(l);
+    await w.findAll("button").find((b) => b.text().includes("Restore purchases"))!.trigger("click");
+    await flushPromises();
+    expect(api.storeRestore).toHaveBeenCalledOnce();
+    w.unmount();
+  });
+
+  it("mobile that can't sell: no Compare plans button", async () => {
+    const w = await panel(view({ purchasesAllowed: false, offers: [] }));
+    expect(w.findAll("button").some((b) => b.text().includes("Compare plans"))).toBe(false);
     w.unmount();
   });
 
@@ -228,7 +303,7 @@ async function shell(v: AccountView) {
   s.configured = true;
   await s.refreshAccount();
   const Banner = (await import("../src/components/CloudBanner.vue")).default;
-  const Dialog = (await import("../src/components/UpgradeDialog.vue")).default;
+  const Dialog = (await import("../src/components/PlansDialog.vue")).default;
   const { defineComponent, h } = await import("vue");
   const Shell = defineComponent(() => () => [h(Banner), s.upgradeOpen ? h(Dialog) : null]);
   const w = mount(Shell, { attachTo: document.body });
@@ -241,17 +316,47 @@ describe("upgrade prompts", () => {
   const full = { usedBytes: 120 * 1024 * 1024, writable: false, readOnlyReason: "over_quota" };
   const button = (label: string) => [...document.body.querySelectorAll("button")].find((b) => b.textContent?.includes(label));
 
-  it("desktop: banner opens the plan picker, choosing opens checkout", async () => {
+  it("desktop: banner opens the comparison, choosing a price opens checkout", async () => {
     api.openBilling.mockClear();
-    const { w } = await shell(view({ ...full, offers: [offer] }));
+    const { w } = await shell(view({ ...full, offers: [offer, { ...offer, id: "cloud-yearly", priceLabel: "$39 / year" }] }));
     expect(w.text()).toContain("Cloud storage is full");
     button("Get more storage")!.click();
     await flushPromises();
-    expect(document.body.textContent).toContain("More cloud storage");
-    expect(document.body.textContent).toContain("5 GB of cloud storage · $3.99 / month");
-    button("Choose")!.click();
+    const text = document.body.textContent!;
+    expect(text).toContain("Penroam Cloud plans");
+    expect(text).toContain("Current plan");
+    expect(text).toContain("100 MB");
+    expect(text).toContain("Included in every plan");
+    expect(text).toContain("Encrypted before upload");
+    expect(text).not.toContain("Restore purchases");
+    // one tier, two prices
+    expect(document.body.querySelectorAll('[aria-label="Plans"] > li')).toHaveLength(2);
+    button("$39 / year")!.click();
     await flushPromises();
-    expect(api.openBilling).toHaveBeenCalledWith("subscribe", "cloud-monthly");
+    expect(api.openBilling).toHaveBeenCalledWith("subscribe", "cloud-yearly");
+    w.unmount();
+  });
+
+  it("store build: Apple's disclosures, restore and links sit with the subscribe button", async () => {
+    api.storePurchase.mockClear();
+    api.storeRestore.mockClear();
+    const { w, s } = await shell(view({ ...full, purchasesAllowed: false, storePurchases: true, storeOffers: [{ id: "sm", name: "Penroam Cloud", quotaBytes: 5 * 1024 ** 3, price: "$3.99", period: "month" }] }));
+    s.showUpgrade();
+    await flushPromises();
+    const text = document.body.textContent!;
+    expect(text).toContain("$3.99 per month");
+    expect(text).toContain("Penroam Cloud");
+    expect(text).toContain("renews automatically until you cancel");
+    expect(text).toContain("Terms of use");
+    expect(text).toContain("Privacy");
+    expect(text).not.toContain("check again");
+    button("Restore purchases")!.click();
+    await flushPromises();
+    expect(api.storeRestore).toHaveBeenCalledOnce();
+    button("Subscribe")!.click();
+    await flushPromises();
+    expect(api.storePurchase).toHaveBeenCalledWith("sm");
+    expect(api.openBilling).not.toHaveBeenCalledWith("subscribe", "sm");
     w.unmount();
   });
 

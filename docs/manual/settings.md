@@ -35,7 +35,8 @@ deleting the search index. See [Searching](search.md#search-settings).
 
 ## Sync
 
-Signing in, your devices, vaults and storage plans. See [Sync and vaults](sync-and-vaults.md).
+Signing in, your devices, vaults, and your Penroam Cloud plan and storage (**Compare plans** opens the
+plan comparison). See [Sync and vaults](sync-and-vaults.md).
 
 ## Backup
 

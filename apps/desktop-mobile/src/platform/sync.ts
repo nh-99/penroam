@@ -422,9 +422,60 @@ export function describePlan(a: AccountView): string {
   }
 }
 
-/** This build can sell this account a plan, one way or the other. */
+/**
+ * This build can sell this account a plan, one way or the other. Uses the same choice of store or
+ * Stripe as `planTiers`, so every prompt that leads to the plans dialog finds something to buy there.
+ */
 export function canBuy(a: AccountView): boolean {
-  return (a.purchasesAllowed && a.offers.length > 0) || a.storeOffers.length > 0;
+  return usesStore(a) ? a.storeOffers.length > 0 : a.purchasesAllowed && a.offers.length > 0;
+}
+
+/** One way to pay for a storage tier. */
+export interface PlanPrice {
+  /** The offer id to hand to checkout (desktop) or the store purchase (store builds). */
+  id: string;
+  /** Display text that already includes the period, e.g. "$3.99 / month" or "$3.99 per month". */
+  label: string;
+  /** Store builds: the store's subscription title, which Apple requires next to the price. */
+  name?: string;
+}
+
+/** A column of the plan comparison: the free allowance or one paid storage size. */
+export interface PlanTier {
+  free: boolean;
+  /** Storage included; null when the server sent no free allowance figure. */
+  quotaBytes: number | null;
+  /** Empty for the free tier. Several entries when monthly and yearly share a storage size. */
+  prices: PlanPrice[];
+  /** Best effort: the server sends no plan id, so paid tiers are matched by storage size. */
+  current: boolean;
+}
+
+/** Whether purchases go through the app store; shared by `planTiers` and the dialog's `choose`. */
+export function usesStore(a: AccountView): boolean {
+  return a.storePurchases || a.storeOffers.length > 0;
+}
+
+/**
+ * Groups what this build can sell into a comparison: the free allowance first, then one tier per
+ * storage size (ascending), with every price for that size (e.g. monthly and yearly) inside it.
+ *
+ * Store offers are used when this is a store build or any exist (the same rule as `canBuy`), otherwise
+ * the Stripe `offers` when purchases are allowed on this build. A build that can't sell gets just the free tier, so nothing purchasable
+ * is ever shown there. Prices are display text from the server or store and never computed here.
+ */
+export function planTiers(a: AccountView): PlanTier[] {
+  const prices: { quotaBytes: number; price: PlanPrice }[] = usesStore(a)
+    ? a.storeOffers.map((o) => ({ quotaBytes: o.quotaBytes, price: { id: o.id, name: o.name, label: `${o.price}${o.period ? ` per ${o.period}` : ""}` } }))
+    : a.purchasesAllowed
+      ? a.offers.map((o) => ({ quotaBytes: o.quotaBytes, price: { id: o.id, label: o.priceLabel } }))
+      : [];
+  const isFree = a.planStatus === "free";
+  const tiers: PlanTier[] = [{ free: true, quotaBytes: a.freeQuotaBytes, prices: [], current: isFree }];
+  for (const q of [...new Set(prices.map((p) => p.quotaBytes))].sort((x, y) => x - y)) {
+    tiers.push({ free: false, quotaBytes: q, prices: prices.filter((p) => p.quotaBytes === q).map((p) => p.price), current: !isFree && a.quotaBytes === q });
+  }
+  return tiers;
 }
 
 /**
@@ -456,7 +507,7 @@ export interface CloudNotice {
   /** full: uploads paused for lack of storage; nearlyFull: at NEARLY_FULL or more; pastDue: payment failed. */
   kind: "full" | "nearlyFull" | "pastDue";
   text: string;
-  /** Show "See plans" (desktop builds with offers from the server). */
+  /** Show "Get more storage" (desktop builds with offers from the server). */
   canUpgrade: boolean;
   /** Show "Update payment method" (desktop builds with a billing account). */
   canManage: boolean;
