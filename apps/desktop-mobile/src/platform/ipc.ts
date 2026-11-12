@@ -147,6 +147,8 @@ export const api = {
   exportPages: (notebookId: string, pages: string[], path: string) => call<{ bytes: number; pages: number }>("export_pages", { notebookId, pages, path }),
   exportBackup: (path: string) => call<BackupResult>("export_backup", { path }),
   autoBackup: (target: AutoTarget) => call<BackupResult>("auto_backup", { target }),
+  /** Keeps access to a chosen folder after a restart (the Mac App Store sandbox); a no-op elsewhere. */
+  rememberFolder: (dir: string) => call<void>("remember_folder", { dir }),
   webdavConnect: (url: string, user: string, password: string) => call<RemoteFile[]>("webdav_connect", { url, user, password }),
   webdavDisconnect: () => call<void>("webdav_disconnect"),
   webdavBackups: (url: string, user: string) => call<RemoteFile[]>("webdav_backups", { url, user }),

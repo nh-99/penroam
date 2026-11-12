@@ -2,7 +2,7 @@
 // picked and hands it straight back to Rust; it never reads files itself.
 // On Android the dialogs return content:// URIs; folder picking is not used.
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { hasHost } from "./ipc";
+import { api, hasHost } from "./ipc";
 import { isMobile } from "./device";
 
 export interface Picked {
@@ -62,7 +62,12 @@ export async function pickImportFiles(): Promise<Picked[]> {
 export async function pickFolder(): Promise<string | null> {
   if (!hasHost() || isMobile()) return null;
   const path = await open({ multiple: false, directory: true });
-  return typeof path === "string" ? path : null;
+  if (typeof path !== "string") return null;
+  // The sandboxed Mac App Store build loses access to the folder when it quits unless a bookmark
+  // is saved now, while the picker's grant still holds. Without one, the folder still works until
+  // then, so a failure here isn't worth stopping for.
+  await api.rememberFolder(path).catch(() => undefined);
+  return path;
 }
 
 export async function pickSaveLocation(kind: SaveKind, suggested: string): Promise<string | null> {

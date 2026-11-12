@@ -108,14 +108,14 @@ class Signing(unittest.TestCase):
 
     def test_store_uploads_are_optional_even_for_stable(self):
         env = dict(self.ALL, APPLE_API_KEY_P8="", GOOGLE_PLAY_SERVICE_ACCOUNT_JSON="")
-        self.assertEqual(release.sign_status("v1.0.0", env), ["google-play", "testflight"])
+        self.assertEqual(release.sign_status("v1.0.0", env), ["google-play", "mac-app-store", "testflight"])
 
     def test_a_store_channel_needs_all_its_secrets(self):
         self.assertTrue(release.configured("testflight", self.ALL))
         self.assertFalse(release.configured("testflight", dict(self.ALL, APPLE_API_ISSUER="")))
 
     def test_a_prerelease_reports_what_is_unsigned(self):
-        self.assertEqual(release.sign_status("v1.0.0-beta.1", {}), ["android", "google-play", "macos", "testflight", "updates", "windows"])
+        self.assertEqual(release.sign_status("v1.0.0-beta.1", {}), ["android", "google-play", "mac-app-store", "macos", "testflight", "updates", "windows"])
 
     def test_the_status_never_repeats_a_value(self):
         env = dict(self.ALL, APPLE_ID="")
@@ -127,6 +127,13 @@ class Signing(unittest.TestCase):
 class StoreBuildNumbers(unittest.TestCase):
     def test_ios_build_number_is_one_plain_number(self):
         self.assertEqual(release.store_config("ios", 57), {"bundle": {"iOS": {"bundleVersion": "57"}}})
+
+    def test_mac_store_builds_drop_the_prerelease_suffix(self):
+        config = release.store_config("macos", 57)
+        self.assertRegex(config["version"], r"^\d+\.\d+\.\d+$")
+        self.assertEqual(config["bundle"]["macOS"]["bundleVersion"], "57")
+        entitlements = release.ROOT / "apps/desktop-mobile/src-tauri" / config["bundle"]["macOS"]["entitlements"]
+        self.assertTrue(entitlements.exists())
 
     def test_android_version_codes_pass_sideloaded_builds_and_only_rise(self):
         first = release.store_config("android", 1)["bundle"]["android"]["versionCode"]

@@ -128,8 +128,8 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   picker or the billing portal. When the account accepts uploads again (focus after checkout),
   the app syncs at once instead of waiting for the next attempt. Account deletion needs a fresh
   browser sign-in and only ever erases the cloud copy.
-* **Plans in the app store.** Store builds sell through `tauri-plugin-store-billing` instead of
-  the browser. The plugin only talks to the store. The server looks every purchase up with the store
+* **Plans in the app store.** Store builds (iOS, and the Mac App Store build) sell through
+  `tauri-plugin-store-billing` instead of the browser. The plugin only talks to the store. The server looks every purchase up with the store
   itself, and the app finishes a store transaction only after the server has answered, so a crash
   or an outage can't lose a purchase.
 * **Accounts and vaults.** Connecting needs only a sign-in: the first device stores the account's

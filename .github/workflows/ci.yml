@@ -231,6 +231,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: cargo test -p penroam-core -p penroam-storage -p penroam-pdf -p penroam-interchange -p penroam-webdav -p penroam-search --features penroam-search/windows-ink
       - run: pnpm tauri build --debug --no-bundle
+      # The Mac App Store build compiles and links its StoreKit bridge (Swift) only with this
+      # feature, so build it here too, or a Swift error would first show up on a release tag.
+      - if: runner.os == 'macOS'
+        run: cargo build -p penroam-app --features mac-app-store
 
   android-jvm:
     needs: changes

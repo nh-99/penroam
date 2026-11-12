@@ -90,7 +90,8 @@ privately, as [SECURITY.md](../SECURITY.md) describes.
 * [platforms/capabilities.md](platforms/capabilities.md): what each device does and what has been
   checked by hand.
 * [platforms/linux.md](platforms/linux.md), [platforms/boox.md](platforms/boox.md),
-  [platforms/android.md](platforms/android.md) and [platforms/ipad.md](platforms/ipad.md):
+  [platforms/android.md](platforms/android.md), [platforms/ipad.md](platforms/ipad.md) and
+  [platforms/macos.md](platforms/macos.md):
   per-platform build notes and known risks.
 
 **Performance**

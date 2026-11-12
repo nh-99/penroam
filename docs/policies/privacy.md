@@ -17,7 +17,7 @@ The app connects to the network only in these cases:
 | Handwriting model download | Once, on devices with no built-in handwriting recognizer, and whenever you ask for it in **Advanced** | An anonymous download request, with your IP address. No notes | The Penroam model server |
 | WebDAV backup | Only if you set it up | Your backup files, not encrypted by Penroam | The server you choose |
 | Sync | Only if you set it up | Encrypted notebook data, the key to your ordinary notebooks, and the metadata listed in the [threat model](../security/threat-model.md#what-the-server-sees). The service could read ordinary notebooks. It can't read notebooks in a vault, unless it guesses a weak passphrase | The sync server |
-| App Store purchases | Only if you buy or restore a plan on iPhone or iPad | A random token tied to your account, and your purchase, to Apple. Apple handles the payment; Penroam never sees your card | Apple, and the sync server |
+| App Store purchases | Only if you buy or restore a plan on iPhone or iPad, or in the Mac App Store version | A random token tied to your account, and your purchase, to Apple. Apple handles the payment; Penroam never sees your card | Apple, and the sync server |
 | Links you open | **Get help**, **Privacy**, sign-in and billing pages | What any web page visit sends | Opens your browser |
 
 ## What stays on your device

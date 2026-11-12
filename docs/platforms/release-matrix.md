@@ -22,7 +22,8 @@ status. [`capabilities.md`](capabilities.md) has the pen detail for each device.
 | Android, BOOX Note Air5 C (Android 15) | APK, Google Play internal track | Beta | Not yet: test key | Earlier builds | Release key; written terms for the Onyx SDK; the device scorecard; regional erase refresh |
 | iPadOS, iPad13,4 with Apple Pencil (iPadOS 26) | TestFlight | Beta, developer build only | Not yet | Developer builds from `xtool` | A first TestFlight build run on the device; the device scorecard |
 | Windows x86-64 | NSIS installer, in beta releases only | Unverified | Not yet | Nobody | Signing certificate; any hands-on run; stylus test |
-| macOS Apple Silicon (no Intel build) | `.dmg` | Unverified | Not yet | Nobody | Developer ID, notarization; any hands-on run |
+| macOS Apple Silicon (no Intel build) | `.dmg` | Unverified | Developer ID, notarized | Nobody | Any hands-on run |
+| macOS Apple Silicon, Mac App Store | `.pkg`, TestFlight | Unverified | Apple Distribution, once its secrets are set | Nobody | A first TestFlight upload; any hands-on run, including StoreKit purchases and the sandbox; App Store review |
 | Other Android tablets, Samsung S Pen | APK | Unverified | Not yet | Nobody | Any hands-on run |
 | reMarkable, Supernote and similar | None | Import/export only | | | No supported way to install, draw or render |
 
@@ -34,7 +35,8 @@ Only the architectures above are built. Linux and Windows on ARM are not.
 |---|---|---|---|
 | Notebooks, ink, PDFs, import, export, backups, history | Yes | Yes | Yes |
 | Sync | Yes, with Penroam Cloud | Yes, with Penroam Cloud | Yes, with Penroam Cloud |
-| In-app updates | When a release key is set up | No: install a new APK | No: App Store or TestFlight |
+| In-app updates | When a release key is set up; never in the Mac App Store build, which the store updates | No: install a new APK | No: App Store or TestFlight |
+| Buying a Penroam Cloud plan | In the browser (Stripe); in the Mac App Store build, App Store subscriptions | No | App Store subscriptions |
 | Handwriting model download | Where there is no built-in recognizer | Yes | Yes |
 
 ## Versions that move independently

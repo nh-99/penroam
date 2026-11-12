@@ -10,7 +10,9 @@
 //! answered. The logic for that is `settle` in the app's `sync.rs`.
 //!
 //! The plugin has no commands, so the WebView can't reach it. iOS is implemented (StoreKit 2, in
-//! Swift); on every other platform [`AVAILABLE`] is false and calls return an error.
+//! Swift, through Tauri's mobile plugin bridge), and so is the Mac App Store build (the same
+//! StoreKit calls in `macos/`, reached through a C function: see `macos.rs`; enable the
+//! `mac-app-store` feature). On every other build [`AVAILABLE`] is false and calls return an error.
 
 #![warn(missing_docs)]
 
@@ -27,8 +29,14 @@ use tauri::{
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_store_billing);
 
-/// Whether this build can buy through a store.
-pub const AVAILABLE: bool = cfg!(target_os = "ios");
+#[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+mod macos;
+
+/// Whether this build can buy through a store: iOS, and the Mac App Store build.
+pub const AVAILABLE: bool = cfg!(any(
+    target_os = "ios",
+    all(target_os = "macos", feature = "mac-app-store")
+));
 
 /// A product the store can sell on this device.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -94,7 +102,16 @@ fn call<R: Runtime, T: DeserializeOwned>(
         .map_err(|e| e.to_string())
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+fn call<R: Runtime, T: serde::de::DeserializeOwned>(
+    _app: &AppHandle<R>,
+    method: &str,
+    args: serde_json::Value,
+) -> Result<T, String> {
+    macos::call(method, args)
+}
+
+#[cfg(not(any(target_os = "ios", all(target_os = "macos", feature = "mac-app-store"))))]
 fn call<R: Runtime, T>(
     _app: &AppHandle<R>,
     _method: &str,
@@ -168,7 +185,8 @@ pub fn finish<R: Runtime>(app: &AppHandle<R>, transaction: &str) -> Result<(), S
     Ok(())
 }
 
-/// The plugin (`store-billing`). Registers the native class on iOS and does nothing elsewhere.
+/// The plugin (`store-billing`). Registers the native class on iOS, starts StoreKit's transaction
+/// listener in the Mac App Store build, and does nothing elsewhere.
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("store-billing")
         .setup(|_app, _api| {
@@ -177,6 +195,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 let handle = _api.register_ios_plugin(init_plugin_store_billing)?;
                 _app.manage(Native(handle));
             }
+            #[cfg(all(target_os = "macos", feature = "mac-app-store"))]
+            macos::start();
             Ok(())
         })
         .build()

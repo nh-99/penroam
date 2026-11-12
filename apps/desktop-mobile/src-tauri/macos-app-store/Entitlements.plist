@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Entitlements for the Mac App Store build only (release.yml, job `mac-app-store`); the
+     Developer ID DMG isn't sandboxed. Each one is here for a reason:
+       network.client             sync, WebDAV backups, model downloads, sign-in
+       network.server             the one-shot loopback listener that receives the sign-in answer
+       files.user-selected        files and folders chosen in open and save panels
+       files.bookmarks.app-scope  keeping the automatic-backup folder after a restart (folder_access.rs)
+       print                      printing
+     CI adds com.apple.application-identifier and com.apple.developer.team-identifier, which
+     TestFlight requires and which hold the team ID. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.network.server</key>
+  <true/>
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+  <key>com.apple.security.files.bookmarks.app-scope</key>
+  <true/>
+  <key>com.apple.security.print</key>
+  <true/>
+</dict>
+</plist>

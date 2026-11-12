@@ -446,7 +446,7 @@ may be unsigned and always includes Windows. `tools/release/release.py` decides 
 | Name (GitHub) | Kind | Used for |
 |---|---|---|
 | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret | Signing updates. The public key goes in `plugins.updater.pubkey` in `tauri.conf.json`; while that is empty, the app has no update feature |
-| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`; variable `APPLE_SIGNING_IDENTITY` | Secret, variable | macOS signing and notarization, read by the Tauri CLI |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`; variable `APPLE_SIGNING_IDENTITY` | Secret, variable | Developer ID signing and notarization of the DMG, read by the Tauri CLI |
 | `WINDOWS_SIGN_COMMAND` | Variable | Passed to `bundle.windows.signCommand`, with `%1` for the file |
 | `PENROAM_ANDROID_KEYSTORE_BASE64`, `PENROAM_ANDROID_KEYSTORE_PASSWORD`, `PENROAM_ANDROID_KEY_ALIAS`, `PENROAM_ANDROID_KEY_PASSWORD` | Secret | The Android release key. Without it, builds use the debug key, which is for test devices only |
 
@@ -468,8 +468,40 @@ a beta and its final release share `X.Y.Z` and the stores refuse a repeated buil
 |---|---|---|
 | `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` | Secret | App Store Connect API key: the key ID, the issuer ID and the contents of the `.p8` file. The key needs the Admin role for cloud signing. `APPLE_TEAM_ID` is shared with macOS signing |
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Secret | Service account allowed to release to the app. Upload the first `.aab` to the Play Console by hand: the API can't create a release for a new app |
+| `APPLE_MAS_CERTIFICATE`, `APPLE_MAS_CERTIFICATE_PASSWORD` | Secret | Mac App Store signing: one base64 `.p12` holding both an **Apple Distribution** and a **Mac Installer Distribution** identity, and its password |
+| `APPLE_MAS_PROVISIONING_PROFILE` | Secret | The base64 **Mac App Store Connect** provisioning profile for `ink.penroam.app` |
 
-Store builds never contain links to outside purchases: App Store builds sell only through StoreKit.
+### The Mac App Store build
+
+The `mac-app-store` job builds a second Mac app from the same tag, with the `mac-app-store` Cargo
+feature. That build runs in the App Sandbox (`src-tauri/macos-app-store/Entitlements.plist`), has
+no self-update, sells plans through StoreKit instead of the web (the Swift bridge in
+`plugins/tauri-plugin-store-billing/macos/`), and keeps access to the automatic-backup folder with
+a security-scoped bookmark (`src-tauri/src/folder_access.rs`). It is signed with Apple Distribution,
+packaged with `productbuild`, and the `mac-testflight` job uploads the `.pkg` with the same App
+Store Connect key as iOS. Its version is plain `X.Y.Z` with the run number as the build number,
+because the store refuses a pre-release suffix. The Developer ID DMG is built without the feature
+and is unchanged.
+
+Tauri signs Mac bundles itself rather than exporting through Xcode, so unlike iOS this needs a
+certificate and a profile. Set them up once:
+
+1. In App Store Connect, add the **macOS** platform to the existing Penroam app, so the Mac build
+   shares its record and subscriptions with iOS (universal purchase).
+2. In the developer portal, create an **Apple Distribution** certificate and a **Mac Installer
+   Distribution** certificate (skip either one you already have), install both on a Mac, select
+   both identities in Keychain Access and export them together as one `.p12`. Store it with
+   `base64 -i mas.p12 | pbcopy` as `APPLE_MAS_CERTIFICATE`, with its password.
+3. Create a **Mac App Store Connect** provisioning profile for `ink.penroam.app` with that Apple
+   Distribution certificate, and store it base64-encoded as `APPLE_MAS_PROVISIONING_PROFILE`.
+
+The job is skipped while any of these secrets is missing. On a Mac,
+`cargo build -p penroam-app --features mac-app-store` compiles the StoreKit bridge (CI does this
+on every change), but only the signed build from CI runs sandboxed. Trying purchases needs that
+build from TestFlight and a sandbox tester account.
+
+Store builds never contain links to outside purchases: App Store builds, on iOS and macOS, sell
+only through StoreKit.
 
 Keep `release.py notices` output out of the repository: it is generated for each build into
 `apps/desktop-mobile/public/` and shown under **Settings → About**.

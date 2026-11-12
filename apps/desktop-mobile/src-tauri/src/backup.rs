@@ -330,7 +330,11 @@ pub fn auto_backup(
     let (staged, manifest) = build(&app, &state)?;
     report(&app, "Saving the file", 0, 0);
     match target {
-        AutoTarget::Folder { dir } => to_folder(Path::new(&dir), &staged.0).map_err(io_err)?,
+        AutoTarget::Folder { dir } => {
+            // In the Mac App Store sandbox the folder is reachable only through its saved bookmark.
+            let _access = crate::folder_access::open(&app, &dir);
+            to_folder(Path::new(&dir), &staged.0).map_err(io_err)?
+        }
         AutoTarget::Webdav { url, user } => {
             let dav = webdav_client(&app, &state, &url, &user)?;
             dav.upload(&staged.0, &dated_name()).map_err(web_err)?;

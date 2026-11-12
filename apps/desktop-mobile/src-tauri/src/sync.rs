@@ -2741,6 +2741,19 @@ mod store_tests {
     }
 
     #[test]
+    fn a_build_sells_through_the_web_or_a_store_never_both() {
+        // Checked at compile time: a build that breaks this doesn't compile its tests.
+        const { assert!(!(PURCHASES_ALLOWED && STORE_PURCHASES)) };
+        #[cfg(feature = "mac-app-store")]
+        const {
+            assert!(
+                !PURCHASES_ALLOWED,
+                "the Mac App Store build must not link to Stripe"
+            )
+        };
+    }
+
+    #[test]
     fn the_account_token_stays_out_of_the_webview() {
         let v = to_view_for(account(), false, true);
         assert!(v.store_account_token.is_some());
@@ -2782,10 +2795,10 @@ mod tests {
 
 // ------------------------------------------------------- Penroam Cloud account --
 
-/// Whether this build may show Stripe prices or open billing pages. Store-distributed mobile apps
-/// must not link to outside purchases, so the iOS and Android builds never do. Enforced here, not
-/// only in the UI.
-const PURCHASES_ALLOWED: bool = cfg!(desktop);
+/// Whether this build may show Stripe prices or open billing pages. Store-distributed apps must
+/// not link to outside purchases, so the iOS, Android and Mac App Store builds never do. Enforced
+/// here, not only in the UI.
+const PURCHASES_ALLOWED: bool = cfg!(all(desktop, not(feature = "mac-app-store")));
 
 /// Whether this build sells plans through its app store instead.
 const STORE_PURCHASES: bool = tauri_plugin_store_billing::AVAILABLE;

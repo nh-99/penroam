@@ -2,8 +2,8 @@ name: release
 
 # A version tag builds every desktop package and the Android APK, and leaves them on a DRAFT
 # GitHub release. Nothing reaches the public until a person publishes the draft and runs
-# promote.yml. If their secrets are set, the same tag also uploads to testers: TestFlight, and
-# Google Play's internal track. Moving a build on from there is done in the store consoles.
+# promote.yml. If their secrets are set, the same tag also uploads to testers: TestFlight (iPad and
+# the Mac App Store build), and Google Play's internal track. Moving a build on from there is done in the store consoles.
 # docs/development.md#releases describes the process and the secrets.
 on:
   push:
@@ -22,6 +22,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       testflight: ${{ steps.stores.outputs.testflight }}
       google_play: ${{ steps.stores.outputs.google_play }}
+      mac_app_store: ${{ steps.stores.outputs.mac_app_store }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: The tag matches the repository
@@ -40,6 +41,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
           PENROAM_ANDROID_KEYSTORE_BASE64: ${{ secrets.PENROAM_ANDROID_KEYSTORE_BASE64 }}
+          APPLE_MAS_CERTIFICATE: ${{ secrets.APPLE_MAS_CERTIFICATE }}
+          APPLE_MAS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_MAS_CERTIFICATE_PASSWORD }}
+          APPLE_MAS_PROVISIONING_PROFILE: ${{ secrets.APPLE_MAS_PROVISIONING_PROFILE }}
         run: python3 tools/release/release.py sign-status "$GITHUB_REF_NAME"
       - name: Which store uploads are set up
         id: stores
@@ -49,9 +53,13 @@ jobs:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          APPLE_MAS_CERTIFICATE: ${{ secrets.APPLE_MAS_CERTIFICATE }}
+          APPLE_MAS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_MAS_CERTIFICATE_PASSWORD }}
+          APPLE_MAS_PROVISIONING_PROFILE: ${{ secrets.APPLE_MAS_PROVISIONING_PROFILE }}
         run: |
           echo "testflight=$(python3 tools/release/release.py configured testflight)" >> "$GITHUB_OUTPUT"
           echo "google_play=$(python3 tools/release/release.py configured google-play)" >> "$GITHUB_OUTPUT"
+          echo "mac_app_store=$(python3 tools/release/release.py configured mac-app-store)" >> "$GITHUB_OUTPUT"
       - name: The version has a changelog entry
         run: grep -q "^## ${GITHUB_REF_NAME#v}" CHANGELOG.md
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -295,6 +303,97 @@ jobs:
           xcrun altool --upload-app --type ios --file store/penroam.ipa \
             --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
 
+  # The Mac App Store build: sandboxed, signed with Apple Distribution, without self-update, and
+  # selling plans through StoreKit (the `mac-app-store` Cargo feature). Unlike the iOS job it needs
+  # a certificate and profile, because Tauri signs macOS bundles itself instead of exporting through
+  # Xcode. The signed .pkg installs only from TestFlight or the store, so like the IPA it stays out
+  # of the GitHub release. No notarization variables are set here: Tauri would try to notarize, and
+  # store builds aren't notarized.
+  mac-app-store:
+    needs: verify
+    if: needs.verify.outputs.mac_app_store == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 24, cache: pnpm }
+      - run: rustup toolchain install --no-self-update && rustup target add aarch64-apple-darwin
+      - run: pnpm install --frozen-lockfile
+      - run: python3 tools/release/release.py notices apps/desktop-mobile/public/third-party-notices.txt
+      - name: Signing identities and profile
+        env:
+          APPLE_MAS_CERTIFICATE: ${{ secrets.APPLE_MAS_CERTIFICATE }}
+          APPLE_MAS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_MAS_CERTIFICATE_PASSWORD }}
+          APPLE_MAS_PROVISIONING_PROFILE: ${{ secrets.APPLE_MAS_PROVISIONING_PROFILE }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          kc="$RUNNER_TEMP/mas.keychain-db"
+          pw=$(uuidgen)
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          base64 -d <<< "$APPLE_MAS_CERTIFICATE" > "$RUNNER_TEMP/mas.p12"
+          security import "$RUNNER_TEMP/mas.p12" -k "$kc" -P "$APPLE_MAS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          rm "$RUNNER_TEMP/mas.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" > /dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          # Older accounts have "3rd Party Mac Developer" certificates; both kinds are accepted.
+          app=$(security find-identity -v -p codesigning "$kc" \
+            | grep -oE '"(Apple Distribution|3rd Party Mac Developer Application): [^"]+"' | head -1 | tr -d '"')
+          installer=$(security find-identity -v "$kc" \
+            | grep -oE '"(3rd Party Mac Developer Installer|Mac Installer Distribution): [^"]+"' | head -1 | tr -d '"')
+          if [ -z "$app" ] || [ -z "$installer" ]; then
+            echo "::error::APPLE_MAS_CERTIFICATE needs an Apple Distribution and a Mac Installer Distribution identity"
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$app" >> "$GITHUB_ENV"
+          echo "MAS_INSTALLER_IDENTITY=$installer" >> "$GITHUB_ENV"
+          base64 -d <<< "$APPLE_MAS_PROVISIONING_PROFILE" \
+            > apps/desktop-mobile/src-tauri/macos-app-store/embedded.provisionprofile
+          # TestFlight requires the app and team identifiers, which must match the profile.
+          ent=apps/desktop-mobile/src-tauri/macos-app-store/Entitlements.plist
+          plutil -insert com.apple.application-identifier -string "$APPLE_TEAM_ID.ink.penroam.app" "$ent"
+          plutil -insert com.apple.developer.team-identifier -string "$APPLE_TEAM_ID" "$ent"
+      - name: Build
+        env:
+          PENROAM_RELEASE_BUILD: "1"
+        run: |
+          pnpm tauri build --bundles app --target aarch64-apple-darwin --features mac-app-store \
+            --config "$(python3 tools/release/release.py store-config macos "$GITHUB_RUN_NUMBER")"
+          app=target/aarch64-apple-darwin/release/bundle/macos/Penroam.app
+          codesign --verify --strict --verbose=2 "$app"
+          codesign -d --entitlements - "$app" | grep -q com.apple.security.app-sandbox
+          mkdir store
+          xcrun productbuild --sign "$MAS_INSTALLER_IDENTITY" --component "$app" /Applications store/penroam.pkg
+          test -s store/penroam.pkg
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mac-app-store
+          path: store/penroam.pkg
+          if-no-files-found: error
+
+  # Separate from `mac-app-store` so a refused upload can be re-run without building again.
+  mac-testflight:
+    needs: mac-app-store
+    runs-on: macos-latest # altool only exists on macOS
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mac-app-store
+          path: store
+      - name: Upload to TestFlight
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "$APPLE_API_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY}.p8
+          xcrun altool --upload-app --type macos --file store/penroam.pkg \
+            --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
+
   draft:
     needs: [verify, desktop, android]
     runs-on: ubuntu-24.04
@@ -311,7 +410,7 @@ jobs:
           path: release
           merge-multiple: true
       - name: Store-only files stay out of the release
-        run: rm -f release/penroam.aab release/mapping.txt release/penroam.ipa
+        run: rm -f release/penroam.aab release/mapping.txt release/penroam.ipa release/penroam.pkg
       - name: Software bill of materials
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:

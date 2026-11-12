@@ -7,7 +7,8 @@
     release.py sign-status TAG             which signing secrets this run has (never their values)
     release.py desktop-matrix TAG          the desktop builds for this tag, as JSON
     release.py configured CHANNEL          true if a signing or upload channel has its secrets
-    release.py store-config ios|android N  Tauri config with the build number for workflow run N
+    release.py store-config ios|android|macos N
+                                           Tauri config for a store build from workflow run N
 
 Only the standard library, so it runs before anything is installed. docs/development.md#releases
 describes the whole process.
@@ -199,10 +200,14 @@ SIGNING = {
     "android": ["PENROAM_ANDROID_KEYSTORE_BASE64"],
     "testflight": ["APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_P8", "APPLE_TEAM_ID"],
     "google-play": ["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"],
+    # Apple Distribution and Mac Installer Distribution identities in one .p12, the Mac App Store
+    # provisioning profile, and the App Store Connect key for the upload.
+    "mac-app-store": ["APPLE_MAS_CERTIFICATE", "APPLE_MAS_CERTIFICATE_PASSWORD", "APPLE_MAS_PROVISIONING_PROFILE",
+                      "APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_P8", "APPLE_TEAM_ID"],
 }
 # These are skipped when they aren't set up, instead of stopping the release. Windows is never
 # shipped unsigned in a stable release, and the store uploads only add to what was built.
-OPTIONAL = {"windows", "testflight", "google-play"}
+OPTIONAL = {"windows", "testflight", "google-play", "mac-app-store"}
 # Store build numbers only go up. Android starts above any version code a sideloaded build used.
 ANDROID_VERSION_CODE_BASE = 10000
 
@@ -231,12 +236,27 @@ def configured(channel, env):
     return all(env.get(name) for name in SIGNING[channel])
 
 
-def store_config(platform, run_number):
+def store_config(platform, run_number, root=ROOT):
     """The Tauri config for a store build. A beta and the release after it share `X.Y.Z`, and the
     stores refuse a repeated build number, so it comes from the workflow's run number. Apple
-    allows three numbers at most, which rules out `tauri ios build --build-number` (`X.Y.Z.N`)."""
+    allows three numbers at most, which rules out `tauri ios build --build-number` (`X.Y.Z.N`).
+
+    The Mac App Store also refuses a pre-release suffix in the version, which Tauri copies into
+    CFBundleShortVersionString as it is, so the macOS build states plain `X.Y.Z`. Paths are
+    relative to `src-tauri`; CI writes the provisioning profile there."""
     if platform == "ios":
         return {"bundle": {"iOS": {"bundleVersion": str(run_number)}}}
+    if platform == "macos":
+        version = repo_versions(root)["tauri.conf.json"].split("-")[0]
+        return {
+            "version": version,
+            "bundle": {"macOS": {
+                "bundleVersion": str(run_number),
+                "minimumSystemVersion": "14.0",
+                "entitlements": "macos-app-store/Entitlements.plist",
+                "files": {"embedded.provisionprofile": "macos-app-store/embedded.provisionprofile"},
+            }},
+        }
     return {"bundle": {"android": {"versionCode": ANDROID_VERSION_CODE_BASE + run_number}}}
 
 

@@ -26,6 +26,7 @@ mod bench;
 mod commands;
 mod desktop_entry;
 mod diagnostics;
+mod folder_access;
 mod models;
 #[cfg(target_os = "linux")]
 mod pinch;
@@ -134,6 +135,7 @@ pub fn run() {
             backup::preview_backup,
             backup::restore_backup,
             backup::auto_backup,
+            folder_access::remember_folder,
             backup::webdav_connect,
             backup::webdav_disconnect,
             backup::webdav_backups,

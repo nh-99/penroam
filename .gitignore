@@ -54,3 +54,6 @@ __pycache__/
 *.p12
 *.key
 *.cer
+
+# Mac App Store provisioning profile, written by release CI
+apps/desktop-mobile/src-tauri/macos-app-store/embedded.provisionprofile

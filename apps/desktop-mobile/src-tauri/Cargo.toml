@@ -11,6 +11,12 @@ license.workspace = true
 name = "penroam_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# The Mac App Store build: sandboxed, no self-update, plans sold through StoreKit instead of the
+# web, and saved access to chosen folders (src/folder_access.rs). Release CI turns it on for the
+# store package only; the Developer ID DMG is built without it.
+mac-app-store = ["tauri-plugin-store-billing/mac-app-store", "dep:objc2", "dep:objc2-foundation"]
+
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
 
@@ -67,6 +73,12 @@ ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "
 # loads. `ort` rejects a runtime older than this API level, and its load-dynamic code does not
 # compile without an API feature (they are off with its defaults).
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "load-dynamic", "api-21"] }
+
+# Security-scoped bookmarks in the Mac App Store build (src/folder_access.rs). The versions are the
+# ones Tauri already links.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", optional = true, default-features = false, features = ["std", "NSURL", "NSData", "NSError", "NSString", "NSArray"] }
 
 # search worker: power state and background thread priority
 [target.'cfg(windows)'.dependencies]

@@ -3523,6 +3523,8 @@ dependencies = [
  "gtk",
  "libc",
  "log",
+ "objc2",
+ "objc2-foundation",
  "ort",
  "penroam-core",
  "penroam-interchange",
@@ -5266,6 +5268,7 @@ version = "0.1.0-beta.8"
 dependencies = [
  "serde",
  "serde_json",
+ "swift-rs",
  "tauri",
  "tauri-plugin",
 ]

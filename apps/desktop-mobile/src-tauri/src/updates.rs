@@ -8,7 +8,8 @@
 //!
 //! **Until a public key is committed this module does nothing:** [`update_support`] reports
 //! `enabled: false` and the app shows no update controls. Mobile builds never use it, because
-//! their updates come from the stores or from a new sideloaded APK.
+//! their updates come from the stores or from a new sideloaded APK. Nor does the Mac App Store build
+//! (the `mac-app-store` feature): the App Store updates it.
 //!
 //! The app makes no update request unless the user clicks "Check for updates" or has turned on
 //! the automatic check. The order in [`update_install`] matters: on Windows the installer ends
@@ -57,9 +58,13 @@ pub fn update_support(app: AppHandle) -> UpdateSupport {
     }
 }
 
+/// The Mac App Store updates its own apps, and store apps may not install updates themselves.
+#[cfg(any(desktop, test))]
+const SELF_UPDATE: bool = !cfg!(feature = "mac-app-store");
+
 #[cfg(desktop)]
 fn enabled(app: &AppHandle) -> bool {
-    has_key(app.config().plugins.0.get("updater"))
+    SELF_UPDATE && has_key(app.config().plugins.0.get("updater"))
 }
 
 #[cfg(not(desktop))]
@@ -174,8 +179,13 @@ mod desktop {
 
 #[cfg(test)]
 mod tests {
-    use super::has_key;
+    use super::{has_key, SELF_UPDATE};
     use serde_json::json;
+
+    #[test]
+    fn the_mac_app_store_build_never_updates_itself() {
+        assert_eq!(SELF_UPDATE, !cfg!(feature = "mac-app-store"));
+    }
 
     #[test]
     fn updates_stay_off_without_a_key() {
