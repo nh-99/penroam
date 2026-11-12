@@ -645,3 +645,147 @@ fn an_archive_stays_valid_when_the_notebook_changes_during_the_export() {
         .iter()
         .any(|e| matches!(e, Element::Image(i) if i.z == 9)));
 }
+
+/// A backup laid out as the app writes it: every notebook, then the folders as an extra.
+fn backup_with_folders(lib: &mut Library) -> Vec<u8> {
+    let mut out = Cursor::new(Vec::new());
+    let mut w = BackupWriter::new(&mut out, "test").unwrap();
+    let mut ids = lib.notebook_ids();
+    ids.sort();
+    for id in ids {
+        w.add_notebook(lib, id).unwrap();
+    }
+    let folders = serde_json::to_vec(lib.folders()).unwrap();
+    w.add_extra("extras/folders.json", &folders).unwrap();
+    w.finish().unwrap();
+    out.into_inner()
+}
+
+/// Restores in the app's order: folders first, then the notebooks.
+fn restore_like_the_app(lib: &mut Library, file: &[u8], options: &RestoreOptions) -> RestoreReport {
+    let mut r = BackupReader::open(Cursor::new(file)).unwrap();
+    if let Some(bytes) = r.extra("extras/folders.json").unwrap() {
+        lib.restore_folders(&serde_json::from_slice(&bytes).unwrap())
+            .unwrap();
+    }
+    let mut report = RestoreReport::default();
+    for i in 0..r.manifest().notebooks.len() {
+        r.restore(lib, i, options, &mut report);
+    }
+    report
+}
+
+#[test]
+fn restored_notebooks_go_back_into_their_folders() {
+    let (_d, mut l) = lib();
+    let school = l.create_folder("School", None).unwrap();
+    let physics = l.create_folder("Physics", Some(school.id)).unwrap();
+    let (filed, _) = notebook(&mut l, "Lab notes");
+    l.file_notebook(filed, Some(physics.id)).unwrap();
+    let (loose, _) = notebook(&mut l, "Loose");
+    let file = backup_with_folders(&mut l);
+
+    let (_d2, mut fresh) = lib();
+    let r = restore_like_the_app(&mut fresh, &file, &RestoreOptions::default());
+    assert_eq!(r.restored.len(), 2);
+    assert!(r.failed.is_empty());
+    assert_eq!(fresh.notebook(filed).unwrap().folder, Some(physics.id));
+    assert_eq!(fresh.notebook(loose).unwrap().folder, None);
+    let restored = fresh.folders().0.get(&physics.id).unwrap();
+    assert_eq!(
+        (restored.name.as_str(), restored.parent),
+        ("Physics", Some(school.id))
+    );
+
+    // the order matters: a notebook only keeps a folder that exists when it is restored
+    let (_d3, mut out_of_order) = lib();
+    out_of_order
+        .restore_backup(Cursor::new(&file), &RestoreOptions::default())
+        .unwrap();
+    assert_eq!(out_of_order.notebook(filed).unwrap().folder, None);
+}
+
+#[test]
+fn only_the_chosen_notebooks_are_restored() {
+    let (_d, mut l) = lib();
+    let (a, _) = notebook(&mut l, "A");
+    let (b, _) = notebook(&mut l, "B");
+    let file = backup(&mut l);
+    let (_d2, mut fresh) = lib();
+    let r = fresh
+        .restore_backup(
+            Cursor::new(&file),
+            &RestoreOptions {
+                only: Some(vec![b]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(r.restored, vec![b]);
+    assert!(fresh.notebook(a).is_err());
+    assert!(
+        r.skipped.is_empty(),
+        "left out by choice, not skipped as a duplicate"
+    );
+}
+
+#[test]
+fn a_crash_during_a_restore_leaves_every_notebook_whole_or_absent() {
+    use penroam_storage::fsutil::fault;
+    let (_d, mut source) = lib();
+    let (a, _) = notebook(&mut source, "From backup A");
+    let (b, _) = notebook(&mut source, "From backup B");
+    let want_a = pages_of(&mut source, a);
+    let want_b = pages_of(&mut source, b);
+    let file = backup(&mut source);
+
+    let mut crashes = 0;
+    for k in 0.. {
+        let d = TempDir::new().unwrap();
+        let root = d.path().join("lib");
+        let mut l = Library::open(&root).unwrap();
+        let (keep, _) = notebook(&mut l, "Already here");
+        let want_keep = pages_of(&mut l, keep);
+
+        fault::arm(k);
+        let r = l.restore_backup(Cursor::new(&file), &RestoreOptions::default());
+        let crashed = fault::crashed();
+        fault::disarm();
+        if !crashed {
+            let r = r.unwrap();
+            assert_eq!(r.restored.len(), 2, "the run without a crash restores both");
+            break;
+        }
+        crashes += 1;
+        l.crash_for_tests();
+        let mut l = Library::open(&root).unwrap_or_else(|e| {
+            panic!("reopen after a crash at point {k} ({}): {e}", fault::last())
+        });
+        assert_eq!(
+            pages_of(&mut l, keep),
+            want_keep,
+            "point {k}: the library's own notebook is untouched"
+        );
+        for (id, want) in [(a, &want_a), (b, &want_b)] {
+            if l.notebook(id).is_ok() {
+                assert_eq!(
+                    &pages_of(&mut l, id),
+                    want,
+                    "point {k} ({}): a restored notebook is complete",
+                    fault::last()
+                );
+            }
+        }
+        // and the same backup can simply be restored again
+        let again = l
+            .restore_backup(Cursor::new(&file), &RestoreOptions::default())
+            .unwrap();
+        assert!(again.failed.is_empty(), "point {k}: {:?}", again.failed);
+        assert_eq!(pages_of(&mut l, a), want_a);
+        assert_eq!(pages_of(&mut l, b), want_b);
+    }
+    assert!(
+        crashes > 10,
+        "the restore passes many write points ({crashes})"
+    );
+}

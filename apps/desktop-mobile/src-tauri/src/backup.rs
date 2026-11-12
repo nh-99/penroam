@@ -243,14 +243,28 @@ pub fn restore_backup(
 /// Brings back search corrections for the notebooks that were restored. A copy has a new
 /// notebook id and the same pages, so the map from the report is applied.
 fn restore_corrections(state: &State<'_, AppState>, bytes: &[u8], mapped: &[(Uuid, Uuid)]) {
-    let Ok(rows) = serde_json::from_slice::<Vec<(Uuid, Uuid, String, String)>>(bytes) else {
-        return;
-    };
-    for (nb, page, region, text) in rows {
-        if let Some((_, new)) = mapped.iter().find(|(old, _)| *old == nb) {
-            state.search.restore_correction(*new, page, region, text);
-        }
+    for (nb, page, region, text) in corrections_for(bytes, mapped) {
+        state.search.restore_correction(nb, page, region, text);
     }
+}
+
+/// A correction: notebook, page, region and the corrected text.
+type Correction = (Uuid, Uuid, String, String);
+
+/// The corrections in a backup's extra that belong to restored notebooks, moved to the id each
+/// notebook has now. Corrections of notebooks that weren't restored (skipped, failed or not
+/// chosen) are dropped, so they can't attach to the library's own notebook with that id. An
+/// unreadable extra gives none: corrections are a convenience, not notes.
+fn corrections_for(bytes: &[u8], mapped: &[(Uuid, Uuid)]) -> Vec<Correction> {
+    let Ok(rows) = serde_json::from_slice::<Vec<Correction>>(bytes) else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .filter_map(|(nb, page, region, text)| {
+            let (_, now) = mapped.iter().find(|(old, _)| *old == nb)?;
+            Some((*now, page, region, text))
+        })
+        .collect()
 }
 
 /// Today as `YYYY-MM-DD` in UTC, for file names.
@@ -436,6 +450,27 @@ pub fn discard_fetched(state: State<'_, AppState>, path: String) -> R<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corrections_follow_restored_notebooks_and_copies() {
+        let id = Uuid::from_u128;
+        let rows = serde_json::to_vec(&[
+            (id(1), id(10), "r1".to_string(), "hello".to_string()),
+            (id(2), id(20), "r2".to_string(), "skipped".to_string()),
+            (id(3), id(30), "r3".to_string(), "copied".to_string()),
+        ])
+        .unwrap();
+        // 1 restored as itself, 2 skipped (already in the library), 3 restored as a copy
+        let mapped = [(id(1), id(1)), (id(3), id(99))];
+        assert_eq!(
+            corrections_for(&rows, &mapped),
+            vec![
+                (id(1), id(10), "r1".to_string(), "hello".to_string()),
+                (id(99), id(30), "r3".to_string(), "copied".to_string()),
+            ]
+        );
+        assert!(corrections_for(b"not json", &mapped).is_empty());
+    }
 
     #[test]
     fn dates_for_file_names() {
