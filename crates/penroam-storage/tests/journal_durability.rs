@@ -1151,3 +1151,50 @@ fn operations_after_reads_only_what_is_newer_across_segments() {
         assert_eq!(after, expected, "operations after {seq}");
     }
 }
+
+#[test]
+fn flipping_through_pages_doesnt_rewrite_the_page_being_edited() {
+    let d = tmp();
+    let root = d.path().join("lib");
+    let mut lib = Library::open(&root).unwrap();
+    let (nb, first) = lib
+        .create_notebook("A", PageDefaults::default(), None)
+        .unwrap();
+    let others: Vec<Uuid> = (0..5)
+        .map(|_| lib.create_page(nb.id, None, None, None).unwrap().1.id)
+        .collect();
+    lib.flush_all().unwrap();
+    let file = root
+        .join("notebooks")
+        .join(nb.id.to_string())
+        .join("pages")
+        .join(format!("{}.prp", first.id));
+    let before = fs::read(&file).unwrap();
+    lib.apply_page_operations(
+        nb.id,
+        first.id,
+        &batch(
+            10,
+            0,
+            OpKind::AddElements {
+                elements: vec![ink(1, 1)],
+            },
+        ),
+    )
+    .unwrap();
+    // looking at five other small pages used to push the edited page out of a three-page
+    // cache, writing its snapshot there and then
+    for p in &others {
+        lib.load_page(nb.id, *p).unwrap();
+    }
+    assert_eq!(
+        fs::read(&file).unwrap(),
+        before,
+        "the edit is still only journaled"
+    );
+    assert_eq!(lib.load_page(nb.id, first.id).unwrap().elements.len(), 1);
+    // and it's durable: a crash now replays it from the journal
+    lib.crash_for_tests();
+    let mut lib = Library::open(&root).unwrap();
+    assert_eq!(lib.load_page(nb.id, first.id).unwrap().elements.len(), 1);
+}

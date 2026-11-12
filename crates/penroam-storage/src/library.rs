@@ -102,9 +102,16 @@ fn set_element_id(e: &mut Element, id: Uuid) {
 
 const JOURNAL_MAX_ENTRIES: usize = 512;
 const JOURNAL_MIN_COMPACT_BYTES: u64 = 1 << 20;
-// Pages kept parsed in memory (LRU). Small on purpose: a 10k-stroke page is
-// ~20 MB of Rust structs and the editor shows one page at a time.
-const PAGE_CACHE: usize = 3;
+// Pages kept parsed in memory: see `eviction_victim`. A 10k-stroke page is ~11 MB encoded and
+// ~20 MB of Rust structs, while most pages are a few kilobytes, so the cache is bounded by size
+// as well as count.
+/// Most pages kept, however small.
+const PAGE_CACHE_MAX: usize = 8;
+/// Pages kept whatever their size, besides the one being loaded: the worst case stays at three
+/// large pages.
+const PAGE_CACHE_MIN: usize = 2;
+/// Size budget in encoded bytes (snapshot plus journal).
+const PAGE_CACHE_BYTES: u64 = 24 << 20;
 /// Batch ids remembered for retry deduplication.
 const RECENT_BATCHES: usize = 4096;
 
@@ -244,8 +251,9 @@ pub struct Tuning {
 /// The open notebook library (single writer: holds an exclusive lock file).
 ///
 /// Every mutating method journals its operations durably before returning
-/// (see the module docs). Pages are loaded lazily and kept in a small LRU
-/// cache; evicting a page checkpoints it.
+/// (see the module docs). Pages are loaded lazily and kept in a small cache,
+/// bounded by count and size, that drops pages without unsaved edits first;
+/// evicting a page with edits checkpoints it.
 pub struct Library {
     root: PathBuf,
     notebooks: HashMap<Uuid, Notebook>,
@@ -921,7 +929,7 @@ impl Library {
         if self.pages.contains_key(&key) {
             return Ok(());
         }
-        self.evict_if_needed()?;
+        self.evict_if_needed(0)?;
         self.tick += 1;
         self.pages.insert(
             key,
@@ -1664,7 +1672,7 @@ impl Library {
         let tick = self.tick;
         if !self.pages.contains_key(&(nb_id, page_id)) {
             let loaded = self.read_page(nb_id, page_id)?;
-            self.evict_if_needed()?;
+            self.evict_if_needed(loaded.snapshot_bytes + loaded.journal_bytes)?;
             self.pages.insert((nb_id, page_id), loaded);
         }
         let c = self
@@ -1675,18 +1683,26 @@ impl Library {
         Ok(c)
     }
 
-    fn evict_if_needed(&mut self) -> Result<()> {
-        while self.pages.len() >= PAGE_CACHE {
-            let key = *self
+    /// Makes room for a page of about `incoming` encoded bytes. Evicting a page with unsaved
+    /// edits checkpoints it first, which costs a snapshot write and its fsyncs.
+    fn evict_if_needed(&mut self, incoming: u64) -> Result<()> {
+        loop {
+            let slots: Vec<CacheSlot> = self
                 .pages
                 .iter()
-                .min_by_key(|(_, c)| c.last_used)
-                .map(|(k, _)| k)
-                .expect("non-empty");
+                .map(|(k, c)| CacheSlot {
+                    key: *k,
+                    last_used: c.last_used,
+                    dirty: c.first_dirty_seq.is_some(),
+                    bytes: c.snapshot_bytes + c.journal_bytes,
+                })
+                .collect();
+            let Some(key) = eviction_victim(&slots, incoming) else {
+                return Ok(());
+            };
             self.checkpoint_page(key.0, key.1)?;
             self.pages.remove(&key);
         }
-        Ok(())
     }
 
     fn read_snapshot(
@@ -2276,7 +2292,7 @@ impl Library {
             self.history_install(nb_id, old.as_ref(), &page);
             self.pending.remove(&key);
             if !self.pages.contains_key(&key) {
-                self.evict_if_needed()?;
+                self.evict_if_needed(0)?;
             }
             self.tick += 1;
             self.pages.insert(
@@ -2731,4 +2747,94 @@ pub fn read_asset_file(path: &Path, hash: &str) -> Result<Vec<u8>> {
         )));
     }
     Ok(bytes)
+}
+
+/// What [`eviction_victim`] needs to know about a cached page.
+#[derive(Debug, Clone, Copy)]
+struct CacheSlot {
+    key: (Uuid, Uuid),
+    last_used: u64,
+    dirty: bool,
+    bytes: u64,
+}
+
+/// The page to evict before adding one of `incoming` encoded bytes, or `None` when it fits.
+///
+/// It's over when the cache holds [`PAGE_CACHE_MAX`] pages, or more than [`PAGE_CACHE_MIN`] and
+/// the total passes [`PAGE_CACHE_BYTES`]. Pages without unsaved edits go first, because
+/// dropping one costs nothing, while a page with edits must be checkpointed. The most recently
+/// used page is kept unless it is the only one: it's the page on screen.
+fn eviction_victim(slots: &[CacheSlot], incoming: u64) -> Option<(Uuid, Uuid)> {
+    let total = slots.iter().map(|s| s.bytes).sum::<u64>() + incoming;
+    let over = slots.len() >= PAGE_CACHE_MAX
+        || (slots.len() >= PAGE_CACHE_MIN && total > PAGE_CACHE_BYTES);
+    if !over {
+        return None;
+    }
+    let newest = slots.iter().map(|s| s.last_used).max()?;
+    slots
+        .iter()
+        .filter(|s| slots.len() == 1 || s.last_used != newest)
+        .min_by_key(|s| (s.dirty, s.last_used))
+        .map(|s| s.key)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn slot(n: u128, last_used: u64, dirty: bool, bytes: u64) -> CacheSlot {
+        CacheSlot {
+            key: (Uuid::nil(), Uuid::from_u128(n)),
+            last_used,
+            dirty,
+            bytes,
+        }
+    }
+
+    fn page(n: u128) -> Option<(Uuid, Uuid)> {
+        Some((Uuid::nil(), Uuid::from_u128(n)))
+    }
+
+    #[test]
+    fn small_pages_stay_until_the_count_limit() {
+        let slots: Vec<_> = (0..PAGE_CACHE_MAX as u128 - 1)
+            .map(|i| slot(i, i as u64, true, 4096))
+            .collect();
+        assert_eq!(eviction_victim(&slots, 4096), None);
+        let mut full = slots.clone();
+        full.push(slot(99, 99, true, 4096));
+        assert_eq!(eviction_victim(&full, 4096), page(0), "the oldest goes");
+    }
+
+    #[test]
+    fn pages_without_unsaved_edits_go_first() {
+        let slots: Vec<_> = (0..PAGE_CACHE_MAX as u128)
+            .map(|i| slot(i, i as u64, i != 5, 4096))
+            .collect();
+        assert_eq!(eviction_victim(&slots, 0), page(5));
+    }
+
+    #[test]
+    fn the_page_on_screen_is_kept_even_when_clean() {
+        let slots = [slot(1, 1, true, 20 << 20), slot(2, 2, false, 20 << 20)];
+        assert_eq!(eviction_victim(&slots, 1 << 20), page(1));
+        assert_eq!(
+            eviction_victim(&[slot(1, 1, false, 30 << 20)], 30 << 20),
+            None,
+            "below the minimum, size doesn't matter"
+        );
+    }
+
+    #[test]
+    fn large_pages_are_held_to_the_size_budget() {
+        let big = 11 << 20;
+        // two large pages are always allowed, besides the one coming in
+        assert_eq!(eviction_victim(&[slot(1, 1, true, big)], big), None);
+        let two = [slot(1, 1, true, big), slot(2, 2, true, big)];
+        assert_eq!(eviction_victim(&two, big), page(1));
+        // under budget, a large page and small ones share the cache
+        let mixed = [slot(1, 1, true, big), slot(2, 2, false, 4096)];
+        assert_eq!(eviction_victim(&mixed, 4096), None);
+    }
 }
