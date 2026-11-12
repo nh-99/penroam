@@ -802,3 +802,32 @@ fn duplicate_copies_live_pages_into_the_same_folder() {
     );
     assert!(fs::read_dir(lib.staging_dir()).map_or(true, |mut d| d.next().is_none()));
 }
+
+#[test]
+fn sync_installs_drop_outdated_thumbnails() {
+    let (_d, mut lib) = new_lib();
+    let (nb, p1) = lib
+        .create_notebook("Synced", PageDefaults::default(), None)
+        .unwrap();
+    let png = b"\x89PNG\r\n\x1a\nfake";
+    lib.save_thumbnail(nb.id, p1.id, png).unwrap();
+    let nb = lib.notebook(nb.id).unwrap().clone();
+
+    // an install that changes nothing keeps the picture
+    let same = lib.load_page(nb.id, p1.id).unwrap();
+    lib.install_merged(nb.clone(), vec![same]).unwrap();
+    assert_eq!(lib.thumbnail(nb.id, p1.id).as_deref(), Some(&png[..]));
+
+    // new content from another device: the picture is out of date and goes
+    let mut changed = lib.load_page(nb.id, p1.id).unwrap();
+    changed.elements.push(text(1, "from the other device"));
+    lib.install_merged(nb.clone(), vec![changed]).unwrap();
+    assert_eq!(lib.thumbnail(nb.id, p1.id), None);
+
+    // so does one of a page whose size changed
+    lib.save_thumbnail(nb.id, p1.id, png).unwrap();
+    let mut resized = lib.load_page(nb.id, p1.id).unwrap();
+    resized.size.height += 100.0;
+    lib.install_merged(nb.clone(), vec![resized]).unwrap();
+    assert_eq!(lib.thumbnail(nb.id, p1.id), None);
+}

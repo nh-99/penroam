@@ -10,7 +10,7 @@ import type { Template } from "../generated/Template";
 import type { PdfBackgroundRef } from "../generated/PdfBackgroundRef";
 import type { RecoveryReport } from "../generated/RecoveryReport";
 import { renderMathTable } from "../editor/math";
-import { api, CommandError } from "../platform/ipc";
+import { api, CommandError, hasHost } from "../platform/ipc";
 import { pickFile, pickImportFiles, pickSaveLocation, safeFileName, type Picked } from "../platform/files";
 import type { Kept } from "../generated/Kept";
 import { useSync } from "./sync";
@@ -117,12 +117,113 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
+  // ------------------------------------------------------------------ covers --
+  //
+  // A cover is the saved thumbnail of a notebook's first page. Thumbnails are a cache on each
+  // device: they don't travel with sync or in archives, and storage drops a page's thumbnail
+  // when sync installs a new version of the page. So a notebook that arrived from another
+  // device, or changed there, has no cover here until one is drawn. The library draws those
+  // itself, notebooks on screen first, and saves them like the editor's own thumbnails.
+
+  /** notebookId -> the `updatedAt` its cover was read or drawn for. */
+  const coverFor = new Map<string, number>();
+  /** Notebooks whose cover is missing and waits to be drawn, in shelf order. */
+  let toPaint: string[] = [];
+  /** Notebooks whose card is on screen; their covers are drawn first. */
+  const onScreen = new Set<string>();
+  /** notebookId -> the `updatedAt` a cover could not be drawn for; not tried again until it changes. */
+  const paintFailed = new Map<string, number>();
+  let painters = 0;
+  /** Covers drawn side by side. Reading a page and its PDFs overlaps with drawing another. */
+  const PAINTERS = 2;
+  /** Cached covers read side by side. */
+  const READERS = 4;
+
   async function loadCovers() {
-    for (const n of notebooks.value) {
-      if (!n.firstPageId || covers.value[n.id]) continue;
-      const b = await api.getThumbnail(n.id, n.firstPageId).catch(() => null);
-      if (b) covers.value = { ...covers.value, [n.id]: URL.createObjectURL(new Blob([b as BlobPart], { type: "image/png" })) };
+    const want = notebooks.value.filter((n) => n.firstPageId && n.deletedAt == null && coverFor.get(n.id) !== n.updatedAt);
+    const missing: string[] = [];
+    let next = 0;
+    const read = async () => {
+      for (let n = want[next++]; n; n = want[next++]) {
+        const b = await api.getThumbnail(n.id, n.firstPageId!).catch(() => null);
+        if (b) {
+          showCover(n.id, b);
+          coverFor.set(n.id, n.updatedAt);
+        } else missing.push(n.id);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(READERS, want.length) }, read));
+    if (!hasHost()) return;
+    const order = new Map(notebooks.value.map((n, i) => [n.id, i]));
+    toPaint = [...new Set([...toPaint, ...missing])].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+    paintCovers();
+  }
+
+  function showCover(nbId: string, png: Uint8Array) {
+    const old = covers.value[nbId];
+    covers.value = { ...covers.value, [nbId]: URL.createObjectURL(new Blob([png as BlobPart], { type: "image/png" })) };
+    if (old) URL.revokeObjectURL(old);
+  }
+
+  /** A notebook's card came on screen or left it; covers on screen are drawn first. */
+  function coverVisible(nbId: string, visible: boolean) {
+    if (visible) onScreen.add(nbId);
+    else onScreen.delete(nbId);
+  }
+
+  /** Starts drawing the missing covers, unless a notebook is open: the editor comes first. */
+  function paintCovers() {
+    while (painters < PAINTERS && toPaint.length && !current.value) {
+      painters++;
+      void (async () => {
+        try {
+          for (let id = takeNextCover(); id; id = takeNextCover()) await paintCover(id);
+        } finally {
+          painters--;
+        }
+      })();
     }
+  }
+
+  function takeNextCover(): string | undefined {
+    if (current.value) return undefined;
+    const i = Math.max(0, toPaint.findIndex((id) => onScreen.has(id)));
+    return toPaint.splice(i, 1)[0];
+  }
+
+  async function paintCover(nbId: string) {
+    const summary = notebooks.value.find((n) => n.id === nbId);
+    if (!summary || summary.deletedAt != null || paintFailed.get(nbId) === summary.updatedAt || coverFor.get(nbId) === summary.updatedAt) return;
+    const { PdfCache } = await import("../editor/pdf");
+    const { drawPagePng } = await import("../editor/pagePicture");
+    const pdfCache = new PdfCache((hash) => api.readAsset(nbId, hash), 1);
+    try {
+      const nb = await api.getNotebook(nbId);
+      const pageId = nb.pageOrder[0];
+      if (!pageId) return;
+      const page = await api.loadPage(nbId, pageId);
+      // as in the editor: a page this large takes too long to draw in the background
+      if (page.elements.length > 20000) throw new Error("page too large for a background picture");
+      const settings = useSettings();
+      const png = await drawPagePng(
+        page,
+        240,
+        { notebookId: nbId, infiniteCanvas: !!nb.infiniteCanvas, pdfCache, mono: settings.effectiveTheme() === "epaper", dark: false },
+        { paper: true },
+      );
+      // the notebook was opened meanwhile: its editor draws the page as it is now
+      if (!png || current.value?.id === nbId) return;
+      await api.saveThumbnail(nbId, pageId, png);
+      showCover(nbId, png);
+      coverFor.set(nbId, summary.updatedAt);
+    } catch (e) {
+      paintFailed.set(nbId, summary.updatedAt);
+      console.warn("cover", nbId, e);
+    } finally {
+      pdfCache.destroy();
+    }
+    // let the library take input between pictures
+    await new Promise((r) => setTimeout(r, 16));
   }
 
   async function createNotebook(title: string, paper: Paper, template: Template, vault?: string, infiniteCanvas = false) {
@@ -175,9 +276,10 @@ export const useLibrary = defineStore("library", () => {
     if (old) URL.revokeObjectURL(old);
     const nb = current.value;
     if (nb && nb.pageOrder[0] === pageId) {
-      const oc = covers.value[nb.id];
-      covers.value = { ...covers.value, [nb.id]: URL.createObjectURL(new Blob([png as BlobPart], { type: "image/png" })) };
-      if (oc) URL.revokeObjectURL(oc);
+      showCover(nb.id, png);
+      // the editor drew it: nothing left to draw, and the library reads the saved one again
+      toPaint = toPaint.filter((id) => id !== nb.id);
+      coverFor.delete(nb.id);
     }
   }
 
@@ -651,6 +753,7 @@ export const useLibrary = defineStore("library", () => {
     busy,
     thumbs,
     covers,
+    coverVisible,
     refresh,
     createNotebook,
     moveToVault,

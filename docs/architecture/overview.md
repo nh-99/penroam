@@ -44,7 +44,7 @@ tools/  docs/                   dev tools, documentation (benchmarks/ = local, g
 | Notebook/page/asset content | **Rust** (`penroam-storage`) | Operation journal + snapshots on disk. Every change is journaled as typed operations and acknowledged only after an fsync |
 | Open page working copy, undo/redo stacks | Vue editor (`PageSession`) | Mirror of the Rust page; edits are applied locally with the same semantics and queued to Rust in order |
 | Live pen samples | The active surface (web canvas or native view) | Never cross IPC while a stroke is live; only finalised strokes do |
-| Rendered caches (page bitmaps, thumbnails) | Frontend | Thumbnails are stored by Rust as derived files, never exported |
+| Rendered caches (page bitmaps, thumbnails) | Frontend | Thumbnails are stored by Rust as derived files, never exported or synced. Installing a synced page drops its thumbnail; the library draws missing covers (`editor/pagePicture.ts`) |
 | UI preferences (theme, tool colours, pen-only mode) | `localStorage` | Per device, not notebook data |
 | Search index (recognized handwriting, typed/PDF text) | Rust search worker | Derived, in the app cache directory; rebuildable, never exported or synced (§5) |
 

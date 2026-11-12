@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { EllipsisVertical, SquarePen, Download, FileDown, FolderInput, Printer, Trash, Palette, Lock, Copy } from "@lucide/vue";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import Menu from "./ui/Menu.vue";
@@ -15,7 +15,26 @@ const props = defineProps<{
   /** Offer filing it in a folder. */
   canMoveToFolder?: boolean;
 }>();
-const emit = defineEmits<{ open: []; rename: []; duplicate: []; export: []; exportPdf: []; print: []; trash: []; recolor: []; moveToVault: []; moveToFolder: [] }>();
+const emit = defineEmits<{
+  open: []; rename: []; duplicate: []; export: []; exportPdf: []; print: []; trash: []; recolor: []; moveToVault: []; moveToFolder: [];
+  /** The card came on screen (true) or left it (false); covers on screen are drawn first. */
+  visible: [boolean];
+}>();
+
+const root = ref<HTMLElement | null>(null);
+let seen: IntersectionObserver | null = null;
+onMounted(() => {
+  if (typeof IntersectionObserver === "undefined" || !root.value) return;
+  // a little ahead of the scroll, so the next row is drawn before it shows
+  seen = new IntersectionObserver((entries) => {
+    for (const e of entries) emit("visible", e.isIntersecting);
+  }, { rootMargin: "200px 0px" });
+  seen.observe(root.value);
+});
+onBeforeUnmount(() => {
+  seen?.disconnect();
+  emit("visible", false);
+});
 const updated = computed(() => {
   const d = new Date(props.nb.updatedAt);
   const days = Math.floor((Date.now() - d.getTime()) / 86400000);
@@ -26,7 +45,7 @@ const updated = computed(() => {
 </script>
 
 <template>
-  <article class="group relative flex flex-col">
+  <article ref="root" class="group relative flex flex-col">
     <button
       class="relative block aspect-[17/22] w-full overflow-hidden rounded-xl border border-line bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:-translate-y-0.5 epaper:border-2 epaper:border-black"
       :aria-label="`Open ${nb.title}`"

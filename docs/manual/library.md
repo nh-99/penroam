@@ -5,6 +5,9 @@
 The library is the first thing you see when Penroam opens. It shows every notebook as a card with
 its cover colour and a preview of its first page, newest first.
 
+Previews are kept on each device. When a notebook arrives from another device, or changes there,
+the library draws its new preview in the background, the notebooks on screen first.
+
 ![The library showing six notebooks with covers and page previews](../images/library.png)
 
 ## Notebooks

@@ -175,7 +175,7 @@ function recolor(nb: NotebookSummary) {
           </div>
         </div>
         <div v-else-if="list.length > 0 || cloudHere.length > 0" class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          <NotebookCard v-for="nb in list" :key="nb.id" :nb="nb" :cover="lib.covers[nb.id]"
+          <NotebookCard v-for="nb in list" :key="nb.id" :nb="nb" :cover="lib.covers[nb.id]" @visible="(v) => lib.coverVisible(nb.id, v)"
             :vault-name="vaultName(nb.id)" :can-move-to-vault="sync.openVaults.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-vault="moving = nb"
             :can-move-to-folder="lib.folders.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-folder="filing = nb"
             @open="lib.open(nb.id)" @rename="renaming = nb" @duplicate="lib.duplicate(nb.id)" @recolor="recolor(nb)"

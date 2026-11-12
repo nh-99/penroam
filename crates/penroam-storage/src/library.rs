@@ -1904,11 +1904,12 @@ impl Library {
 
     /// Records a page arriving from sync as a version of its own. A page new
     /// to this device gets no chain until it is edited, so a first download
-    /// doesn't store everything twice.
-    fn history_install(&mut self, nb_id: Uuid, old: Option<&Page>, new: &Page) {
-        let Some(old) = old else { return };
+    /// doesn't store everything twice. Returns whether the page differs from
+    /// `old` (always true for a page new to this device).
+    fn history_install(&mut self, nb_id: Uuid, old: Option<&Page>, new: &Page) -> bool {
+        let Some(old) = old else { return true };
         let Some(mut txn) = history::install_txn(nb_id, old, new) else {
-            return;
+            return false;
         };
         // a delta follows the old revision, even if journal batches were folded in
         if let TxnTarget::Page { revision, .. } = &mut txn.target {
@@ -1926,6 +1927,7 @@ impl Library {
         if let Err(e) = res {
             self.history_failed(nb_id, e);
         }
+        true
     }
 
     /// Reports a history failure once. History is a convenience: it never
@@ -2289,7 +2291,16 @@ impl Library {
                 base = base.max(old.revision);
             }
             page.revision = base + 1;
-            self.history_install(nb_id, old.as_ref(), &page);
+            let changed = self.history_install(nb_id, old.as_ref(), &page);
+            // history keeps elements and template; size and background also change the picture
+            let reshaped = old
+                .as_ref()
+                .is_some_and(|o| o.size != page.size || o.background != page.background);
+            if changed || reshaped {
+                // The cached thumbnail shows the old content. Dropping it is how the
+                // app learns to draw a new one; a failure only leaves an outdated picture.
+                let _ = fs::remove_file(self.thumb_path(nb_id, page.id));
+            }
             self.pending.remove(&key);
             if !self.pages.contains_key(&key) {
                 self.evict_if_needed(0)?;
@@ -2401,7 +2412,9 @@ impl Library {
     // ---------------------------------------------------------- thumbnails --
 
     /// Caches a page thumbnail (PNG under 4 MiB). Thumbnails are derived
-    /// data: never journaled and never exported.
+    /// data: never journaled, never exported and never synced.
+    /// [`Library::install_merged`] drops the thumbnail of every page it
+    /// installs, so a missing thumbnail means the app should draw one.
     pub fn save_thumbnail(&self, nb_id: Uuid, page_id: Uuid, png: &[u8]) -> Result<()> {
         self.notebook(nb_id)?;
         if png.len() > 4 << 20 || !png.starts_with(b"\x89PNG") {

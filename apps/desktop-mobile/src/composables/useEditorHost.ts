@@ -3,8 +3,8 @@ import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, type Ref 
 import type { Size } from "../generated/Size";
 import { InkEditor, type EditorState } from "../editor/engine";
 import { PALM_CONTACT_PX } from "../editor/input";
-import { PdfCache, PdfPageRenderer, renderPdfPage } from "../editor/pdf";
-import { canvasSheetRect, PageRenderer, pdfPageKey } from "../editor/renderer";
+import { PdfCache } from "../editor/pdf";
+import { drawPageCanvas, drawPagePng, type PictureContext } from "../editor/pagePicture";
 import type { Page } from "../generated/Page";
 import { PageSession, errorMessage } from "../editor/session";
 import { api, hasHost } from "../platform/ipc";
@@ -122,61 +122,28 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
    * behind it is drawn at that resolution from the original, so `width` sets the detail.
    * PNGs are exports, thumbnails and history previews, so they are never in dark colours.
    */
-  async function renderPagePng(page: Page, width: number, opts: { paper?: boolean } = {}): Promise<Uint8Array | null> {
-    const c = await renderPageCanvas(page, width, opts);
-    const blob: Blob | null = await new Promise((r) => c.toBlob(r, "image/png"));
-    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+  function renderPagePng(page: Page, width: number, opts: { paper?: boolean } = {}): Promise<Uint8Array | null> {
+    return drawPagePng(page, width, pictureContext(false), opts);
   }
 
-  /** Most pixels in a picture of an infinite canvas, which can be very tall. */
-  const MAX_PICTURE_PIXELS = 16_000_000;
-  /** Longest side of such a picture; WebKit refuses larger canvases. */
-  const MAX_PICTURE_SIDE = 16_384;
-
   /**
-   * Like `renderPagePng`, but keeps the picture as a canvas (continuous scrolling). On an
-   * infinite canvas the picture is of the drawing, cut the way exports cut it (or, with
-   * `paper`, at least a page in the page's shape, for previews), and may come out narrower
-   * than `width` when the drawing is too long for a canvas that wide. With `asShown` the page
-   * is drawn the way the editor shows it in the dark theme.
+   * Like `renderPagePng`, but keeps the picture as a canvas (continuous scrolling). With
+   * `asShown` the page is drawn the way the editor shows it in the dark theme.
    */
-  async function renderPageCanvas(page: Page, width: number, opts: { paper?: boolean; asShown?: boolean } = {}): Promise<HTMLCanvasElement> {
-    const host = document.createElement("div");
-    const r = new PageRenderer(host, () => page.elements);
-    const canvas = !!lib.current?.infiniteCanvas;
-    const [x0, y0, x1, y1] = canvas ? canvasSheetRect(page, opts.paper) : [0, 0, page.size.width, page.size.height];
-    const w = x1 - x0, h = y1 - y0;
-    if (canvas) {
-      width = Math.min(width, Math.sqrt(MAX_PICTURE_PIXELS * (w / h)), (MAX_PICTURE_SIDE * w) / h);
-      r.setPage(w, h, page.template, [x0, y0], true, page.size.width);
-      if (page.background) r.pdfBox = [0, 0, page.size.width, page.size.height];
-    } else r.setPage(w, h, page.template);
-    r.opts.mono = settings.effectiveTheme() === "epaper";
-    r.opts.dark = !!opts.asShown && settings.effectiveTheme() === "dark";
-    const res = canvas ? width / w : Math.min(Math.max(2, width / w), (2 * width) / w);
-    r.setResolution(res);
-    if (page.background && pdfCache) {
-      r.pdfBitmap = await new PdfPageRenderer().render(pdfCache, page.background, res).catch(() => null);
-    }
-    if (pdfCache) {
-      for (const e of page.elements) {
-        const key = e.type === "image" && e.pdfPage ? pdfPageKey(e.pdfPage) : null;
-        if (!key || e.type !== "image" || !e.pdfPage || r.pdfPages.has(key)) continue;
-        // the editor's bitmap of the page, when it is sharp enough, saves rendering it again
-        const open = editor.value?.renderer.pdfPages.get(key);
-        if (open && open.res >= res) {
-          r.pdfPages.set(key, open);
-          continue;
-        }
-        const bitmap = await renderPdfPage(pdfCache, e.pdfPage, res).catch(() => null);
-        if (bitmap) r.pdfPages.set(pdfPageKey(e.pdfPage), { canvas: bitmap, res });
-      }
-    }
-    const nb = lib.current;
-    if (nb) await r.loadImages(page.elements, (hash) => api.readAsset(nb.id, hash));
-    r.renderAll(null);
-    await r.whenComplete();
-    return r.snapshot(Math.round(width));
+  function renderPageCanvas(page: Page, width: number, opts: { paper?: boolean; asShown?: boolean } = {}): Promise<HTMLCanvasElement> {
+    return drawPageCanvas(page, width, pictureContext(!!opts.asShown), opts);
+  }
+
+  /** The open notebook's side of a page picture (see `editor/pagePicture.ts`). */
+  function pictureContext(asShown: boolean): PictureContext {
+    return {
+      notebookId: lib.current?.id ?? "",
+      infiniteCanvas: !!lib.current?.infiniteCanvas,
+      pdfCache,
+      mono: settings.effectiveTheme() === "epaper",
+      dark: asShown && settings.effectiveTheme() === "dark",
+      pdfPages: editor.value?.renderer.pdfPages,
+    };
   }
 
   /** Tells the editor the notebook's pages, with the sizes and thumbnails known so far. */
