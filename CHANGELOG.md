@@ -5,12 +5,29 @@ release notes and stops if the version has no entry.
 
 ## 0.1.0-beta.9
 
+* New: an on-screen ruler for straight lines. Show it with the **Ruler** button in the toolbar or
+  `R`, drag it into place, and turn it with its centre dial, two fingers, or `[` and `]`. It
+  clicks into place every 15°, and its ticks measure the page in centimetres at any zoom. A pen
+  or highlighter stroke that starts along an edge follows that edge. On BOOX and iPad the
+  device's own pen layer is off while the ruler is shown, so ink can feel a little slower then.
+* New: the first time you open Penroam, a short guided tour shows you the library and then your
+  first notebook. Take it again from **Settings → General**.
+* New: the notice about a new version now stays until you close it, and has an **Update** button
+  that installs the new version and shows how the download is going.
+* New: **Compare plans** in **Settings → Sync**, where your build can sell a plan, opens a window
+  that sets the free storage beside each Penroam Cloud plan and lists what every plan includes.
 * New: duplicate a notebook with **Duplicate** in the **⋮** menu on its card. The copy is called
   "*title* (copy)" and goes in the same folder, or the same vault. It has every page and
   attachment, but starts with an empty trash and no version history.
 * Fixed: on Android phones, the pen toolbar at the bottom sat on the system navigation area, so
   swiping along it could switch apps or go home. The toolbar, dialogs and notices now stay clear
   of the navigation bar and the gesture area.
+* Fixed: on Android devices with an older system WebView, PDFs could fail to show.
+* Fixed: clearing the search box while a search was running left the spinner turning.
+* Improved: you can keep writing while a notebook is exported, printed or backed up. An export or
+  backup saves each page as it was when it got to that page.
+* Improved: looking through a few pages no longer makes Penroam stop to save the page you're
+  editing, and opening or searching very large pages holds up your writing less.
 
 ## 0.1.0-beta.8
 
