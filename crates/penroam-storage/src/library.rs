@@ -1609,35 +1609,40 @@ impl Library {
     /// caller may fall back to [`Library::load_page`], which runs the full
     /// recovery path and reports it).
     pub fn read_page_detached(&self, nb_id: Uuid, page_id: Uuid) -> Result<Page> {
+        self.prepare_page_read(nb_id, page_id)?.finish()
+    }
+
+    /// The cheap half of [`Library::read_page_detached`], for callers that hold
+    /// the library behind a lock: it copies the journaled batches the snapshot
+    /// may lack (or the cached page), and [`PageRead::finish`] then reads and
+    /// decodes the snapshot without the library. Decoding a large page takes
+    /// tens of milliseconds, and every save waits for that lock.
+    ///
+    /// Finishing outside the lock is safe because snapshots are replaced by
+    /// rename and batches carry their revision: a snapshot checkpointed in the
+    /// meantime is newer, and the copied batches it already holds are skipped.
+    /// The one race it can lose is reading while a snapshot is being replaced,
+    /// which fails with `Corrupt`; read again under the lock in that case.
+    ///
+    /// Errors: `NotFound` for an unknown notebook or page.
+    pub fn prepare_page_read(&self, nb_id: Uuid, page_id: Uuid) -> Result<PageRead> {
         let nb = self.notebook(nb_id)?;
         if !nb.all_page_ids().any(|p| p == page_id) {
             return Err(StorageError::NotFound(format!("page {page_id}")));
         }
         if let Some(c) = self.pages.get(&(nb_id, page_id)) {
-            return Ok(c.page.clone());
+            return Ok(PageRead(PageReadInner::Cached(c.page.clone())));
         }
-        let (mut page, _) = self
-            .read_snapshot(nb_id, page_id, &self.page_path(nb_id, page_id))
-            .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {e}")))?;
-        for t in self.pending.get(&(nb_id, page_id)).into_iter().flatten() {
-            let TxnTarget::Page { revision, .. } = t.target else {
-                continue;
-            };
-            if revision <= page.revision {
-                continue;
-            }
-            if revision != page.revision + 1 {
-                return Err(StorageError::Corrupt(format!(
-                    "page {page_id}: journal gap at revision {revision}"
-                )));
-            }
-            let bodies: Vec<&DocumentOperation> = t.ops.iter().map(|o| &o.body).collect();
-            apply_to_page(&mut page, &bodies)
-                .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {e}")))?;
-            page.revision = revision;
-            page.updated_at = t.ops.last().map_or(page.updated_at, |o| o.at);
-        }
-        Ok(page)
+        Ok(PageRead(PageReadInner::Disk {
+            page_id,
+            path: self.page_path(nb_id, page_id),
+            legacy: self.legacy_page_path(nb_id, page_id),
+            pending: self
+                .pending
+                .get(&(nb_id, page_id))
+                .cloned()
+                .unwrap_or_default(),
+        }))
     }
 
     /// Runs `f` with a borrowed page (avoids cloning large pages).
@@ -1690,22 +1695,10 @@ impl Library {
         page_id: Uuid,
         path: &Path,
     ) -> std::result::Result<(Page, u64), String> {
-        let bytes = match fs::read(path) {
-            Ok(b) => b,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::NotFound
-                    && path == self.page_path(nb_id, page_id) =>
-            {
-                fs::read(self.legacy_page_path(nb_id, page_id)).map_err(|e| e.to_string())?
-            }
-            Err(e) => return Err(e.to_string()),
-        };
-        let page = decode_page_bytes(&bytes)?;
-        validate_page(&page).map_err(|e| e.0)?;
-        if page.id != page_id {
-            return Err(format!("file contains page {}", page.id));
-        }
-        Ok((page, bytes.len() as u64))
+        // only the current snapshot falls back to the old JSON file, never `.prev`
+        let legacy =
+            (path == self.page_path(nb_id, page_id)).then(|| self.legacy_page_path(nb_id, page_id));
+        read_snapshot_file(page_id, path, legacy.as_deref())
     }
 
     fn read_page(&mut self, nb_id: Uuid, page_id: Uuid) -> Result<CachedPage> {
@@ -2197,7 +2190,7 @@ impl Library {
         }
         Ok(self
             .journal
-            .read_all()?
+            .read_after(seq)?
             .into_iter()
             .flat_map(|t| t.ops)
             .filter(|o| o.local_sequence > seq)
@@ -2643,4 +2636,79 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Reads and checks one page snapshot. `legacy` is the old JSON file to try when the snapshot
+/// doesn't exist.
+fn read_snapshot_file(
+    page_id: Uuid,
+    path: &Path,
+    legacy: Option<&Path>,
+) -> std::result::Result<(Page, u64), String> {
+    let bytes = match (fs::read(path), legacy) {
+        (Ok(b), _) => b,
+        (Err(e), Some(legacy)) if e.kind() == std::io::ErrorKind::NotFound => {
+            fs::read(legacy).map_err(|e| e.to_string())?
+        }
+        (Err(e), _) => return Err(e.to_string()),
+    };
+    let page = decode_page_bytes(&bytes)?;
+    validate_page(&page).map_err(|e| e.0)?;
+    if page.id != page_id {
+        return Err(format!("file contains page {}", page.id));
+    }
+    Ok((page, bytes.len() as u64))
+}
+
+/// A page read started by [`Library::prepare_page_read`]; [`PageRead::finish`] completes it
+/// without the library.
+pub struct PageRead(PageReadInner);
+
+enum PageReadInner {
+    Cached(Page),
+    Disk {
+        page_id: Uuid,
+        path: PathBuf,
+        legacy: PathBuf,
+        pending: Vec<Txn>,
+    },
+}
+
+impl PageRead {
+    /// Reads the snapshot and applies the journaled batches it lacks.
+    ///
+    /// Errors: `Corrupt` when the snapshot is unreadable (including while it is being replaced)
+    /// or the journal can't be applied cleanly.
+    pub fn finish(self) -> Result<Page> {
+        let (page_id, path, legacy, pending) = match self.0 {
+            PageReadInner::Cached(page) => return Ok(page),
+            PageReadInner::Disk {
+                page_id,
+                path,
+                legacy,
+                pending,
+            } => (page_id, path, legacy, pending),
+        };
+        let (mut page, _) = read_snapshot_file(page_id, &path, Some(&legacy))
+            .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {e}")))?;
+        for t in &pending {
+            let TxnTarget::Page { revision, .. } = t.target else {
+                continue;
+            };
+            if revision <= page.revision {
+                continue;
+            }
+            if revision != page.revision + 1 {
+                return Err(StorageError::Corrupt(format!(
+                    "page {page_id}: journal gap at revision {revision}"
+                )));
+            }
+            let bodies: Vec<&DocumentOperation> = t.ops.iter().map(|o| &o.body).collect();
+            apply_to_page(&mut page, &bodies)
+                .map_err(|e| StorageError::Corrupt(format!("page {page_id}: {e}")))?;
+            page.revision = revision;
+            page.updated_at = t.ops.last().map_or(page.updated_at, |o| o.at);
+        }
+        Ok(page)
+    }
 }

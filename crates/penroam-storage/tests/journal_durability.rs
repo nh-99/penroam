@@ -1072,3 +1072,82 @@ fn a_crash_while_detaching_loses_nothing() {
         "detaching passes several write boundaries ({crashes})"
     );
 }
+
+#[test]
+fn a_page_read_finished_outside_the_library_survives_a_checkpoint_in_between() {
+    let d = tmp();
+    let root = d.path().join("lib");
+    let mut lib = Library::open(&root).unwrap();
+    let (nb, p) = lib
+        .create_notebook("A", PageDefaults::default(), None)
+        .unwrap();
+    let add = |id, base, el| batch(id, base, OpKind::AddElements { elements: vec![el] });
+    lib.apply_page_operations(nb.id, p.id, &add(10, 0, ink(1, 1)))
+        .unwrap();
+    // reopen so the page isn't cached and the edit lives only in the journal
+    lib.crash_for_tests();
+    let mut lib = Library::open(&root).unwrap();
+    let read = lib.prepare_page_read(nb.id, p.id).unwrap();
+
+    // what a search worker races against: the editor loads the page, edits it and the snapshot
+    // is rewritten before the worker decodes it
+    lib.load_page(nb.id, p.id).unwrap();
+    lib.apply_page_operations(nb.id, p.id, &add(20, 1, ink(2, 2)))
+        .unwrap();
+    lib.flush_all().unwrap();
+
+    let page = read.finish().unwrap();
+    // the newer snapshot wins and the copied batch it already holds isn't applied twice
+    assert_eq!(page.revision, 2);
+    assert_eq!(page.elements.len(), 2);
+    assert_eq!(page, lib.load_page(nb.id, p.id).unwrap());
+}
+
+#[test]
+fn operations_after_reads_only_what_is_newer_across_segments() {
+    let d = tmp();
+    let root = d.path().join("lib");
+    let mut lib = Library::open(&root).unwrap();
+    lib.set_sync_enabled(true).unwrap();
+    let (nb, p) = lib
+        .create_notebook("A", PageDefaults::default(), None)
+        .unwrap();
+    let mut through = Vec::new();
+    for i in 0..4u64 {
+        lib.apply_page_operations(
+            nb.id,
+            p.id,
+            &batch(
+                100 + u128::from(i) * 10,
+                i,
+                OpKind::AddElements {
+                    elements: vec![ink(u128::from(i) + 1, i as i64 + 1)],
+                },
+            ),
+        )
+        .unwrap();
+        through.push(lib.outbox_status().enqueued_through);
+        // a checkpoint seals the segment; with sync on, nothing un-uploaded is deleted
+        lib.flush_all().unwrap();
+    }
+    assert!(
+        journal_segments(&root).len() > 1,
+        "the test needs several segments"
+    );
+    let all: Vec<u64> = lib
+        .operations_after(0)
+        .unwrap()
+        .iter()
+        .map(|o| o.local_sequence)
+        .collect();
+    for &seq in &through {
+        let after: Vec<u64> = lib
+            .operations_after(seq)
+            .unwrap()
+            .iter()
+            .map(|o| o.local_sequence)
+            .collect();
+        let expected: Vec<u64> = all.iter().copied().filter(|s| *s > seq).collect();
+        assert_eq!(after, expected, "operations after {seq}");
+    }
+}

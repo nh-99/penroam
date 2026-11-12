@@ -2740,6 +2740,137 @@ mod store_tests {
         assert_eq!(v.managed_in.as_deref(), Some("app_store"));
     }
 
+    mod store_purchase {
+        use super::*;
+        use tauri_plugin_store_billing::PurchaseOutcome;
+
+        fn store_view() -> Option<AccountView> {
+            Some(to_view_for(account(), false, true))
+        }
+
+        /// Runs a purchase of `offer`; returns the result, what the store was asked to sell,
+        /// and which transactions were settled.
+        fn buy(
+            view: Option<AccountView>,
+            offer: &str,
+            store: Result<PurchaseOutcome, String>,
+            settled: StoreSettled,
+        ) -> (
+            Result<StorePurchaseResult, CmdError>,
+            Option<String>,
+            Vec<String>,
+        ) {
+            let mut asked = None;
+            let mut reported = Vec::new();
+            let r = store_purchase(
+                view,
+                offer,
+                |product, _token| {
+                    asked = Some(product.to_string());
+                    store
+                },
+                |t| {
+                    reported.push(t);
+                    settled
+                },
+            );
+            (r, asked, reported)
+        }
+
+        fn applied() -> StoreSettled {
+            StoreSettled {
+                applied: 1,
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn a_paid_purchase_is_reported_to_the_server() {
+            let (r, asked, reported) = buy(
+                store_view(),
+                "both",
+                Ok(PurchaseOutcome::Purchased("7".into())),
+                applied(),
+            );
+            assert_eq!(asked.as_deref(), Some("p.monthly"));
+            assert_eq!(reported, ["7"]);
+            assert_eq!(r.ok().map(|r| r.status), Some("active"));
+        }
+
+        #[test]
+        fn cancelled_and_pending_purchases_settle_nothing() {
+            for (outcome, status) in [
+                (PurchaseOutcome::Cancelled, "cancelled"),
+                (PurchaseOutcome::Pending, "pending"),
+            ] {
+                let (r, _, reported) = buy(store_view(), "both", Ok(outcome), applied());
+                assert!(reported.is_empty(), "nothing to report or finish yet");
+                assert_eq!(r.ok().map(|r| r.status), Some(status));
+            }
+        }
+
+        #[test]
+        fn a_paid_purchase_the_server_lacks_is_waiting() {
+            let waiting = StoreSettled {
+                waiting: 1,
+                message: Some("try later".into()),
+                ..Default::default()
+            };
+            let (r, _, _) = buy(
+                store_view(),
+                "both",
+                Ok(PurchaseOutcome::Purchased("7".into())),
+                waiting,
+            );
+            let r = r.ok().unwrap();
+            assert_eq!(
+                (r.status, r.message.as_deref()),
+                ("waiting", Some("try later"))
+            );
+        }
+
+        #[test]
+        fn an_offer_the_store_doesnt_sell_is_refused_before_the_store_is_asked() {
+            // "stripe-only" has no store product; the WebView can't name a product directly
+            for offer in ["stripe-only", "made-up"] {
+                let (r, asked, reported) = buy(
+                    store_view(),
+                    offer,
+                    Ok(PurchaseOutcome::Purchased("7".into())),
+                    applied(),
+                );
+                assert!(r.is_err());
+                assert!(asked.is_none() && reported.is_empty());
+            }
+        }
+
+        #[test]
+        fn no_account_token_or_no_sync_means_no_purchase() {
+            let mut a = account();
+            a.store_account_token = None;
+            let (r, asked, _) = buy(
+                Some(to_view_for(a, false, true)),
+                "both",
+                Ok(PurchaseOutcome::Purchased("7".into())),
+                applied(),
+            );
+            assert!(r.is_err() && asked.is_none());
+            let (r, asked, _) = buy(
+                None,
+                "both",
+                Ok(PurchaseOutcome::Purchased("7".into())),
+                applied(),
+            );
+            assert!(r.is_err() && asked.is_none());
+        }
+
+        #[test]
+        fn a_store_error_reports_nothing() {
+            let (r, _, reported) = buy(store_view(), "both", Err("offline".into()), applied());
+            assert!(r.is_err() && reported.is_empty());
+        }
+    }
+
     #[test]
     fn a_build_sells_through_the_web_or_a_store_never_both() {
         // Checked at compile time: a build that breaks this doesn't compile its tests.
@@ -3068,7 +3199,25 @@ pub fn sync_store_purchase(
     if !STORE_PURCHASES {
         return Err(err("this build doesn't sell through a store"));
     }
-    let view = ask(&state.sync, Cmd::Account)?.ok_or_else(|| err("sync is not set up"))?;
+    let view = ask(&state.sync, Cmd::Account)?;
+    store_purchase(
+        view,
+        &offer_id,
+        |product, token| tauri_plugin_store_billing::purchase(&app, product, token),
+        |transaction| settle_store(&app, &state, &[transaction]),
+    )
+}
+
+/// The steps of [`sync_store_purchase`], with the store and the settling passed in so tests can
+/// script them. Only a paid purchase is settled: a cancelled or pending one has no transaction
+/// to report yet, and nothing is finished.
+fn store_purchase(
+    view: Option<AccountView>,
+    offer_id: &str,
+    buy: impl FnOnce(&str, &str) -> Result<tauri_plugin_store_billing::PurchaseOutcome, String>,
+    settle_paid: impl FnOnce(String) -> StoreSettled,
+) -> Result<StorePurchaseResult, CmdError> {
+    let view = view.ok_or_else(|| err("sync is not set up"))?;
     let offer = view
         .store_offers
         .iter()
@@ -3078,8 +3227,7 @@ pub fn sync_store_purchase(
         .store_account_token
         .as_deref()
         .ok_or_else(|| err("this account can't buy a plan right now"))?;
-    let bought =
-        tauri_plugin_store_billing::purchase(&app, &offer.product_id, token).map_err(err)?;
+    let bought = buy(&offer.product_id, token).map_err(err)?;
     let transaction = match bought {
         tauri_plugin_store_billing::PurchaseOutcome::Cancelled => {
             return Ok(StorePurchaseResult {
@@ -3095,7 +3243,7 @@ pub fn sync_store_purchase(
         }
         tauri_plugin_store_billing::PurchaseOutcome::Purchased(t) => t,
     };
-    let s = settle_store(&app, &state, &[transaction]);
+    let s = settle_paid(transaction);
     Ok(StorePurchaseResult {
         status: if s.applied > 0 {
             "active"

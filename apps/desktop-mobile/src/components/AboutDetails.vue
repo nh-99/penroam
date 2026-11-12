@@ -34,9 +34,17 @@ const showNotices = ref(false);
 onMounted(async () => {
   canUpdate.value = await updatesApi.supported().catch(() => false);
   notices.value = await diagnosticsApi.thirdPartyNotices().catch(() => null);
-  if (canUpdate.value) unlisten = await updatesApi.onProgress((p) => (progress.value = p));
+  if (!canUpdate.value) return;
+  const off = await updatesApi.onProgress((p) => (progress.value = p)).catch(() => null);
+  // the dialog may have closed while the listener was being registered; don't leak it
+  if (gone) off?.();
+  else unlisten = off;
 });
-onBeforeUnmount(() => unlisten?.());
+let gone = false;
+onBeforeUnmount(() => {
+  gone = true;
+  unlisten?.();
+});
 
 async function check() {
   checking.value = true;

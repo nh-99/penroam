@@ -115,6 +115,7 @@ onMounted(async () => {
   // a view that just opened (the editor, after a notebook loads) may not have laid out its controls yet
   await nextTick();
   await new Promise((r) => setTimeout(r, 250));
+  if (unmounted) return;
   steps.value = TOURS[props.name].flatMap((step): Shown[] => {
     if (!step.target.length) return [{ step, target: null }];
     const target = findTarget(step);
@@ -124,7 +125,9 @@ onMounted(async () => {
   else void show(0);
 });
 
+let unmounted = false;
 onBeforeUnmount(() => {
+  unmounted = true;
   ui.overlays--;
   window.removeEventListener("resize", measure);
   window.removeEventListener("keydown", onKey, true);

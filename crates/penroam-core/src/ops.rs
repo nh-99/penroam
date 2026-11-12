@@ -185,6 +185,10 @@ pub fn replay_batch(
     Ok(())
 }
 
+/// Up to this many replacements, finding each element by scanning is cheaper than building an
+/// index of the page.
+const REPLACE_SCAN_LIMIT: usize = 8;
+
 pub(crate) fn apply_op_unchecked(
     elements: &mut Vec<Element>,
     template: &mut Template,
@@ -211,10 +215,28 @@ pub(crate) fn apply_op_unchecked(
         }
         OpKind::ReplaceElements { elements: repl } => {
             let mut resort = false;
-            for e in repl {
-                if let Some(slot) = elements.iter_mut().find(|x| x.id() == e.id()) {
-                    resort |= slot.z() != e.z();
-                    *slot = e.clone();
+            let mut replace = |slot: &mut Element, e: &Element| {
+                resort |= slot.z() != e.z();
+                *slot = e.clone();
+            };
+            if repl.len() <= REPLACE_SCAN_LIMIT {
+                for e in repl {
+                    if let Some(slot) = elements.iter_mut().find(|x| x.id() == e.id()) {
+                        replace(slot, e);
+                    }
+                }
+            } else {
+                // A lasso move replaces thousands of strokes at once, and a scan per stroke
+                // made that quadratic. Index by id instead, keeping the first element with
+                // each id as the scan did, so the result is identical.
+                let mut at: HashMap<Uuid, usize> = HashMap::with_capacity(elements.len());
+                for (i, x) in elements.iter().enumerate() {
+                    at.entry(x.id()).or_insert(i);
+                }
+                for e in repl {
+                    if let Some(&i) = at.get(&e.id()) {
+                        replace(&mut elements[i], e);
+                    }
                 }
             }
             if resort {
@@ -266,4 +288,76 @@ pub fn page_diff(from: &Page, to: &Page) -> Vec<OpKind> {
 /// Stable sort: equal z keeps insertion order.
 fn sort_by_z(elements: &mut [Element]) {
     elements.sort_by_key(Element::z);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{InkPoint, InkStroke, InkTool};
+
+    fn stroke(id: u128, z: i64, x: f64) -> Element {
+        Element::Ink(InkStroke {
+            id: Uuid::from_u128(id),
+            z,
+            tool: InkTool::Pen,
+            color: "#000000".into(),
+            opacity: 1.0,
+            width: 2.0,
+            pressure: true,
+            source: "test".into(),
+            input: Default::default(),
+            points: vec![InkPoint {
+                x,
+                y: 1.0,
+                pressure: 0.5,
+                tilt_x: 0.0,
+                tilt_y: 0.0,
+                time_us: 0,
+                twist: None,
+                flags: None,
+            }],
+            extra: Default::default(),
+        })
+    }
+
+    /// The plain scan the indexed path must match.
+    fn by_scan(elements: &mut [Element], repl: &[Element]) {
+        let mut resort = false;
+        for e in repl {
+            if let Some(slot) = elements.iter_mut().find(|x| x.id() == e.id()) {
+                resort |= slot.z() != e.z();
+                *slot = e.clone();
+            }
+        }
+        if resort {
+            sort_by_z(elements);
+        }
+    }
+
+    #[test]
+    fn large_replacements_match_the_scan() {
+        // 200 strokes, plus a duplicate id (only the first copy is replaced) and replacements
+        // that move z, repeat an id and name a stroke that isn't there
+        let mut page: Vec<Element> = (0..200).map(|i| stroke(i, i as i64, 0.0)).collect();
+        page.push(stroke(5, 500, 9.0));
+        for n in [1, REPLACE_SCAN_LIMIT, REPLACE_SCAN_LIMIT + 1, 150] {
+            let mut repl: Vec<Element> = (0..n as u128)
+                .map(|i| stroke(i * 3 % 200, (i as i64 * 7) % 300, 1.0))
+                .collect();
+            repl.push(stroke(5, 42, 2.0));
+            repl.push(stroke(9999, 1, 3.0));
+            let mut fast = page.clone();
+            let mut template = Template::default();
+            apply_op_unchecked(
+                &mut fast,
+                &mut template,
+                &OpKind::ReplaceElements {
+                    elements: repl.clone(),
+                },
+            );
+            let mut slow = page.clone();
+            by_scan(&mut slow, &repl);
+            assert_eq!(fast, slow, "{n} replacements");
+        }
+    }
 }

@@ -31,6 +31,8 @@ async function run() {
     hits.value = [];
     searched.value = "";
     error.value = null;
+    // an in-flight request is now stale and will skip its own reset, so clear the spinner here
+    busy.value = false;
     return;
   }
   busy.value = true;

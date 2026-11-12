@@ -690,8 +690,26 @@ impl Journal {
     /// Re-reads every committed transaction (used for fallback recovery and
     /// the outbox). Damaged regions are skipped.
     pub fn read_all(&self) -> Result<Vec<Txn>, JournalError> {
+        self.read_segments(None)
+    }
+
+    /// Like [`Journal::read_all`], but skips segments whose transactions all have sequence
+    /// numbers at or below `seq`. The rest are returned whole: a kept segment can still hold
+    /// some transactions at or below `seq`, so filter the operations too. The sync engine asks
+    /// for this on every cycle, and while sync is on segments are kept until uploaded, so
+    /// reading only the newer ones keeps the cost from growing with time offline.
+    pub fn read_after(&self, seq: u64) -> Result<Vec<Txn>, JournalError> {
+        self.read_segments(Some(seq))
+    }
+
+    fn read_segments(&self, after: Option<u64>) -> Result<Vec<Txn>, JournalError> {
         let mut out = Vec::new();
         for s in &self.segments {
+            // Records in a segment are in sequence order, and `last_seq` is found by the same
+            // scan that reads them, so a segment ending at or below `after` has nothing newer.
+            if after.is_some_and(|a| s.last_seq.is_some_and(|l| l <= a)) {
+                continue;
+            }
             let bytes = match fs::read(&s.path) {
                 Ok(b) => b,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,

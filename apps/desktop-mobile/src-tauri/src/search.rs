@@ -781,11 +781,31 @@ impl Worker {
         let Some(ix) = self.indexes.get(&owner) else {
             return;
         };
-        // copy what is needed under the lock, then let go of it
+        // Copy what is needed under the lock, and decode the page after letting go of it:
+        // decoding a large page takes tens of milliseconds, and saves wait for this lock.
         let got = self.with_lib(|lib| {
             let nb = lib.notebook(nb_id).ok()?.clone();
             let idx = nb.page_order.iter().position(|p| *p == page_id)?;
-            let page = lib.read_page_detached(nb_id, page_id).ok()?;
+            let read = lib.prepare_page_read(nb_id, page_id).ok()?;
+            Some((nb, idx as u32, read))
+        });
+        let Some(Some((nb, idx, read))) = got else {
+            // gone (trashed, purged) or unreadable: bring the notebook's rows up to date
+            self.notebook(nb_id);
+            return;
+        };
+        let page = match read.finish() {
+            Ok(page) => Some(page),
+            // the snapshot was being replaced while we read it: read again under the lock
+            Err(_) => self
+                .with_lib(|lib| lib.read_page_detached(nb_id, page_id).ok())
+                .flatten(),
+        };
+        let Some(page) = page else {
+            self.notebook(nb_id);
+            return;
+        };
+        let got = self.with_lib(|lib| {
             // PDFs whose text isn't cached yet: the background's, and those of PDF pages
             // placed on an infinite canvas
             let mut hashes: Vec<&str> = page
@@ -806,11 +826,9 @@ impl Worker {
                 .filter(|h| !has_pdf(ix, h))
                 .filter_map(|h| lib.read_asset(nb_id, h).ok().map(|b| (h.to_string(), b)))
                 .collect();
-            Some((nb, idx as u32, page, pdf))
+            pdf
         });
-        let Some(Some((nb, idx, page, pdf))) = got else {
-            // gone (trashed, purged) or unreadable: bring the notebook's rows up to date
-            self.notebook(nb_id);
+        let Some(pdf) = got else {
             return;
         };
         let rkey = self.recognizer_key();

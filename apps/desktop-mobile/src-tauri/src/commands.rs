@@ -417,9 +417,12 @@ pub fn restore_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid
 /// pages). After a very large page the heap is trimmed shortly afterwards.
 #[tauri::command(async)]
 pub fn load_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Response> {
-    let bytes = lib!(state)
-        .with_page(notebook_id, page_id, serde_json::to_vec)?
-        .map_err(|e| invalid(e.to_string()))?;
+    // Copy the page under the library lock and serialise it after releasing the lock. Encoding
+    // JSON for a large page takes about 15 times as long as cloning it, and every save waits
+    // for this lock.
+    let page = lib!(state).with_page(notebook_id, page_id, Page::clone)?;
+    let bytes = serde_json::to_vec(&page).map_err(|e| invalid(e.to_string()))?;
+    drop(page);
     let big = bytes.len() > (4 << 20);
     let r = Response::new(bytes);
     if big {
