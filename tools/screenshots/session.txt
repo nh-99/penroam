@@ -140,7 +140,7 @@ key Escape
 sleep 800
 
 # manual: the New notebook dialog
-move 1976 64
+move 1880 64
 down 1
 up 1
 sleep 1500

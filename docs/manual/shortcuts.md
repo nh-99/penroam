@@ -9,6 +9,8 @@ On macOS, use `Cmd` wherever this page says `Ctrl`.
 | Keys | Does |
 |---|---|
 | `Ctrl+K` or `Ctrl+F` | Search all notebooks |
+| `Ctrl+A` | Select every notebook in the open folder (while selecting) |
+| `Esc` | Stop selecting |
 
 ## In a notebook
 

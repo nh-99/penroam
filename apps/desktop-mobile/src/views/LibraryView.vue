@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { BookPlus, ChevronRight, FolderPlus, Import, Settings, Trash, ArchiveArrowUp, NotebookPen, TriangleAlert, ArrowLeft, Search, Cloud, LoaderCircle, EllipsisVertical } from "@lucide/vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { BookPlus, ChevronRight, FolderPlus, Import, Settings, Trash, ArchiveArrowUp, NotebookPen, TriangleAlert, ArrowLeft, Search, Cloud, LoaderCircle, EllipsisVertical, SquareCheckBig, X, FolderInput } from "@lucide/vue";
 import logoUrl from "../assets/logo.png";
 import { useLibrary } from "../stores/library";
 import { COVERS } from "../editor/covers";
@@ -130,8 +130,71 @@ function openHit(h: SearchHit) {
   void lib.open(h.notebookId, h.pageId ?? undefined);
 }
 
+// Selection mode: picking notebooks for a bulk action. The selection survives opening folders, so
+// notebooks from several folders can be moved or trashed together. Only this device's own
+// notebooks can be chosen; shared-with-me and cloud-only cards have their own actions.
+const selecting = ref(false);
+const selectedIds = ref<string[]>([]);
+const filingSelected = ref(false);
+/** The chosen notebooks that still exist; one deleted elsewhere drops out by itself. */
+const selected = computed(() => lib.live.filter((n) => selectedIds.value.includes(n.id) && !sharing.withMeIds.has(n.id)));
+const allHereSelected = computed(() => list.value.length > 0 && list.value.every((n) => selectedIds.value.includes(n.id)));
+const inVault = (id: string) => !!sync.vaults.notebooks[id];
+/** The folder every chosen notebook is in, to preselect in the picker; `null` when they differ. */
+const selectedFolder = computed(() => {
+  const fs = new Set(selected.value.map((n) => n.folder ?? null));
+  return fs.size === 1 ? [...fs][0] : null;
+});
+
+function startSelecting(id?: string) {
+  selecting.value = true;
+  selectedIds.value = id ? [id] : [];
+}
+function stopSelecting() {
+  selecting.value = false;
+  selectedIds.value = [];
+}
+function toggleSelected(id: string) {
+  const i = selectedIds.value.indexOf(id);
+  if (i >= 0) selectedIds.value.splice(i, 1);
+  else selectedIds.value.push(id);
+}
+/** Selects every notebook in the open folder, or clears them when they're all selected already. */
+function toggleAllHere() {
+  const here = list.value.map((n) => n.id);
+  if (allHereSelected.value) selectedIds.value = selectedIds.value.filter((id) => !here.includes(id));
+  else selectedIds.value = [...new Set([...selectedIds.value, ...here])];
+}
+async function trashSelected() {
+  const ids = selected.value.map((n) => n.id);
+  stopSelecting();
+  await lib.trashMany(ids);
+}
+async function fileSelected(folder: string | null) {
+  filingSelected.value = false;
+  // vault notebooks stay outside folders; the backend refuses them, so leave them out up front
+  const ids = selected.value.filter((n) => !inVault(n.id)).map((n) => n.id);
+  const skipped = selected.value.length - ids.length;
+  stopSelecting();
+  await lib.fileMany(ids, folder);
+  if (skipped) ui.toast("info", `${skipped} notebook${skipped === 1 ? " is" : "s are"} in a vault and stayed where ${skipped === 1 ? "it was" : "they were"}.`);
+}
+watch(showTrash, (t) => t && stopSelecting());
+
 function onKey(e: KeyboardEvent) {
   const k = e.key.toLowerCase();
+  if (selecting.value && ui.overlays === 0) {
+    if (k === "escape") {
+      e.preventDefault();
+      stopSelecting();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && k === "a") {
+      e.preventDefault();
+      if (!allHereSelected.value) toggleAllHere();
+      return;
+    }
+  }
   if ((e.ctrlKey || e.metaKey) && (k === "k" || k === "f") && ui.overlays === 0) {
     e.preventDefault();
     search.panelOpen = true;
@@ -165,7 +228,19 @@ function recolor(nb: NotebookSummary) {
 <template>
   <div class="flex h-full flex-col safe-top safe-x">
     <header class="flex items-center gap-2 border-b border-line px-4 py-3 sm:px-6">
-      <template v-if="!showTrash">
+      <template v-if="selecting">
+        <IconBtn label="Stop selecting" shortcut="Esc" @click="stopSelecting"><X :size="20" /></IconBtn>
+        <h1 class="mr-auto min-w-0 truncate text-lg font-semibold" aria-live="polite">{{ selected.length }} selected</h1>
+        <Btn variant="ghost" class="shrink-0" :disabled="list.length === 0" @click="toggleAllHere">{{ allHereSelected ? "Select none" : "Select all" }}</Btn>
+        <Btn v-if="lib.folders.length > 0" variant="outline" class="shrink-0 max-sm:px-0" aria-label="Move selected to a folder"
+          :disabled="!selected.some((n) => !inVault(n.id))" @click="filingSelected = true">
+          <FolderInput :size="18" /><span class="hidden sm:inline" aria-hidden="true">Move to folder…</span>
+        </Btn>
+        <Btn variant="danger" class="shrink-0 max-sm:px-0" aria-label="Move selected to the trash" :disabled="selected.length === 0" @click="trashSelected">
+          <Trash :size="18" /><span class="hidden sm:inline" aria-hidden="true">Move to trash</span>
+        </Btn>
+      </template>
+      <template v-else-if="!showTrash">
         <img :src="logoUrl" alt="" class="h-8 w-8 shrink-0 rounded-lg" aria-hidden="true" />
         <h1 class="mr-auto min-w-0 truncate text-lg font-semibold tracking-tight">Penroam</h1>
         <IconBtn label="Search notebooks" :shortcut="`${mod}+K`" @click="search.panelOpen = true"><Search :size="20" /></IconBtn>
@@ -174,6 +249,7 @@ function recolor(nb: NotebookSummary) {
         <Btn variant="primary" class="shrink-0 max-sm:px-0" aria-label="New notebook" @click="showNew = true"><BookPlus :size="18" /><span class="hidden sm:inline" aria-hidden="true">New notebook</span></Btn>
         <!-- phones don't have room for every action, so the less frequent ones go in a menu -->
         <div class="hidden items-center gap-2 sm:flex">
+          <IconBtn v-if="list.length > 0" label="Select notebooks" @click="startSelecting()"><SquareCheckBig :size="20" /></IconBtn>
           <IconBtn label="New folder" @click="showNewFolder = true"><FolderPlus :size="20" /></IconBtn>
           <IconBtn label="Import notebooks and documents" @click="lib.importFiles()"><Import :size="20" /></IconBtn>
           <IconBtn :label="`Trash (${lib.trashed.length + sync.cloudTrash.length})`" @click="showTrash = true"><Trash :size="20" /></IconBtn>
@@ -184,6 +260,7 @@ function recolor(nb: NotebookSummary) {
               <EllipsisVertical :size="20" />
             </button>
           </template>
+          <MenuItem v-if="list.length > 0" @click="startSelecting()"><SquareCheckBig :size="16" />Select notebooks</MenuItem>
           <MenuItem @click="showNewFolder = true"><FolderPlus :size="16" />New folder</MenuItem>
           <MenuItem @click="lib.importFiles()"><Import :size="16" />Import…</MenuItem>
           <MenuItem @click="showTrash = true"><Trash :size="16" />Trash ({{ lib.trashed.length + sync.cloudTrash.length }})</MenuItem>
@@ -254,6 +331,7 @@ function recolor(nb: NotebookSummary) {
         </div>
         <div v-else-if="list.length > 0 || cloudHere.length > 0" class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           <NotebookCard v-for="nb in list" :key="nb.id" :nb="nb" :cover="lib.covers[nb.id]" @visible="(v) => lib.coverVisible(nb.id, v)"
+            :selecting="selecting" :selected="selectedIds.includes(nb.id)" @select="selecting ? toggleSelected(nb.id) : startSelecting(nb.id)"
             :vault-name="vaultName(nb.id)" :can-move-to-vault="sync.openVaults.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-vault="moving = nb"
             :can-move-to-folder="lib.folders.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-folder="filing = nb"
             @open="lib.open(nb.id)" :shared-status="sharedStatusOf(nb.id)" @share="sharingNb = { id: nb.id, title: nb.title }" @rename="renaming = nb" @duplicate="lib.duplicate(nb.id)" @recolor="recolor(nb)"
@@ -299,6 +377,8 @@ function recolor(nb: NotebookSummary) {
     <MoveToVaultDialog v-if="moving" :notebook="moving" @close="moving = null" />
     <FolderPickerDialog v-if="filing" :title="`Move “${filing.title}” to a folder`" :current="filing.folder ?? null"
       @close="filing = null" @choose="(f) => { lib.fileNotebook(filing!.id, f); filing = null; }" />
+    <FolderPickerDialog v-if="filingSelected" :title="`Move ${selected.length} notebook${selected.length === 1 ? '' : 's'} to a folder`" :current="selectedFolder"
+      @close="filingSelected = false" @choose="fileSelected" />
     <FolderPickerDialog v-if="movingFolder" :title="`Move “${movingFolder.name}” to a folder`" :current="movingFolder.parent ?? null" :moving="movingFolder.id"
       @close="movingFolder = null" @choose="(f) => { lib.moveFolder(movingFolder!.id, f); movingFolder = null; }" />
     <PromptDialog v-if="showNewFolder" title="New folder" label="Name" value="" confirm="Create"

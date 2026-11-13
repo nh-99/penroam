@@ -22,7 +22,22 @@ the library draws its new preview in the background, the notebooks on screen fir
   [vault](sync-and-vaults.md#vaults). It has every page and attachment, but not the original's
   trash or [version history](backups-and-history.md#version-history).
 
-On a phone, the folder, import and trash buttons are in the **⋮** menu at the top of the library.
+## Working with several notebooks at once
+
+To move or delete several notebooks together, click the select button at the top of the library
+(**Select notebooks**), or choose **Select** from a notebook's **⋮** menu. Clicking a card now ticks
+it instead of opening it. **Select all** ticks every notebook in the folder you have open, and you
+can open other folders and keep ticking: the selection stays until you act on it.
+
+* **Move to trash** moves every ticked notebook to the [trash](#the-trash). **Undo** on the message
+  that follows brings them all back.
+* **Move to folder…** files them all in one folder. Notebooks in a
+  [vault](sync-and-vaults.md#vaults) stay where they are.
+
+Press `Esc` or the **×** button to stop selecting. Notebooks shared with you and notebooks that are
+only in your account can't be selected.
+
+On a phone, the select, folder, import and trash buttons are in the **⋮** menu at the top of the library.
 
 ## Folders
 

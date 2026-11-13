@@ -28,12 +28,20 @@ async function place() {
   pos.value = { top, left };
 }
 
-watch(open, (v, old) => {
-  if (v && !old) {
+// Whether this menu is counted in `ui.overlays`. Tracked apart from `open` because a menu that
+// closes and unmounts in the same tick (an item that hides the menu itself) never runs the
+// watcher for the close, and the count would leak.
+let counted = false;
+watch(open, (v) => {
+  if (v && !counted) {
+    counted = true;
     ui.overlays++;
     void place();
   }
-  if (!v && old) ui.overlays--;
+  if (!v && counted) {
+    counted = false;
+    ui.overlays--;
+  }
 });
 function onDoc(e: PointerEvent) {
   const t = e.target as Node;
@@ -45,7 +53,7 @@ window.addEventListener("resize", onWin);
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", onDoc, true);
   window.removeEventListener("resize", onWin);
-  if (open.value) ui.overlays--;
+  if (counted) ui.overlays--;
 });
 function onKey(e: KeyboardEvent) {
   if (e.key === "Escape") {

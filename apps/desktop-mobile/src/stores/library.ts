@@ -453,6 +453,46 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
+  /**
+   * Runs `op` on each notebook in turn, then refreshes the library once. Keeps going past a
+   * failure so one bad notebook doesn't strand the rest, and returns the ids that worked; the
+   * first error is reported under `what`.
+   */
+  async function eachNotebook(ids: string[], op: (id: string) => Promise<unknown>, what: string): Promise<string[]> {
+    const done: string[] = [];
+    let firstError: unknown = null;
+    for (const id of ids) {
+      try {
+        await op(id);
+        done.push(id);
+      } catch (e) {
+        firstError ??= e;
+      }
+    }
+    await refresh();
+    if (firstError != null) fail(firstError, ids.length - done.length === 1 ? what : `${what} (${ids.length - done.length} notebooks)`);
+    return done;
+  }
+
+  const plural = (n: number) => `${n} notebook${n === 1 ? "" : "s"}`;
+
+  /** Moves several notebooks to the trash, with one Undo that restores them all. */
+  async function trashMany(ids: string[]) {
+    const done = await eachNotebook(ids, (id) => api.deleteNotebook(id), "Could not delete");
+    if (done.length) ui.toast("info", `${plural(done.length)} moved to the trash.`, { action: { label: "Undo", run: () => void restoreMany(done) } });
+  }
+
+  /** Brings several notebooks back from the trash. */
+  async function restoreMany(ids: string[]) {
+    await eachNotebook(ids, (id) => api.restoreNotebook(id), "Could not restore");
+  }
+
+  /** Files several notebooks in `folder` (`null` is the top level). */
+  async function fileMany(ids: string[], folder: string | null) {
+    const done = await eachNotebook(ids, (id) => api.fileNotebook(id, folder), "Could not move the notebook");
+    if (done.length) ui.toast("info", `${plural(done.length)} moved.`);
+  }
+
   async function purge(id: string) {
     try {
       await api.purgeNotebook(id);
@@ -741,6 +781,9 @@ export const useLibrary = defineStore("library", () => {
     moveFolder,
     deleteFolder,
     fileNotebook,
+    fileMany,
+    trashMany,
+    restoreMany,
     notebooks,
     live,
     trashed,
