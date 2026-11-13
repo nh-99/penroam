@@ -26,6 +26,14 @@ any format it can't read rather than change it.
 **I want my notes out of Penroam.** Export a notebook as `.penroam`, PDF, Markdown, text, PNG or SVG,
 or back up the whole library to one file. None of this needs an account.
 
+**I invited someone and they can't see it.** No email is sent. They need to open Penroam, signed in
+with the same verified email address, and accept under **Invitations** in the library. Invitations
+last 14 days; you can cancel and send a new one in the share dialog.
+
+**A shared notebook says "Access removed".** The owner removed you. The notebook stays on your
+device: choose **Keep a private copy** or **Remove from this device**. See
+[shared notebooks](manual/shared-notebooks.md#when-your-access-is-removed).
+
 **I forgot my vault's passphrase.** Use the vault's recovery key: choose **Unlock** or the key icon
 next to the vault, then **Use the recovery key**, and set a new passphrase. Any device that already
 has the vault keeps working too. Penroam can't reset either one, so without the passphrase, the

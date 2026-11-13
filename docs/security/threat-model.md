@@ -8,17 +8,19 @@ against the local development test server and other servers with the public sign
 
 ## Two levels of protection
 
-| | Ordinary notebooks | Notebooks in a vault |
-|---|---|---|
-| Adding a device | Sign in | Sign in, then the vault's passphrase or recovery key, once |
-| Encrypted before upload | Yes | Yes |
-| Who holds the key | Every device **and the server** | Devices. The server holds it only inside a passphrase lock |
-| Read by a malicious or breached server | **Yes**, if it has the stored key and its sealing secret | No, unless it guesses the passphrase offline |
-| Read with a stolen sign-in | **Yes** | No |
-| Lost passphrase and every device | The server still has the key | Recovery key, or the content is gone |
+| | Ordinary notebooks | Shared notebooks | Notebooks in a vault |
+|---|---|---|---|
+| Adding a device | Sign in | Sign in (as a member) | Sign in, then the vault's passphrase or recovery key, once |
+| Encrypted before upload | Yes | Yes | Yes |
+| Who holds the key | Every device **and the server** | Every member's devices **and the server** | Devices. The server holds it only inside a passphrase lock |
+| Read by a malicious or breached server | **Yes**, if it has the stored key and its sealing secret | **Yes**, the same way | No, unless it guesses the passphrase offline |
+| Read with a stolen sign-in | **Yes** | **Yes**, any member's | No |
+| Lost passphrase and every device | The server still has the key | The server still has the key | Recovery key, or the content is gone |
 
 The trade is deliberate. Ordinary sync is as simple as other note apps and offers about the same
-protection from the operator. Vaults are for what the user wouldn't want the operator to read.
+protection from the operator. Shared notebooks follow ordinary sync: they are **not** end-to-end
+encrypted. Vaults are for what the user wouldn't want the operator to read, and a vault notebook
+can't be shared (the app refuses, in the backend as well as the UI).
 
 ## What we protect
 
@@ -40,7 +42,9 @@ root secret is out of reach of all of them, since it can do anything a device ca
 2. **The network** between device and server (TLS is expected on real deployments; the
    design does not rely on it for confidentiality).
 3. **A removed device** that kept its keys and downloaded data.
-4. **Other local apps or users** on a device, within what the OS keychain/file permissions allow.
+4. **A member of a shared notebook**, or one who was removed: they hold the space's root and the
+   keys of every epoch they were part of, and may run a modified client.
+5. **Other local apps or users** on a device, within what the OS keychain/file permissions allow.
 
 Out of scope: a compromised operating system or Penroam binary on a trusted device, physical
 attacks on an unlocked device, and traffic analysis beyond what is listed under "What the
@@ -60,6 +64,13 @@ It also holds, for an ordinary account, the root secret (sealed at rest with a s
 database backup alone doesn't expose it). For a vault it sees that the vault exists, its owner, its
 size and activity, its passphrase lock and its encrypted name, but not which notebooks are in it. A
 device's name is its host name by default, which the server can read in the key log.
+
+For a shared notebook it holds the space's root secret, as for an ordinary account, so it can read
+the notebook. It knows who the members are, their roles and verified emails, and which member
+registered each device. The notebook's title travels sealed under a key derived from the space's
+root (`sealed_meta`), which the server could open with that root. Invitations are matched by the
+invitee's verified email; their responses don't say whether an email belongs to an account, and a
+space the caller isn't a member of answers `not_found`.
 
 ## Sign-in (servers with `auth.v1`)
 
@@ -104,7 +115,9 @@ passphrase, recovery key or a content key.
 
 ## Key hierarchy
 
-An account and each vault have one of these, independent of each other.
+An account, each vault and each shared notebook space have one of these, independent of each
+other. A space's root is stored on the server like an account's, and members fetch it with their
+own session; it also derives the space's title key.
 
 ```text
 root secret (256 bit, not stored by devices)
@@ -112,6 +125,7 @@ root secret (256 bit, not stored by devices)
  ├─ account signing key (Ed25519)      signs genesis and enrollments in the key log
  ├─ recovery key (X25519)              every epoch key is wrapped to it
  ├─ vault name key                     encrypts a vault's name (vaults only)
+ ├─ space title key                    seals a shared notebook's id and title (spaces only)
  └─ vault local key                    encrypts a vault locked on a device (vaults only, never sent)
 
 epoch key e (random, 256 bit; new epoch whenever a device is removed)
@@ -149,6 +163,50 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
   only against a server that doesn't use the stored key.
 * **No history rewrite:** clients pin the verified key-log prefix; a log that changes it is
   rejected (`server_cannot_inject_or_rewrite`).
+* **Shared notebooks stay in their space:** a shared notebook is synced only by its space's engine,
+  never by the account engine, and a space's engine installs only the one notebook it was assigned,
+  so a member can't push a second notebook, or folders, into anyone's library. Someone who isn't
+  a member gets nothing, the same answer as for a space that doesn't exist
+  (`a_shares_with_b_who_sees_everything_and_c_sees_nothing`). A space's root is accepted only if
+  the space's whole key log verifies against it
+  (`a_space_root_is_only_accepted_if_it_verifies_the_key_log`).
+* **Viewers can't change a shared notebook:** a viewer's engine never uploads, the app refuses every
+  changing command, and the server refuses a viewer's pushes, blob uploads and checkpoints, including
+  hand-made envelopes (`a_viewer_uploads_nothing_and_forged_writes_are_refused`).
+* **Removing a member starts a new epoch:** an owner device takes the removed member's devices out
+  of the space's key log, so the new epoch isn't granted to their device keys
+  (`removing_a_member_rotates_their_devices_out_of_the_key_log`). Every device of a space stores the
+  space's root next to its own keys, so this only helps against someone who extracted a removed
+  device's signing and encryption keys but not the stored root. It does **not** keep a removed
+  member, or anyone with a removed device's full storage, out of later content: see "Removed
+  members keep what they had, including the space's root" below.
+* **Every remaining device gets each new epoch.** In an account or a vault, a key-log entry that
+  removes a device must grant the new epoch to every device that stays and to the recovery key, and
+  a new device must receive the current epoch, or the log fails verification
+  (`a_removal_must_grant_the_new_epoch_to_everyone_who_stays`); existing clients have always
+  granted that much. In a shared notebook space every member holds the root, so a stricter and
+  simpler rule applies, and **a member can't lock the others out of writing or split them onto
+  different keys**:
+  * an epoch's key is whatever its recovery grant (the first, in the entry that started the epoch)
+    opens to with the space's root. Every member derives the same key. Device grants that disagree
+    are ignored and logged as a security event; they don't stop sync;
+  * an epoch whose recovery grant is missing or doesn't open is void. Devices keep sealing under
+    the last epoch that has a key, with that epoch's number, and open each envelope by the epoch it
+    names. The removal in that entry still takes effect, and the next proper removal starts a fresh
+    epoch. Until then the remaining devices stay on a key the removed device holds; that costs
+    nothing extra, because a space device stores the root, so rotation in a space never protected
+    against a removed device in the first place (see the paragraph on removed members);
+  * grants that are missing or misaddressed never fail a space's key log, so a bad entry can't put
+    every member into an integrity alert either. Signatures, the hash chain, who may sign and who
+    is a member are checked as strictly as anywhere.
+
+  Removals this client writes always grant every remaining device and the recovery key
+  (`junk_grants_in_a_removal_void_the_epoch_and_everyone_goes_on_writing`,
+  `split_device_grants_still_give_every_member_the_same_key`,
+  `a_recovery_only_removal_locks_nobody_out`, also across restarts).
+* **Access loss loses nothing:** a member whose access is removed keeps the notebook and every
+  unsent edit, read-only, and uploads nothing more; a private copy keeps the edits
+  (`removing_a_member_keeps_their_unsent_edits_and_uploads_nothing_more`).
 * **Replay/duplication safety:** operations are deduplicated by id; an id reused with different
   content is an integrity alert, never applied.
 * **No loss through sync:** local saves never wait for the network; queued operations survive
@@ -206,13 +264,69 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
 * **Moving a notebook into a vault doesn't remove its past.** What the main account already holds
   stays there, readable by anyone with the stored key, until the account is deleted. Only what's
   created in a vault was always private.
-* **Assignment is local.** Which notebooks are in a vault is recorded on each device, and a device
-  that loses `vault-notebooks.json` treats them as ordinary. A damaged file stops sync rather than
-  being read as empty.
+* **Assignment is local.** Which notebooks are in a vault or shared is recorded on each device, and a
+  device that loses `vault-notebooks.json` treats them as ordinary. A damaged file stops sync rather
+  than being read as empty; local editing goes on meanwhile, and nothing is uploaded until the file
+  reads again. An imported `.penroam` file or restored backup of a notebook that is or was shared on
+  the device gets a new id, so it can't be taken for the shared notebook
+  (`a_reimported_shared_notebook_gets_a_new_id`).
 * **Removing a device from a vault that the remover hasn't unlocked:** the server ends the device's
   access, but the vault's key isn't rotated until a device that has it unlocked removes it. A removed
   device can always decrypt what it could before. A device sign-out on the identity provider's side
   is the user's to do: the app can't reach it.
+* **Shared notebooks are readable by the server**, like ordinary ones: it stores the space's root.
+  Sharing an existing notebook shares its **history** too (the earlier versions in the account log
+  are re-published into the space), and the app says so before the first invitation.
+* **Removed members keep what they had, including the space's root.** A removed member (or one who
+  left) keeps every downloaded copy, and nothing can erase those remotely. They also keep the
+  space's **root secret**, because every member receives it so that they can join and add devices
+  without the owner being online (the server holds it, as for an ordinary account). Every epoch key
+  is wrapped to the recovery key that the root derives, so with the root they can unwrap **every
+  future epoch** from the key log, too. All they lack is the ciphertext: the server refuses all
+  their requests from the moment of removal, so reading later content needs the server's data by
+  other means (a server breach, a leak, or another member passing it on). Rotating the epoch on
+  removal therefore only helps against someone who holds a removed device's keys but not the root.
+  Older history is never re-encrypted, and the root of a space is never changed.
+* **Admitted again after removal.** A removed member's devices stay revoked in the space for good.
+  If they are invited and accept again, their devices join with new ids, and only after the copy
+  from the earlier membership was kept privately or removed; its unsent edits never go into the
+  new membership on their own.
+* **Low: a device enrolled in a space under a fresh id isn't reached by removing it from the
+  account.** A device normally uses its main-account id in a space, so removing it from the account
+  removes it there too. After being re-admitted, or when its main id was already registered in the
+  space by someone else, it uses a random id instead; removing the device from the person's own
+  account then doesn't reach it in the space until its space session expires (the owner can still
+  remove the member).
+* **Low: a member can use up a space's device allowance** by registering many devices; servers are
+  adding a cap per member.
+* **Which devices are revoked is the server's word.** Owner devices rotate out the devices the
+  server reports as revoked in a space, so a hostile server can make an owner rotate a member out;
+  it could refuse that member service anyway. It can't add a device to a space without the root.
+* **Checkpoints in a space come only from the owner.** A checkpoint is vouched for by the member who
+  signed it (see "Checkpoints" below), so an editor could publish one that leaves out other members'
+  operations, and a device recovering from it would never see them. In a space only the owner's
+  devices publish checkpoints: clients never attempt one as editor or viewer
+  (`only_the_owners_devices_publish_checkpoints_in_a_space`), and servers refuse a checkpoint from
+  anyone but the owner. A corrupt or wrongly signed checkpoint is refused, and a device joining
+  from it stays joining (`a_corrupt_checkpoint_is_refused_and_the_join_waits`).
+* **Members are trusted like an account's devices** within the space: an editor can write anything
+  to the notebook, including into its history. A space's sealed title is written only by its owner
+  (servers refuse anyone else). The notebook id inside it is used only for an invitee's first join;
+  the owner's own devices take the notebook from their share marker, and once a device has joined,
+  the id is fixed and the title only renames. A join is refused when the id is nil, already names a
+  notebook in the library or a vault, or belongs to another space, and a space maps to exactly one
+  notebook (`a_rewritten_sealed_title_can_never_pull_another_notebook_into_a_space`). A forged
+  title can still make an invitee's first join wait forever, which the owner fixes by renaming.
+* **Older clients and downgrades.** A client that doesn't know operation schema 5 parks the
+  `notebookShared` marker and pauses with "needs an update" (nothing is lost), but until it is
+  updated it keeps uploading its own edits of that notebook to the account, where only an updated
+  device of the account moves them into the space. A client downgraded to such a version ignores the
+  `shared` map in `vault-notebooks.json`, treats shared notebooks as ordinary and uploads them to its
+  own account. Assignment is local, as for vaults.
+* **Two owner devices sharing one notebook at once** each create a space. Every device picks the
+  same winner; the losing device moves its own edits there and removes its space locally, but the
+  losing space stays on the server (no route removes one), and anyone invited to it in the meantime
+  is not moved over.
 * **Recovery key loss:** with the passphrase, the recovery key and every device lost, nobody can
   decrypt a vault, including Penroam. With the recovery key exposed, an attacker with server access
   can enroll a device. Neither the recovery key nor a vault's root can be rotated yet; changing the

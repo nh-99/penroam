@@ -25,8 +25,9 @@ new, start with [Getting started](getting-started.md). The other chapters can be
     how to go back to an earlier version.
 11. [Sync and vaults](sync-and-vaults.md): keeping notebooks on several devices, and notes only
     you can read.
-12. [Settings](settings.md): themes, tool colours, touch input, updates and diagnostics.
-13. [Keyboard shortcuts](shortcuts.md): every shortcut in one place.
+12. [Shared notebooks](shared-notebooks.md): inviting people to read or write in a notebook.
+13. [Settings](settings.md): themes, tool colours, touch input, updates and diagnostics.
+14. [Keyboard shortcuts](shortcuts.md): every shortcut in one place.
 
 ## More help
 

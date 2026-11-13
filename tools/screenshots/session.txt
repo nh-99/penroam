@@ -177,7 +177,7 @@ sleep 500
 shot tour-editor
 key Escape
 sleep 800
-move 2424 48
+move 2340 48
 down 1
 up 1
 sleep 2000

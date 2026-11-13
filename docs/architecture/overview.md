@@ -152,6 +152,63 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   before moving anything, then the notebooks rejoin the library (`Library::attach_notebooks`) and the
   engine resumes reading the journal at the current position. Format:
   [`../formats/locked-vault.md`](../formats/locked-vault.md).
+* **Shared notebooks.** `penroam_sync::shared` syncs one notebook among several accounts. Each
+  shared notebook lives in a *sharing space* (`sharing.v1`, protocol §12f): a hidden account like a
+  vault that the sharing account owns and that holds exactly that notebook, with its own root
+  secret, key log, operation log, blobs and checkpoints. Members are other accounts with a role
+  (owner, editor, viewer). The server keeps the space's root like an ordinary account key, and every
+  member device fetches it with its own session and adds itself to the space's key log, which must
+  verify against that root. Each device runs one more `SyncEngine` per space (`Scope::Shared`, data
+  under `<library>/sync/shared/<id>/`), so cursors, acknowledgements and device sequences never
+  mix between spaces, accounts or people. Its sync uses a device session on the space, traded for
+  the account session on the space that the device's own session obtains. In a space a device
+  uses its id from the main account, unless that id was in the space before (the account was
+  removed and admitted again), in which case it gets a new one. `vault-notebooks.json` gains a `shared` map (notebook →
+  space, role, state). The account engine neither ingests nor installs a notebook listed there, and a
+  space's engine installs only its one notebook, and only once joining finished (everything pulled,
+  every referenced asset downloaded). Where a member files a shared notebook stays local, whatever
+  their role, and so does erasing it on one device. A notebook that is or was shared here can't be
+  imported or restored under its own id (`Library::set_reserved_ids`). In a space only the owner's
+  devices publish checkpoints.
+
+  Sharing an existing notebook keeps its id and its history. The app creates the space (idempotent,
+  with the root kept in the secret store first), stores the root, and re-publishes the notebook's
+  operations from the account log into the space in log order, as operations of the sharing device
+  with the same bodies and times and fixed derived ids. Then, under the library lock, it adds a
+  corrective diff so the space's notebook equals the library's, writes a `notebookShared` operation
+  (operation schema 5) into the account log and assigns the notebook. Each step is persisted
+  (`<library>/sync/shares/<notebook>.json`) and can be repeated after a crash. The owner's other
+  devices assign the notebook when they apply that marker, before installing anything of it, then
+  join the space. Edits they made without having seen the marker are re-published into the space by
+  the device that made them, before that device installs from the space. An older client parks the
+  marker and pauses with "needs an update" instead of guessing. If two devices of one account share
+  a notebook at the same time, the marker with the higher id wins on every device. The losing device
+  moves its edits from its own space into the winner and removes its own space locally; that space
+  stays on the server, empty of anything the winner lacks.
+
+  A viewer's engine never uploads, and every app command that changes a notebook refuses viewers and
+  notebooks whose access was removed (`require_writable` in `src-tauri/src/sharing.rs`); the server
+  refuses a viewer's writes as well. The one exception is page edits to a notebook whose access was
+  removed: they still reach the library, so batches in flight at that moment aren't lost, and they
+  stay on the device because that space's engine has stopped. A damaged owners file doesn't block
+  local edits; every engine refuses to sync with it instead. When access is removed (the server answers `access_revoked`, or
+  lists the membership as revoked or not at all), the space's engine copies the journal entries it
+  hasn't yet, stops for good and marks the notebook *access removed*. The notebook and its unsent
+  edits stay on the device, read-only; the user can keep a private copy (a duplicate under a new id
+  in the personal library) or remove the device's copy. Accepting a new invitation to the same
+  space waits until one of those happened: the old copy and its unsent edits are never merged into
+  the new membership. An owner device that sees a removed member's
+  devices still active in the space's key log removes them there, which starts a new key epoch
+  without their device keys (the member still holds the space's root, which can open every epoch;
+  only the server's refusal keeps them from new content). Each epoch's key in a space is
+  what its recovery grant opens to with the root, the same for every member; an epoch whose
+  recovery grant doesn't open is void, and devices keep using the last good one, so a member's bad
+  key-log entry can't lock the others out. Only the owner's devices publish
+  checkpoints and refresh the sealed title, and the notebook a space maps to is fixed: on the
+  owner's devices by the share marker, elsewhere at the first join, never later from the title. The
+  app's worker reconciles spaces after the main engine and the vaults, rereads the
+  lists of shared notebooks and invitations each pass, and emits `sync://shared` when what the
+  library shows changed. Security: [`../security/threat-model.md`](../security/threat-model.md).
 * **Sync engine.** `penroam-sync` keeps its own state under
   `<library>/sync/`: an append-only operation log of every synced operation (local and remote),
   parked and quarantined envelopes, and the verified key log pin. One reconcile has three phases

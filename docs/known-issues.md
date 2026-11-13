@@ -49,6 +49,20 @@ notes. If you find one, please report it: see [support](support.md).
 * A removed device keeps what it already downloaded. An edit it uploaded just before removal, which
   your other devices hadn't received yet, is refused; it stays on the removed device.
 
+## Shared notebooks
+
+* Shared notebooks aren't end-to-end encrypted, and a person you remove keeps whatever their
+  devices already downloaded. See [shared notebooks](manual/shared-notebooks.md#privacy).
+* An editor's uploads count against the owner's storage allowance, and removing the editor doesn't
+  give that space back. When the allowance is full, edits to the shared notebook and to the
+  owner's own notebooks stop uploading until space is freed or the plan is raised. They stay saved
+  on each device.
+* Once a notebook is shared, a version of Penroam from before sharing stops syncing and asks to be
+  updated. If you downgrade a device anyway, it may show a shared notebook as an ordinary one. Don't
+  edit it there; update instead.
+* Ownership of a shared notebook can't be transferred.
+* Invitations appear in the app only. No email is sent.
+
 ## Devices
 
 * **BOOX:** the partial screen refresh after erasing hasn't been tried on a device. If erased ink
