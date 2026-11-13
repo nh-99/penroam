@@ -257,6 +257,18 @@ pre,
 :root[data-theme="dark"] .cm-sheet-cell.is-active {
   background: color-mix(in srgb, var(--pr-brand) 20%, transparent);
 }
+/* Comment markers and area outlines (editor/commentMarkers.ts): dark on white paper, light on
+   the dark theme's black paper, so they never blend into the page. */
+:root {
+  --pr-comment-ink: #1b1b1b;
+  --pr-comment-paper: #ffffff;
+  --pr-comment-tint: rgb(27 27 27 / 0.08);
+}
+:root[data-theme="dark"] {
+  --pr-comment-ink: #e8e6e1;
+  --pr-comment-paper: #000000;
+  --pr-comment-tint: rgb(232 230 225 / 0.14);
+}
 .penroam-selection {
   border: calc(1.5px * var(--inv, 1)) dashed #2563eb;
   border-radius: calc(3px * var(--inv, 1));
