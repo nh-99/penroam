@@ -39,8 +39,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-#[cfg(feature = "http")]
 pub mod attribution;
+#[cfg(feature = "http")]
 pub mod auth;
 pub mod comments;
 pub mod crypto;
