@@ -72,6 +72,40 @@ pub const VAULT: &str = "/v1/vaults/{id}";
 /// `vaults.v1`.
 pub const VAULT_SESSION: &str = "/v1/vaults/{id}/session";
 
+/// `GET` list / `POST` create shared notebooks ([`crate::sharing::SharedNotebookList`],
+/// [`crate::sharing::CreateSpaceRequest`]). Caller's own account or device session. Capability
+/// `sharing.v1` (protocol 1.7).
+pub const SHARED_NOTEBOOKS: &str = "/v1/shared-notebooks";
+/// `PUT` the sealed notebook id and title ([`crate::sharing::UpdateSpaceMetaRequest`]); owner only.
+/// `{id}` is a [`crate::sharing::SpaceId`]. Capability `sharing.v1`.
+pub const SHARED_NOTEBOOK_META: &str = "/v1/shared-notebooks/{id}/meta";
+/// `POST` get an account session on the space ([`crate::auth::SessionTokens`]); active members.
+/// Capability `sharing.v1`.
+pub const SHARED_NOTEBOOK_SESSION: &str = "/v1/shared-notebooks/{id}/session";
+/// `GET` (active members) / `PUT` (owner, once) the space's root secret
+/// ([`crate::vault::AccountKeyDocument`]). Capability `sharing.v1`.
+pub const SHARED_NOTEBOOK_KEY: &str = "/v1/shared-notebooks/{id}/key";
+/// `GET` members and, for the owner, invitations ([`crate::sharing::MemberList`]); active members.
+/// Capability `sharing.v1`.
+pub const SHARED_NOTEBOOK_MEMBERS: &str = "/v1/shared-notebooks/{id}/members";
+/// `PATCH` a member's role ([`crate::sharing::ChangeRoleRequest`]; owner) / `DELETE` a member
+/// (owner, or the member themselves to leave). Capability `sharing.v1`.
+pub const SHARED_NOTEBOOK_MEMBER: &str = "/v1/shared-notebooks/{id}/members/{account_id}";
+/// `POST` invite an email ([`crate::sharing::CreateInvitationRequest`]); owner. Capability
+/// `sharing.v1`.
+pub const SHARED_NOTEBOOK_INVITATIONS: &str = "/v1/shared-notebooks/{id}/invitations";
+/// `GET` invitations for the caller's verified email
+/// ([`crate::sharing::IncomingInvitationList`]). Capability `sharing.v1`.
+pub const INVITATIONS: &str = "/v1/invitations";
+/// `DELETE` cancel an invitation (space owner). `{inv}` is a [`crate::InvitationId`]. Capability
+/// `sharing.v1`.
+pub const INVITATION: &str = "/v1/invitations/{inv}";
+/// `POST` accept an invitation (invitee); returns a [`crate::sharing::SharedNotebookRecord`].
+/// Capability `sharing.v1`.
+pub const INVITATION_ACCEPT: &str = "/v1/invitations/{inv}/accept";
+/// `POST` decline an invitation (invitee); 204. Capability `sharing.v1`.
+pub const INVITATION_DECLINE: &str = "/v1/invitations/{inv}/decline";
+
 /// `GET` the signed handwriting model catalog ([`crate::models::SignedCatalog`]).
 /// Unauthenticated. 404 `not_found` until one is published. Capability `models.v1` (protocol
 /// 1.4).
@@ -97,7 +131,7 @@ pub const HEADER_HAS_MORE: &str = "Penroam-Has-More";
 pub const HEADER_PROTOCOL: &str = "Penroam-Protocol";
 
 /// Every route, for documentation/compat tests.
-pub const ALL: [&str; 26] = [
+pub const ALL: [&str; 37] = [
     META,
     DEVICES,
     DEVICE,
@@ -124,6 +158,17 @@ pub const ALL: [&str; 26] = [
     VAULTS,
     VAULT,
     VAULT_SESSION,
+    SHARED_NOTEBOOKS,
+    SHARED_NOTEBOOK_META,
+    SHARED_NOTEBOOK_SESSION,
+    SHARED_NOTEBOOK_KEY,
+    SHARED_NOTEBOOK_MEMBERS,
+    SHARED_NOTEBOOK_MEMBER,
+    SHARED_NOTEBOOK_INVITATIONS,
+    INVITATIONS,
+    INVITATION,
+    INVITATION_ACCEPT,
+    INVITATION_DECLINE,
 ];
 
 #[cfg(test)]

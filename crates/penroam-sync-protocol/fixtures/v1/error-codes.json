@@ -108,5 +108,20 @@
     "code": "reauth_required",
     "http_status": 403,
     "retryable": false
+  },
+  {
+    "code": "access_revoked",
+    "http_status": 403,
+    "retryable": false
+  },
+  {
+    "code": "invitation_expired",
+    "http_status": 410,
+    "retryable": false
+  },
+  {
+    "code": "invalid_role",
+    "http_status": 422,
+    "retryable": false
   }
 ]

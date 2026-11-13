@@ -19,4 +19,4 @@ pub mod fixtures;
 pub mod http;
 mod server;
 
-pub use server::{InMemoryServer, PullPage, RequestError};
+pub use server::{Caller, InMemoryServer, PullPage, RequestError};

@@ -596,6 +596,190 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
         }),
     );
 
+    // Shared notebooks (sharing.v1, protocol 1.7). Ids, emails and sealed metadata are fixed
+    // placeholders; the sealed bytes are pseudo-ciphertext.
+    use penroam_sync_protocol::sharing::{
+        ChangeRoleRequest, CreateInvitationRequest, CreateSpaceRequest, IncomingInvitation,
+        IncomingInvitationList, InvitationRecord, InvitationState, MemberList, MemberRecord,
+        MembershipState, Role, SharedNotebookList, SharedNotebookRecord, UpdateSpaceMetaRequest,
+        INVITATION_TTL_MS,
+    };
+    const T0: u64 = 1_794_000_000_000;
+    let space: AccountId = id("s-4b1d9c7e2a6f4e0b8c3d5a7f9e1b2c4d");
+    let other_space: AccountId = id("s-9a8b7c6d5e4f40312a1b2c3d4e5f6a7b");
+    let editor: AccountId = id("acct-fixture-editor");
+    let viewer: AccountId = id("acct-fixture-viewer");
+    let sealed = base64url::encode(&fake_ciphertext("space-meta", 88));
+    let sealed_renamed = base64url::encode(&fake_ciphertext("space-meta-renamed", 96));
+    json(
+        "sharing-create-request.json",
+        to_fixture_json(&CreateSpaceRequest {
+            idempotency_key: "0190c6f2-7b1a-7cc0-9d1e-0000000000a1".into(),
+            sealed_meta: sealed.clone(),
+        }),
+    );
+    json(
+        "sharing-meta-request.json",
+        to_fixture_json(&UpdateSpaceMetaRequest {
+            sealed_meta: sealed_renamed.clone(),
+        }),
+    );
+    json(
+        "sharing-list.json",
+        to_fixture_json(&SharedNotebookList {
+            spaces: vec![
+                SharedNotebookRecord {
+                    space_id: space.clone(),
+                    role: Role::Owner,
+                    state: MembershipState::Active,
+                    owner: true,
+                    sealed_meta: sealed_renamed.clone(),
+                    version: 2,
+                    created_at_ms: T0,
+                },
+                SharedNotebookRecord {
+                    space_id: other_space.clone(),
+                    role: Role::Viewer,
+                    state: MembershipState::Revoked,
+                    owner: false,
+                    sealed_meta: sealed.clone(),
+                    version: 1,
+                    created_at_ms: T0 + 60_000,
+                },
+            ],
+        }),
+    );
+    let pending = InvitationRecord {
+        invitation_id: id("inv-2f6e1a9c3b7d4e8f0a1b2c3d4e5f6a7b"),
+        email: "carol@example.org".into(),
+        role: Role::Editor,
+        state: InvitationState::Pending,
+        expires_at_ms: T0 + 120_000 + INVITATION_TTL_MS,
+        version: 1,
+    };
+    json(
+        "sharing-members.owner-view.json",
+        to_fixture_json(&MemberList {
+            members: vec![
+                MemberRecord {
+                    account_id: account.clone(),
+                    role: Role::Owner,
+                    state: MembershipState::Active,
+                    display: "ada@example.org".into(),
+                    is_you: true,
+                    version: 1,
+                    since_ms: T0,
+                },
+                MemberRecord {
+                    account_id: editor.clone(),
+                    role: Role::Editor,
+                    state: MembershipState::Active,
+                    display: "bob@example.org".into(),
+                    is_you: false,
+                    version: 2,
+                    since_ms: T0 + 30_000,
+                },
+                MemberRecord {
+                    account_id: viewer.clone(),
+                    role: Role::Viewer,
+                    state: MembershipState::Revoked,
+                    display: "dan@example.org".into(),
+                    is_you: false,
+                    version: 3,
+                    since_ms: T0 + 40_000,
+                },
+            ],
+            invitations: vec![
+                pending.clone(),
+                InvitationRecord {
+                    invitation_id: id("inv-7c3d9e1f2a4b4c6d8e0f1a2b3c4d5e6f"),
+                    email: "erin@example.org".into(),
+                    role: Role::Viewer,
+                    state: InvitationState::Declined,
+                    expires_at_ms: T0 + 10_000 + INVITATION_TTL_MS,
+                    version: 2,
+                },
+            ],
+        }),
+    );
+    json(
+        "sharing-members.member-view.json",
+        to_fixture_json(&MemberList {
+            members: vec![
+                MemberRecord {
+                    account_id: account.clone(),
+                    role: Role::Owner,
+                    state: MembershipState::Active,
+                    display: "ada@example.org".into(),
+                    is_you: false,
+                    version: 1,
+                    since_ms: T0,
+                },
+                MemberRecord {
+                    account_id: editor.clone(),
+                    role: Role::Editor,
+                    state: MembershipState::Active,
+                    display: "bob@example.org".into(),
+                    is_you: true,
+                    version: 2,
+                    since_ms: T0 + 30_000,
+                },
+            ],
+            invitations: vec![],
+        }),
+    );
+    json(
+        "sharing-invitation-request.json",
+        to_fixture_json(&CreateInvitationRequest {
+            email: "Carol@Example.org".into(),
+            role: Role::Editor,
+            idempotency_key: "0190c6f2-7b1a-7cc0-9d1e-0000000000b2".into(),
+        }),
+    );
+    json("sharing-invitation.json", to_fixture_json(&pending));
+    json(
+        "sharing-change-role-request.json",
+        to_fixture_json(&ChangeRoleRequest {
+            role: Role::Viewer,
+            version: 2,
+        }),
+    );
+    json(
+        "sharing-incoming-invitations.json",
+        to_fixture_json(&IncomingInvitationList {
+            invitations: vec![IncomingInvitation {
+                invitation_id: pending.invitation_id.clone(),
+                space_id: space.clone(),
+                role: Role::Editor,
+                invited_by: "ada@example.org".into(),
+                expires_at_ms: pending.expires_at_ms,
+            }],
+            reauth_required: false,
+        }),
+    );
+    for (name, code, message) in [
+        (
+            "access-revoked",
+            ErrorCode::AccessRevoked,
+            "access to this shared notebook was removed",
+        ),
+        (
+            "invitation-expired",
+            ErrorCode::InvitationExpired,
+            "the invitation expired",
+        ),
+        (
+            "invalid-role",
+            ErrorCode::InvalidRole,
+            "the owner role cannot be granted",
+        ),
+    ] {
+        json(
+            &format!("error.{name}.json"),
+            to_fixture_json(&ErrorBody::new(code, message, format!("req-{name}"))),
+        );
+    }
+
     raw.push(("pull-batch.page1.bin", page1.frame));
     raw.push(("pull-batch.page2.bin", page2.frame));
     for (name, bytes) in raw {

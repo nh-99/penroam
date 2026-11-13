@@ -92,6 +92,18 @@ fn every_fixture_is_checked() {
         "account-billing-link-request.json",
         "account-billing-link.json",
         "account-deletion.json",
+        "sharing-create-request.json",
+        "sharing-meta-request.json",
+        "sharing-list.json",
+        "sharing-members.owner-view.json",
+        "sharing-members.member-view.json",
+        "sharing-invitation-request.json",
+        "sharing-invitation.json",
+        "sharing-change-role-request.json",
+        "sharing-incoming-invitations.json",
+        "error.access-revoked.json",
+        "error.invitation-expired.json",
+        "error.invalid-role.json",
     ]
     .into_iter()
     .map(String::from)
@@ -282,6 +294,61 @@ fn account_documents() {
     let link: BillingLink = roundtrip("account-billing-link.json");
     link.validate().unwrap();
     let _: DeletionState = roundtrip("account-deletion.json");
+}
+
+#[test]
+fn sharing_documents() {
+    use penroam_sync_protocol::sharing::{
+        ChangeRoleRequest, CreateInvitationRequest, CreateSpaceRequest, IncomingInvitationList,
+        InvitationRecord, InvitationState, MemberList, MembershipState, Role, SharedNotebookList,
+        UpdateSpaceMetaRequest,
+    };
+    use penroam_sync_protocol::ErrorCode;
+    let create: CreateSpaceRequest = roundtrip("sharing-create-request.json");
+    create.validate().unwrap();
+    let meta: UpdateSpaceMetaRequest = roundtrip("sharing-meta-request.json");
+    meta.validate().unwrap();
+    let list: SharedNotebookList = roundtrip("sharing-list.json");
+    for r in &list.spaces {
+        r.validate().unwrap();
+    }
+    assert!(list
+        .spaces
+        .iter()
+        .any(|r| r.state == MembershipState::Revoked && !r.owner));
+    let owner_view: MemberList = roundtrip("sharing-members.owner-view.json");
+    assert!(!owner_view.invitations.is_empty());
+    assert_eq!(owner_view.members[0].role, Role::Owner);
+    let member_view: MemberList = roundtrip("sharing-members.member-view.json");
+    assert!(member_view.invitations.is_empty());
+    assert_eq!(member_view.members.iter().filter(|m| m.is_you).count(), 1);
+    for m in owner_view.members.iter().chain(&member_view.members) {
+        m.validate().unwrap();
+    }
+    let inv_req: CreateInvitationRequest = roundtrip("sharing-invitation-request.json");
+    let inv: InvitationRecord = roundtrip("sharing-invitation.json");
+    assert_eq!(
+        inv_req.validate().unwrap(),
+        inv.email,
+        "emails are normalized"
+    );
+    assert_eq!(inv.state, InvitationState::Pending);
+    let change: ChangeRoleRequest = roundtrip("sharing-change-role-request.json");
+    change.validate().unwrap();
+    let incoming: IncomingInvitationList = roundtrip("sharing-incoming-invitations.json");
+    assert_eq!(incoming.invitations[0].invitation_id, inv.invitation_id);
+    incoming.invitations[0].validate().unwrap();
+    for (name, code) in [
+        ("error.access-revoked.json", ErrorCode::AccessRevoked),
+        (
+            "error.invitation-expired.json",
+            ErrorCode::InvitationExpired,
+        ),
+        ("error.invalid-role.json", ErrorCode::InvalidRole),
+    ] {
+        let b: ErrorBody = roundtrip(name);
+        assert_eq!(b.code, code);
+    }
 }
 
 /// `docs/protocol/openapi.yaml` is hand-written; it must name every route.

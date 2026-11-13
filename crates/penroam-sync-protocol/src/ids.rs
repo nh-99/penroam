@@ -133,6 +133,10 @@ opaque_id!(
     /// Opaque id of an encrypted, immutable blob (assets; not used yet).
     BlobId
 );
+opaque_id!(
+    /// Server-assigned id of a shared-notebook invitation (`sharing.v1`, protocol 1.7).
+    InvitationId
+);
 
 #[cfg(test)]
 mod tests {

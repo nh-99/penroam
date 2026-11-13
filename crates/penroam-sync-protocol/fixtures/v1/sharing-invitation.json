@@ -1,0 +1,8 @@
+{
+  "invitation_id": "inv-2f6e1a9c3b7d4e8f0a1b2c3d4e5f6a7b",
+  "email": "carol@example.org",
+  "role": "editor",
+  "state": "pending",
+  "expires_at_ms": 1795209720000,
+  "version": 1
+}

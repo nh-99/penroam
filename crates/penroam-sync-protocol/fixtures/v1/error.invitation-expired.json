@@ -1,0 +1,5 @@
+{
+  "code": "invitation_expired",
+  "message": "the invitation expired",
+  "request_id": "req-invitation-expired"
+}

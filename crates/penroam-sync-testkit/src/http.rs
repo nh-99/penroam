@@ -10,7 +10,7 @@
 //!
 //! | Route | Auth | Request | Response |
 //! |---|---|---|---|
-//! | `POST /_test/session` | none | `{"account": id, "device_id"?: id}` | `{"token", "account_id"}`. Creates the account; a `device_id` must be registered (else 403 `forbidden`) |
+//! | `POST /_test/session` | none | `{"account": id, "device_id"?: id, "email"?: string, "member"?: id}` | `{"token", "account_id"}`. Creates the account; a `device_id` must be registered (else 403 `forbidden`). `email` records a verified sign-in email for the account, verified now (invitations match it). `member` makes an account session on a sharing space act as that member (a device session acts as the member who registered the device) |
 //! | `GET /v1/meta` | none | — | `ServerMeta` |
 //! | `POST /v1/devices` | account | `DeviceRegistrationRequest` | `DeviceRegistrationResponse` |
 //! | `GET /v1/devices` | account | — | `DeviceListResponse` |
@@ -27,6 +27,19 @@
 //! | `GET`, `POST /v1/vaults` | account | `CreateVaultRequest` | `VaultListResponse`, `VaultRecord` |
 //! | `PUT`, `DELETE /v1/vaults/{id}` | account | `UpdateVaultLockRequest` | 204 |
 //! | `POST /v1/vaults/{id}/session` | account | — | `SessionTokens` for the vault's account |
+//! | `GET`, `POST /v1/shared-notebooks` | account | `CreateSpaceRequest` | `SharedNotebookList`, `SharedNotebookRecord` |
+//! | `PUT /v1/shared-notebooks/{id}/meta` | account | `UpdateSpaceMetaRequest` | 204 |
+//! | `POST /v1/shared-notebooks/{id}/session` | account | — | `SessionTokens` for the space, acting as the caller |
+//! | `GET`, `PUT /v1/shared-notebooks/{id}/key` | account | `AccountKeyDocument` | `AccountKeyDocument`, 204 |
+//! | `GET /v1/shared-notebooks/{id}/members` | account | — | `MemberList` |
+//! | `PATCH`, `DELETE /v1/shared-notebooks/{id}/members/{account_id}` | account | `ChangeRoleRequest` | `MemberRecord`, 204 |
+//! | `POST /v1/shared-notebooks/{id}/invitations` | account | `CreateInvitationRequest` | `InvitationRecord` |
+//! | `GET /v1/invitations` | account | — | `IncomingInvitationList` |
+//! | `POST /v1/invitations/{inv}/accept`, `…/decline` | account | — | `SharedNotebookRecord`, 204 |
+//! | `DELETE /v1/invitations/{inv}` | account | — | 204 |
+//!
+//! The sharing routes need a token of the caller's own account (a vault or space session gets
+//! 403 `forbidden`). Sync routes used with a space session apply the member's role.
 //!
 //! "account" means any token from `/_test/session`, and "device" means a
 //! token issued with a `device_id`. Every `/v1/*` route except `/v1/meta`
@@ -45,7 +58,11 @@
 //! `/_test/delay-next {"n", "ms"}`, `/_test/revoke {"account", "device_id"}`,
 //! `/_test/expire-cursors {"account", "server_seq"}`,
 //! `/_test/compact {"account"}` (expire cursors before the latest checkpoint),
-//! `/_test/quota {"account", "quota_bytes": n|null}`.
+//! `/_test/quota {"account", "quota_bytes": n|null}`,
+//! `/_test/clock {"now_ms": n|null}` (pin or release the clock used for invitation expiry),
+//! `/_test/advance-clock {"ms"}`, `/_test/reauth-window {"ms": n|null}` (accepting and declining
+//! invitations need an email verified by a `/_test/session` with `email` within that long; listing
+//! answers an empty list flagged `reauth_required`), `/_test/device-cap {"n"}` (live devices per member in a space).
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -60,23 +77,33 @@ use penroam_sync_protocol::routes::{
     MEDIA_JSON, MEDIA_OCTETS,
 };
 use penroam_sync_protocol::{
-    AccountId, AccountKeyDocument, AckRequest, BlobId, CheckpointRecord, CreateVaultRequest,
-    Cursor, DeviceId, DeviceRegistrationRequest, ErrorBody, ErrorCode, KeyLogAppendRequest,
-    PullOpsRequest, SessionTokens, UpdateVaultLockRequest,
+    AccountId, AccountKeyDocument, AckRequest, BlobId, ChangeRoleRequest, CheckpointRecord,
+    CreateInvitationRequest, CreateSpaceRequest, CreateVaultRequest, Cursor, DeviceId,
+    DeviceRegistrationRequest, ErrorBody, ErrorCode, InvitationId, KeyLogAppendRequest,
+    PullOpsRequest, SessionTokens, UpdateSpaceMetaRequest, UpdateVaultLockRequest,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::{InMemoryServer, RequestError};
+use crate::{Caller, InMemoryServer, RequestError};
 
 const WORKERS: usize = 8;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_JSON_BYTES: u64 = 1 << 20;
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// What a bearer token stands for: an account (or vault, or space), optionally a device, and for
+/// an account session on a sharing space, the member acting in it.
+#[derive(Clone)]
+struct Principal {
+    account: AccountId,
+    device: Option<DeviceId>,
+    member: Option<AccountId>,
+}
+
 struct Ctx {
     server: Arc<InMemoryServer>,
-    tokens: Mutex<HashMap<String, (AccountId, Option<DeviceId>)>>,
+    tokens: Mutex<HashMap<String, Principal>>,
     counter: AtomicU64,
     stop: AtomicBool,
 }
@@ -421,6 +448,10 @@ struct SessionReq {
     account: AccountId,
     #[serde(default)]
     device_id: Option<DeviceId>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    member: Option<AccountId>,
 }
 
 #[derive(Serialize)]
@@ -497,11 +528,18 @@ fn route_inner(
                         return Err(http_err(ErrorCode::Forbidden, "device not registered", rid));
                     }
                 }
-                let token = new_token();
-                ctx.tokens
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(token.clone(), (r.account.clone(), r.device_id));
+                if let Some(email) = &r.email {
+                    s.set_verified_email(&r.account, Some(email))
+                        .map_err(|e| http_err(e.error_code(), &e.to_string(), rid))?;
+                }
+                let token = issue(
+                    ctx,
+                    Principal {
+                        account: r.account.clone(),
+                        device: r.device_id,
+                        member: r.member,
+                    },
+                );
                 return Ok(Outcome::Respond(Response::json(
                     200,
                     &SessionResp {
@@ -542,6 +580,38 @@ fn route_inner(
                 let r: Quota = parse_json(req, rid)?;
                 s.set_quota(&r.account, r.quota_bytes);
             }
+            "clock" => {
+                #[derive(serde::Deserialize)]
+                struct Clock {
+                    now_ms: Option<u64>,
+                }
+                let r: Clock = parse_json(req, rid)?;
+                s.set_clock_ms(r.now_ms);
+            }
+            "reauth-window" => {
+                #[derive(serde::Deserialize)]
+                struct Window {
+                    ms: Option<u64>,
+                }
+                let r: Window = parse_json(req, rid)?;
+                s.set_reauth_window_ms(r.ms);
+            }
+            "device-cap" => {
+                #[derive(serde::Deserialize)]
+                struct Cap {
+                    n: usize,
+                }
+                let r: Cap = parse_json(req, rid)?;
+                s.set_member_device_cap(r.n);
+            }
+            "advance-clock" => {
+                #[derive(serde::Deserialize)]
+                struct Advance {
+                    ms: u64,
+                }
+                let r: Advance = parse_json(req, rid)?;
+                s.advance_clock_ms(r.ms);
+            }
             _ => return Err(http_err(ErrorCode::NotFound, "unknown route", rid)),
         }
         return Ok(Outcome::Respond(Response::empty()));
@@ -565,12 +635,21 @@ fn route_inner(
             .get(t)
             .cloned()
     });
-    let Some((account, device)) = auth else {
+    let Some(Principal {
+        account,
+        device,
+        member,
+    }) = auth
+    else {
         return Err(http_err(
             ErrorCode::Unauthenticated,
             "missing or unknown bearer token",
             rid,
         ));
+    };
+    let caller = Caller {
+        account: &account,
+        member: member.as_ref(),
     };
     let need_device = || {
         device
@@ -581,23 +660,23 @@ fn route_inner(
     let out = match (m, p) {
         ("POST", "/v1/devices") => {
             let r: DeviceRegistrationRequest = parse_json(req, rid)?;
-            api(s.register_device_keys(&account, &r), |v| {
+            api(s.register_device_keys(caller, &r), |v| {
                 Response::json(200, &v)
             })
         }
-        ("GET", "/v1/devices") => api(s.list_devices(&account), |v| Response::json(200, &v)),
+        ("GET", "/v1/devices") => api(s.list_devices(caller), |v| Response::json(200, &v)),
         ("DELETE", _) if p.starts_with("/v1/devices/") => {
-            let caller = need_device()?;
+            let caller_device = need_device()?;
             let target: DeviceId = p["/v1/devices/".len()..]
                 .parse()
                 .map_err(|_| http_err(ErrorCode::MalformedRequest, "bad device id", rid))?;
-            api(s.revoke_device_as(&account, &caller, &target), |_| {
+            api(s.revoke_device_as(caller, &caller_device, &target), |_| {
                 Response::empty()
             })
         }
         ("POST", "/v1/ops/batch") => {
             let d = need_device()?;
-            api(s.push(&account, &d, &req.body), |v| Response::json(200, &v))
+            api(s.push(caller, &d, &req.body), |v| Response::json(200, &v))
         }
         ("GET", "/v1/ops") => {
             let d = need_device()?;
@@ -619,7 +698,7 @@ fn route_inner(
                 .get("accept")
                 .is_some_and(|a| a.contains(MEDIA_JSON) && !a.contains(MEDIA_BATCH));
             api(
-                s.pull(&account, &d, &PullOpsRequest { cursor, limit }),
+                s.pull(caller, &d, &PullOpsRequest { cursor, limit }),
                 |page| {
                     if json {
                         Response::json(200, &page.response)
@@ -643,10 +722,10 @@ fn route_inner(
         ("POST", "/v1/acks") => {
             let d = need_device()?;
             let r: AckRequest = parse_json(req, rid)?;
-            api(s.ack(&account, &d, &r), |_| Response::empty())
+            api(s.ack(caller, &d, &r), |_| Response::empty())
         }
-        ("GET", "/v1/usage") => api(s.usage(&account), |v| Response::json(200, &v)),
-        ("GET", "/v1/account") => api(s.account_state(&account), |v| Response::json(200, &v)),
+        ("GET", "/v1/usage") => api(s.usage(caller), |v| Response::json(200, &v)),
+        ("GET", "/v1/account") => api(s.account_state(caller), |v| Response::json(200, &v)),
         // The test server offers no account actions (`actions` is always empty).
         ("POST", "/v1/account/billing-link")
         | ("POST", "/v1/account/deletion")
@@ -664,22 +743,20 @@ fn route_inner(
                     .map_err(|_| http_err(ErrorCode::MalformedRequest, "bad from", rid))?,
                 None => 0,
             };
-            api(s.keylog_get(&account, from), |v| Response::json(200, &v))
+            api(s.keylog_get(caller, from), |v| Response::json(200, &v))
         }
         ("POST", "/v1/checkpoints") => {
             let d = need_device()?;
             let r: CheckpointRecord = parse_json(req, rid)?;
-            api(s.checkpoint_put(&account, &d, &r), |_| Response::empty())
+            api(s.checkpoint_put(caller, &d, &r), |_| Response::empty())
         }
         ("GET", "/v1/checkpoints/latest") => {
             let d = need_device()?;
-            api(s.checkpoint_latest(&account, &d), |v| {
-                Response::json(200, &v)
-            })
+            api(s.checkpoint_latest(caller, &d), |v| Response::json(200, &v))
         }
         ("POST", "/v1/keylog") => {
             let r: KeyLogAppendRequest = parse_json(req, rid)?;
-            api(s.keylog_append(&account, &r), |v| Response::json(200, &v))
+            api(s.keylog_append(caller, &r), |v| Response::json(200, &v))
         }
         ("PUT", _) | ("GET", _) if p.starts_with("/v1/blobs/") => {
             let d = need_device()?;
@@ -698,11 +775,11 @@ fn route_inner(
                             rid,
                         )
                     })?;
-                api(s.blob_put(&account, &d, &id, &sha, &req.body), |v| {
+                api(s.blob_put(caller, &d, &id, &sha, &req.body), |v| {
                     Response::json(200, &v)
                 })
             } else {
-                api(s.blob_get(&account, &d, &id), |bytes| Response {
+                api(s.blob_get(caller, &d, &id), |bytes| Response {
                     status: 200,
                     content_type: MEDIA_OCTETS,
                     headers: Vec::new(),
@@ -734,11 +811,14 @@ fn route_inner(
                     if !s.vault_owned_by(&account, &vault) {
                         return Err(http_err(ErrorCode::NotFound, "unknown vault", rid));
                     }
-                    let token = new_token();
-                    ctx.tokens
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(token.clone(), (vault.clone(), None));
+                    let token = issue(
+                        ctx,
+                        Principal {
+                            account: vault.clone(),
+                            device: None,
+                            member: None,
+                        },
+                    );
                     Outcome::Respond(Response::json(
                         200,
                         &SessionTokens {
@@ -760,9 +840,130 @@ fn route_inner(
                 _ => return Err(http_err(ErrorCode::NotFound, "unknown route", rid)),
             }
         }
+        ("GET", "/v1/shared-notebooks") => {
+            api(s.shared_list(&account), |v| Response::json(200, &v))
+        }
+        ("POST", "/v1/shared-notebooks") => {
+            let r: CreateSpaceRequest = parse_json(req, rid)?;
+            api(s.shared_create(&account, &r), |v| Response::json(200, &v))
+        }
+        (_, _) if p.starts_with("/v1/shared-notebooks/") => {
+            let rest = &p["/v1/shared-notebooks/".len()..];
+            let (id, sub) = rest.split_once('/').unwrap_or((rest, ""));
+            let space: AccountId = id
+                .parse()
+                .map_err(|_| http_err(ErrorCode::NotFound, "unknown shared notebook", rid))?;
+            route_space(ctx, req, rid, &account, &space, sub)?
+        }
+        ("GET", "/v1/invitations") => api(s.invitations_incoming(&account), |v| {
+            Response::json(200, &v)
+        }),
+        (_, _) if p.starts_with("/v1/invitations/") => {
+            let rest = &p["/v1/invitations/".len()..];
+            let (id, action) = rest.split_once('/').unwrap_or((rest, ""));
+            let inv: InvitationId = id
+                .parse()
+                .map_err(|_| http_err(ErrorCode::NotFound, "unknown invitation", rid))?;
+            match (m, action) {
+                ("POST", "accept") => api(s.invitation_accept(&account, &inv), |v| {
+                    Response::json(200, &v)
+                }),
+                ("POST", "decline") => {
+                    api(s.invitation_decline(&account, &inv), |_| Response::empty())
+                }
+                ("DELETE", "") => api(s.invitation_cancel(&account, &inv), |_| Response::empty()),
+                _ => return Err(http_err(ErrorCode::NotFound, "unknown route", rid)),
+            }
+        }
         _ => return Err(http_err(ErrorCode::NotFound, "unknown route", rid)),
     };
     Ok(out)
+}
+
+/// `/v1/shared-notebooks/{id}/{sub}` as the caller's own account.
+fn route_space(
+    ctx: &Ctx,
+    req: &Request,
+    rid: &str,
+    account: &AccountId,
+    space: &AccountId,
+    sub: &str,
+) -> Result<Outcome, Box<Response>> {
+    let s = &ctx.server;
+    let m = req.method.as_str();
+    let member_of = |rest: &str| -> Result<AccountId, Box<Response>> {
+        rest.parse()
+            .map_err(|_| http_err(ErrorCode::NotFound, "not a member", rid))
+    };
+    Ok(match (m, sub) {
+        ("PUT", "meta") => {
+            let r: UpdateSpaceMetaRequest = parse_json(req, rid)?;
+            api(s.shared_set_meta(account, space, &r), |_| Response::empty())
+        }
+        ("POST", "session") => match s.shared_session_check(account, space) {
+            Ok(_) => {
+                let token = issue(
+                    ctx,
+                    Principal {
+                        account: space.clone(),
+                        device: None,
+                        member: Some(account.clone()),
+                    },
+                );
+                Outcome::Respond(Response::json(
+                    200,
+                    &SessionTokens {
+                        account_id: space.clone(),
+                        device_id: None,
+                        access_token: token,
+                        expires_in_s: 3600,
+                        refresh_token: new_token(),
+                    },
+                ))
+            }
+            Err(e) => api::<()>(Err(e), |_| Response::empty()),
+        },
+        ("GET", "key") => api(s.shared_key_get(account, space), |v| {
+            Response::json(200, &v)
+        }),
+        ("PUT", "key") => {
+            let r: AccountKeyDocument = parse_json(req, rid)?;
+            api(s.shared_key_put(account, space, &r), |_| Response::empty())
+        }
+        ("GET", "members") => api(s.shared_members(account, space), |v| {
+            Response::json(200, &v)
+        }),
+        ("POST", "invitations") => {
+            let r: CreateInvitationRequest = parse_json(req, rid)?;
+            api(s.shared_invite(account, space, &r), |v| {
+                Response::json(200, &v)
+            })
+        }
+        ("PATCH", _) if sub.starts_with("members/") => {
+            let target = member_of(&sub["members/".len()..])?;
+            let r: ChangeRoleRequest = parse_json(req, rid)?;
+            api(s.shared_change_role(account, space, &target, &r), |v| {
+                Response::json(200, &v)
+            })
+        }
+        ("DELETE", _) if sub.starts_with("members/") => {
+            let target = member_of(&sub["members/".len()..])?;
+            api(s.shared_remove_member(account, space, &target), |_| {
+                Response::empty()
+            })
+        }
+        _ => return Err(http_err(ErrorCode::NotFound, "unknown route", rid)),
+    })
+}
+
+/// Stores a new bearer token for `p`.
+fn issue(ctx: &Ctx, p: Principal) -> String {
+    let token = new_token();
+    ctx.tokens
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(token.clone(), p);
+    token
 }
 
 fn new_token() -> String {

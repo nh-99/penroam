@@ -47,6 +47,9 @@ pub mod capabilities {
     pub const ACCOUNT_KEY_V1: &str = "account-key.v1";
     /// Passphrase-locked vaults ([`crate::vault`], protocol 1.6).
     pub const VAULTS_V1: &str = "vaults.v1";
+    /// Shared notebooks: sharing spaces, members, roles and invitations ([`crate::sharing`],
+    /// protocol 1.7).
+    pub const SHARING_V1: &str = "sharing.v1";
 }
 
 /// `GET /v1/meta` response.

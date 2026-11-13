@@ -20,6 +20,9 @@ pub enum ErrorCode {
     /// 403: the action needs a recent sign-in (account deletion). Sign in again and retry
     /// with the new account session (protocol 1.3).
     ReauthRequired,
+    /// 403: the caller's membership of a shared notebook was removed (or they left). Every
+    /// request on that space answers this; stop syncing it and keep local data (protocol 1.7).
+    AccessRevoked,
     /// 404: unknown resource.
     NotFound,
     /// 409: generic state conflict.
@@ -32,6 +35,8 @@ pub enum ErrorCode {
     CursorExpired,
     /// 410: no tail available from here; fetch a checkpoint first.
     CheckpointRequired,
+    /// 410: the invitation can no longer be accepted; ask for a new one (protocol 1.7).
+    InvitationExpired,
     /// 413: body, batch or item larger than the advertised limits.
     PayloadTooLarge,
     /// 422: envelope header failed validation.
@@ -44,6 +49,8 @@ pub enum ErrorCode {
     InvalidCursor,
     /// 422: other semantic validation failure.
     ValidationFailed,
+    /// 422: the role cannot be granted (only `editor` and `viewer` can) (protocol 1.7).
+    InvalidRole,
     /// 426: protocol/envelope/schema version not supported; update the app.
     UpgradeRequired,
     /// 429: rate limited; honour `retry_after_ms`.
@@ -61,7 +68,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// Every known code, in table order (used by fixtures and docs).
-    pub const ALL: [ErrorCode; 22] = [
+    pub const ALL: [ErrorCode; 25] = [
         Self::MalformedRequest,
         Self::Unauthenticated,
         Self::Forbidden,
@@ -84,6 +91,9 @@ impl ErrorCode {
         Self::InternalError,
         Self::ServiceUnavailable,
         Self::ReauthRequired,
+        Self::AccessRevoked,
+        Self::InvitationExpired,
+        Self::InvalidRole,
     ];
 
     /// HTTP status for this code.
@@ -91,16 +101,19 @@ impl ErrorCode {
         match self {
             Self::MalformedRequest => 400,
             Self::Unauthenticated => 401,
-            Self::Forbidden | Self::DeviceRevoked | Self::ReauthRequired => 403,
+            Self::Forbidden | Self::DeviceRevoked | Self::ReauthRequired | Self::AccessRevoked => {
+                403
+            }
             Self::NotFound => 404,
             Self::Conflict | Self::OpIdConflict | Self::RecoveryRequired => 409,
-            Self::CursorExpired | Self::CheckpointRequired => 410,
+            Self::CursorExpired | Self::CheckpointRequired | Self::InvitationExpired => 410,
             Self::PayloadTooLarge => 413,
             Self::InvalidEnvelope
             | Self::MalformedBatch
             | Self::IntegrityMismatch
             | Self::InvalidCursor
-            | Self::ValidationFailed => 422,
+            | Self::ValidationFailed
+            | Self::InvalidRole => 422,
             Self::UpgradeRequired => 426,
             Self::RateLimited => 429,
             Self::QuotaExceeded => 507,
@@ -127,18 +140,21 @@ impl ErrorCode {
             Self::Forbidden => "forbidden",
             Self::DeviceRevoked => "device_revoked",
             Self::ReauthRequired => "reauth_required",
+            Self::AccessRevoked => "access_revoked",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
             Self::OpIdConflict => "op_id_conflict",
             Self::RecoveryRequired => "recovery_required",
             Self::CursorExpired => "cursor_expired",
             Self::CheckpointRequired => "checkpoint_required",
+            Self::InvitationExpired => "invitation_expired",
             Self::PayloadTooLarge => "payload_too_large",
             Self::InvalidEnvelope => "invalid_envelope",
             Self::MalformedBatch => "malformed_batch",
             Self::IntegrityMismatch => "integrity_mismatch",
             Self::InvalidCursor => "invalid_cursor",
             Self::ValidationFailed => "validation_failed",
+            Self::InvalidRole => "invalid_role",
             Self::UpgradeRequired => "upgrade_required",
             Self::RateLimited => "rate_limited",
             Self::QuotaExceeded => "quota_exceeded",
@@ -291,6 +307,9 @@ mod tests {
             (RateLimited, 429, true),
             (QuotaExceeded, 507, false),
             (ReauthRequired, 403, false),
+            (AccessRevoked, 403, false),
+            (InvitationExpired, 410, false),
+            (InvalidRole, 422, false),
             (InternalError, 500, true),
             (ServiceUnavailable, 503, true),
         ];

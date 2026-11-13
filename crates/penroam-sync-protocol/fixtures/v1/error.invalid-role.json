@@ -1,0 +1,5 @@
+{
+  "code": "invalid_role",
+  "message": "the owner role cannot be granted",
+  "request_id": "req-invalid-role"
+}

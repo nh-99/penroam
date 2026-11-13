@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "account_id": "acct-fixture-0001",
+      "role": "owner",
+      "state": "active",
+      "display": "ada@example.org",
+      "is_you": false,
+      "version": 1,
+      "since_ms": 1794000000000
+    },
+    {
+      "account_id": "acct-fixture-editor",
+      "role": "editor",
+      "state": "active",
+      "display": "bob@example.org",
+      "is_you": true,
+      "version": 2,
+      "since_ms": 1794000030000
+    }
+  ],
+  "invitations": []
+}

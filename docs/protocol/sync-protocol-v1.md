@@ -15,9 +15,9 @@ Each number is independent. None is derived from another.
 
 | Constant | Value | Describes |
 |---|---|---|
-| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 6 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
+| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 7 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
 | `ENVELOPE_VERSION` | 1 | Opaque remote container: envelope header, canonical bytes, framing |
-| `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 4 (1) | Encrypted semantic operation payload |
+| `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 5 (1) | Encrypted semantic operation payload |
 | `FILE_FORMAT_VERSION` | 1 | Local `.prp` page file |
 | `JOURNAL_FORMAT_VERSION` | 1 | Local operation journal |
 | `ARCHIVE_FORMAT_VERSION` | 2 | `.penroam` archive |
@@ -27,8 +27,8 @@ Each number is independent. None is derived from another.
 The local-format numbers are copied into the protocol crate on purpose, because it must not depend on storage. They are advertised in `contract-manifest.json`:
 
 ```json
-{ "protocol": {"major": 1, "minor": 6}, "envelope_version": 1,
-  "op_schema": {"min": 1, "max": 4},
+{ "protocol": {"major": 1, "minor": 7}, "envelope_version": 1,
+  "op_schema": {"min": 1, "max": 5},
   "formats": {"file_format": 1, "journal_format": 1, "archive_format": 2, "notebook_schema": 2, "page_schema": 1},
   "git_sha": null }
 ```
@@ -44,8 +44,8 @@ The local-format numbers are copied into the protocol crate on purpose, because 
   * `MalformedRange`: an advertised range has min > max.
 
   Every `Incompatible` maps to `upgrade_required`. The client stops syncing, keeps its outbox and local data, and shows an actionable state. It never "tries anyway".
-* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b), `models.v1` (1.4, §12c), `store-purchases.v1` (1.5, §12d), `account-key.v1` and `vaults.v1` (1.6, §12e). Clients ignore unknown capabilities.
-* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind. 1.3 adds `account.v1` (§12b) and the error code `reauth_required`; older clients never call the new routes and read the new code as `unknown`. 1.4 adds `models.v1` (§12c) and nothing else.
+* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b), `models.v1` (1.4, §12c), `store-purchases.v1` (1.5, §12d), `account-key.v1` and `vaults.v1` (1.6, §12e), `sharing.v1` (1.7, §12f). Clients ignore unknown capabilities.
+* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind. 1.3 adds `account.v1` (§12b) and the error code `reauth_required`; older clients never call the new routes and read the new code as `unknown`. 1.4 adds `models.v1` (§12c) and nothing else. 1.7 adds `sharing.v1` (§12f) and the error codes `access_revoked`, `invitation_expired` and `invalid_role`; older clients never call the new routes and read the new codes as `unknown`.
 * Clients must call `Limits::validate()` on advertised limits. They refuse values that are 0 or above the hard maxima.
 * Op schema: servers relay payloads whose `op_schema_version` is newer than they know, because the payload is opaque to them. A client that cannot apply a newer schema calls `EnvelopeHeader::check_op_schema_supported()`. On failure it pauses with `upgrade_required` and keeps the ciphertext. It never drops the operation.
 * Unknown `ErrorCode` strings deserialize to `unknown`, which is treated as not retryable.
@@ -234,18 +234,21 @@ The JSON control document carries the headers. The ciphertexts travel in a PRSB 
 | `forbidden` | 403 | no | Account/device mismatch. Surface it. |
 | `device_revoked` | 403 | no | Re-enroll the device. Keep local data. |
 | `reauth_required` | 403 | no | The action needs a recent sign-in (§12b). Sign in again, then retry with the new account session. |
+| `access_revoked` | 403 | no | The caller's membership of a shared notebook was removed, or they left (§12f). Stop syncing that space and keep every local copy and unsent operation. |
 | `not_found` | 404 | no | Unknown resource |
 | `conflict` | 409 | no | State conflict. Refresh and decide. |
 | `op_id_conflict` | 409 | no | The op_id or device_seq was reused with different content. This is a local bug or corruption. Do not overwrite. |
 | `recovery_required` | 409 | no | Run the recovery/rebase flow. Preserve unsent ops. |
 | `cursor_expired` | 410 | no | Fetch the latest checkpoint, import it, then continue from the cursor it covers (§15a). Without a usable checkpoint the client stops pulling (`rebaseRequired`) and keeps uploading its own operations. |
 | `checkpoint_required` | 410 | no | Same as `cursor_expired` |
+| `invitation_expired` | 410 | no | The invitation can no longer be accepted or declined (§12f). Ask the owner for a new one. |
 | `payload_too_large` | 413 | no | Split the batch or respect the limits. |
 | `invalid_envelope` | 422 | no | The header failed validation. |
 | `malformed_batch` | 422 | no | Framing error |
 | `integrity_mismatch` | 422 | no | Length/SHA-256 mismatch. Re-read the ciphertext and retry once as a new request. |
 | `invalid_cursor` | 422 | no | The cursor was tampered with or belongs to another account. Restart from the last applied cursor. |
 | `validation_failed` | 422 | no | Other semantic validation failure |
+| `invalid_role` | 422 | no | Only `editor` and `viewer` can be granted (§12f). |
 | `upgrade_required` | 426 | no | Pause sync and prompt the user to update. Keep all data. |
 | `rate_limited` | 429 | **yes** | Back off, and wait at least `retry_after_ms` |
 | `quota_exceeded` | 507 | no | Show a quota state. Ops stay queued. |
@@ -281,6 +284,12 @@ This prevents retry storms. HTTP success means the server accepted the request. 
   * `expire_cursors_before(account, seq)` simulates compaction: an older cursor gets `cursor_expired`, and a request with no cursor gets `checkpoint_required`.
 * **Acks.** Each device's applied cursor is tracked separately and only moves forward.
 * **Usage.** Op count and bytes are counted. Blob counters stay 0.
+* **Sharing spaces** (extended mode, §12f). The sync methods take `impl Into<Caller>`: a plain
+  account id as before, or `Caller::member(space, member)` for a member's account session on a
+  space; on device routes the member is the one who registered the device there. Membership is
+  resolved under the same lock as the request, so a removal and a concurrent push serialize.
+  `set_verified_email` and `set_clock_ms` / `advance_clock_ms` drive invitation matching and
+  expiry; `state_fingerprint()` lets tests show that a refused request changed nothing.
 * **Fault injection.**
   * `fail_next_requests(n, code)`: the next n requests fail without being processed.
   * `drop_next_responses(n)`: the request is processed and persisted, but the caller gets `RequestError::ResponseLost`. The retry must then come back as `duplicate`.
@@ -297,6 +306,8 @@ This prevents retry storms. HTTP success means the server accepted the request. 
 * two pull pages (JSON and `.bin`)
 * ack, usage and device registration
 * error bodies
+* the shared-notebook documents of §12f (`sharing-*.json`) and the `access_revoked`,
+  `invitation_expired` and `invalid_role` error bodies
 
 ```sh
 cargo run -p penroam-sync-testkit --bin penroam-sync-fixtures -- crates/penroam-sync-protocol/fixtures/v1          # write
@@ -612,6 +623,142 @@ also the vault's account id.
   and the original is purged; the purged original's operations remain in the main account.
 
 The development test server lists both capabilities in its extended mode. Fixtures: none yet.
+
+## 12f. Shared notebooks (`sharing.v1`, protocol 1.7)
+
+A shared notebook lives in a **sharing space**: a hidden account, like a vault, owned by the
+sharing account and holding exactly one notebook. It has its own operation log, key log, blobs,
+checkpoints and cursors under every rule of §13 to §15a, so nothing in the envelope changes. What a
+space adds is membership. Types are in `penroam_sync_protocol::sharing`; `{id}` is a `SpaceId`,
+which is the space's account id.
+
+**Privacy.** The space's root secret is stored on the server, exactly like an ordinary account key
+copy (§12e), so **the server can read shared notebooks**. They are not zero-knowledge, and a vault
+notebook cannot be shared.
+
+**Removal is enforced by the server, not by keys.** Every member's devices hold the space root,
+and a removed member keeps it. From the root they can unwrap every epoch key, including the ones
+created after their removal, so they could read new ciphertext if they ever obtained it (for
+example from a server compromise). What stops them is the server refusing all their requests
+(`access_revoked`). Rotating the epoch on removal keeps their *devices* out of the key log, but
+doesn't lock *them* out. Removal also **cannot erase copies their devices already downloaded**.
+
+| Route | Token | Request | Response | Who |
+|---|---|---|---|---|
+| `GET /v1/shared-notebooks` | account or device | — | `SharedNotebookList { spaces }` | any account |
+| `POST /v1/shared-notebooks` | account or device | `CreateSpaceRequest { idempotency_key, sealed_meta }` | `SharedNotebookRecord` | any account |
+| `PUT /v1/shared-notebooks/{id}/meta` | account or device | `UpdateSpaceMetaRequest { sealed_meta }` | 204 | owner |
+| `POST /v1/shared-notebooks/{id}/session` | account or device | `{}` | `SessionTokens` (account session on the space, acting as the caller) | active member |
+| `GET /v1/shared-notebooks/{id}/key` | account or device | — | `AccountKeyDocument`; 404 until stored | active member |
+| `PUT /v1/shared-notebooks/{id}/key` | account or device | `AccountKeyDocument` | 204; 409 `conflict` if one is stored | owner |
+| `GET /v1/shared-notebooks/{id}/members` | account or device | — | `MemberList { members, invitations }` | active member; `invitations` only for the owner |
+| `POST /v1/shared-notebooks/{id}/invitations` | account or device | `CreateInvitationRequest { email, role, idempotency_key }` | `InvitationRecord` | owner |
+| `PATCH /v1/shared-notebooks/{id}/members/{account_id}` | account or device | `ChangeRoleRequest { role, version }` | `MemberRecord` | owner |
+| `DELETE /v1/shared-notebooks/{id}/members/{account_id}` | account or device | — | 204 | owner (not themselves); a member removing themselves (leaving) |
+| `GET /v1/invitations` | account or device | — | `IncomingInvitationList { invitations, reauth_required? }` | the invitee |
+| `POST /v1/invitations/{inv}/accept` | account or device | `{}` | `SharedNotebookRecord`; 403 `reauth_required` if the email verification is too old | the invitee |
+| `POST /v1/invitations/{inv}/decline` | account or device | `{}` | 204; 403 `reauth_required` as for accept | the invitee |
+| `DELETE /v1/invitations/{inv}` | account or device | — | 204 | the space owner (cancel) |
+
+These tokens are the caller's own; a vault or space session gets 403 `forbidden` on all of them.
+
+* **Records.** `SharedNotebookRecord { space_id, role, state, owner, sealed_meta, version,
+  created_at_ms }`; `MemberRecord { account_id, role, state, display, is_you, version, since_ms }`;
+  `InvitationRecord { invitation_id, email, role, state, expires_at_ms, version }`;
+  `IncomingInvitation { invitation_id, space_id, role, invited_by, expires_at_ms }`. Roles are
+  `"owner"`, `"editor"` and `"viewer"`; membership states `"active"` and `"revoked"`; invitation
+  states `"pending"`, `"accepted"`, `"declined"`, `"cancelled"` and `"expired"`. Times are Unix
+  milliseconds.
+* **Listing.** `GET /v1/shared-notebooks` returns owned spaces, active memberships and revoked
+  memberships, one record per space, oldest first. A revoked record is how a member's other
+  devices learn that access was removed.
+* **Sealed title.** `sealed_meta` is canonical unpadded base64url of at most 4096 characters:
+  `seal(HKDF(space_root, info = "penroam/space-meta/v1"))` of the JSON `{"notebook_id", "title"}`,
+  sealed as in §13 with associated data `"penroam/space-meta/v1"`. The server never parses it.
+  `version` increases on every change. Only the owner may change it (editors get 403 `forbidden`),
+  because it names the notebook id and an editor could point members at another notebook.
+* **Who is who.** `display` and `invited_by` are verified sign-in emails, shown only to members of
+  that space (and to an invitee, the owner's). An incoming invitation carries no title or content.
+* **Invitations.** The server matches them against the invitee's verified sign-in email after
+  `normalize_email`: trim surrounding whitespace, then lowercase the whole address with Unicode
+  simple lowercasing. No normalization form is applied, so clients send NFC. Creating one answers
+  with the same status and shape whether or not the address belongs to an account. The same
+  `idempotency_key` returns the same invitation; the same key with another email or role, a second
+  pending invitation to one address, or inviting a current member is 409 `conflict`. `owner` is
+  422 `invalid_role`. Invitations expire 14 days after creation (`INVITATION_TTL_MS`). A server
+  should cap pending invitations per space and per owner (429 `rate_limited`); the test server
+  allows 50 per space.
+* **Answering.** Accept is idempotent: accepting again returns the same record, and a member who was
+  removed after accepting gets 403 `access_revoked` rather than being let back in. An expired
+  invitation is 410 `invitation_expired` for accept and decline. A declined invitation can't be
+  accepted (409 `conflict`), and decline is idempotent; the owner may invite the same address again.
+  A cancelled invitation is 404 `not_found` to the invitee. Cancelling twice succeeds; cancelling an
+  answered or expired invitation is 409 `conflict`.
+* **Fresh sign-in for invitations.** Invitations are addressed by email, so the server may require
+  the caller's email to have been verified by a sign-in within a re-authentication window it
+  chooses. If it is older, accept and decline answer 403 `reauth_required`: sign in again, then
+  retry. `GET /v1/invitations` never fails for this, so a client's periodic refresh keeps working:
+  it answers an empty list with `"reauth_required": true`, and the client shows a "sign in again to
+  see invitations" state. The field is omitted when false, and servers before this rule never send
+  it. An account with no verified email gets an empty list without the flag. For accept and decline
+  the check comes after the invitation is matched to the caller, so it reveals nothing to anyone
+  else.
+* **Role changes and removal.** A role change names the member's current `version` (stale: 409
+  `conflict`) and grants only `editor` or `viewer`; the owner's own role never changes (403). The
+  owner removes members and cannot leave (403). Removing an already removed member succeeds. A
+  removed member's state becomes `revoked`, their sessions on the space stop working, and their
+  devices in the space are revoked. The owner's client then appends `removeDevice` for those devices
+  to the space's key log, which starts a new epoch. A member invited back is re-admitted with a new
+  role and `version`, and must enroll a new device id, because the key log never re-adds a removed
+  one.
+* **Probing.** A caller who isn't a member of a space gets 404 `not_found` for every route about it,
+  identical to an unknown id, never 403. Accept, decline and cancel answer an invitation id the
+  caller may not act on (not addressed to them for accept and decline, not in a space they own for
+  cancel, which includes the space's other members) with the same 404 `not_found` and message as
+  an id that doesn't exist.
+* **Sync routes on a space session.** `/v1/ops*`, `/v1/acks`, `/v1/keylog`, `/v1/blobs/*`,
+  `/v1/checkpoints*`, `/v1/devices` and `/v1/usage` behave exactly as for an account, plus:
+  * a removed member gets 403 `access_revoked` on **everything**, before any other check;
+  * a viewer gets 403 `forbidden` on push and blob upload;
+  * only the owner may publish a checkpoint (`POST /v1/checkpoints`); editors and viewers get 403
+    `forbidden`. A checkpoint is what a lagging device recovers from, and an editor could otherwise
+    publish one that leaves out other members' operations. Every member may read the latest one;
+  * a device registered in the space belongs to the member who registered it. A device session acts
+    as that member, a device id registered by someone else is 403 `forbidden`, and only the owner may
+    revoke another member's device;
+  * a member may have only a limited number of live (not revoked) devices in one space; registering
+    one more is 409 `conflict` (remove a device first). Re-registering an existing device doesn't
+    count. The test server's cap is 10;
+  * a non-owner may append to the key log only `addDevice`, `renameDevice` or `removeDevice` for a
+    device they registered in the space. The server reads `entry.kind` and the device id from the
+    entry body of §14 to enforce this; anything else, including an unreadable entry, is 403
+    `forbidden`;
+  * every `removeDevice`, the owner's included, must grant its `newEpoch` to every device that stays
+    active (by the server's reading of the stored key log: the genesis device and every
+    `addDevice`, minus every earlier `removeDevice`) and to `"recovery"`. Otherwise it's 422
+    `validation_failed`, so no member can start an epoch the others can't read. Apart from that,
+    the owner may append anything;
+  * `/v1/account/key` is refused (403) on a space session. The space key is only at
+    `/v1/shared-notebooks/{id}/key`.
+  A real server must re-check membership in the same transaction as each write (push, blob commit,
+  checkpoint, key-log append), so a removal and a concurrent write serialize.
+* **Epoch keys in a space (client rule).** Every member holds the space root, and so the recovery
+  key, so in a space a client trusts only the recovery grant. Each epoch's key is whatever that
+  epoch's grant to `"recovery"` opens. A device grant that opens to anything else is ignored. If an
+  epoch's recovery grant doesn't open, the epoch is void: members don't use it, and keep sealing
+  under the last good epoch's key and number. A member can therefore append a key-log entry that
+  others refuse to use, but can't give different members different keys for one epoch.
+* **Storage** counts towards the owner's allowance, and when the owner is over it the space is
+  read-only for everyone (reads and exports keep working).
+* **Notebook history.** Sharing keeps the notebook's id and history: the owner's client
+  re-publishes the notebook's operations into the space, so members see earlier versions.
+
+The development test server implements all of this in its extended mode. Its `POST /_test/session`
+accepts `"email"` (a verified sign-in email) and `"member"` (the member an account session on a
+space acts as), `/_test/clock` and `/_test/advance-clock` move the clock invitations expire
+on, `/_test/reauth-window {"ms"}` turns on the re-authentication check (a `/_test/session` with
+`"email"` counts as a fresh verification), and `/_test/device-cap {"n"}` sets the per-member device
+cap. Fixtures: `sharing-*.json`.
 
 ## 13. Payloads, encryption and signatures (client rules)
 

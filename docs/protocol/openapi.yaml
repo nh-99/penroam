@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: Penroam Sync Protocol
-  version: "1.6"
+  version: "1.7"
   description: |
-    HTTP mapping of the Penroam sync protocol (major 1, minor 6). The normative text is
+    HTTP mapping of the Penroam sync protocol (major 1, minor 7). The normative text is
     sync-protocol-v1.md in this directory; the Rust types are in the penroam-sync-protocol crate.
     This file is hand-written. A test in crates/penroam-sync-protocol checks that it lists
     every route the crate defines.
@@ -340,6 +340,61 @@ components:
         access_token: { type: string }
         expires_in_s: { type: integer }
         refresh_token: { type: string }
+    Role:
+      type: string
+      enum: [owner, editor, viewer]
+    MembershipState:
+      type: string
+      enum: [active, revoked]
+    InvitationState:
+      type: string
+      enum: [pending, accepted, declined, cancelled, expired]
+    SealedMeta:
+      type: string
+      maxLength: 4096
+      pattern: "^[A-Za-z0-9_-]+$"
+      description: Sealed {notebook_id, title} (sharing.v1, §12f). Opaque to the server.
+    SharedNotebookRecord:
+      type: object
+      required: [space_id, role, state, owner, sealed_meta, version, created_at_ms]
+      properties:
+        space_id: { $ref: "#/components/schemas/Id" }
+        role: { $ref: "#/components/schemas/Role" }
+        state: { $ref: "#/components/schemas/MembershipState" }
+        owner: { type: boolean }
+        sealed_meta: { $ref: "#/components/schemas/SealedMeta" }
+        version: { type: integer }
+        created_at_ms: { type: integer }
+    MemberRecord:
+      type: object
+      required: [account_id, role, state, display, is_you, version, since_ms]
+      properties:
+        account_id: { $ref: "#/components/schemas/Id" }
+        role: { $ref: "#/components/schemas/Role" }
+        state: { $ref: "#/components/schemas/MembershipState" }
+        display: { type: string, maxLength: 254, description: Verified email; shown only to members of the space }
+        is_you: { type: boolean }
+        version: { type: integer }
+        since_ms: { type: integer }
+    InvitationRecord:
+      type: object
+      required: [invitation_id, email, role, state, expires_at_ms, version]
+      properties:
+        invitation_id: { $ref: "#/components/schemas/Id" }
+        email: { type: string, maxLength: 254 }
+        role: { $ref: "#/components/schemas/Role" }
+        state: { $ref: "#/components/schemas/InvitationState" }
+        expires_at_ms: { type: integer }
+        version: { type: integer }
+    IncomingInvitation:
+      type: object
+      required: [invitation_id, space_id, role, invited_by, expires_at_ms]
+      properties:
+        invitation_id: { $ref: "#/components/schemas/Id" }
+        space_id: { $ref: "#/components/schemas/Id" }
+        role: { $ref: "#/components/schemas/Role" }
+        invited_by: { type: string, maxLength: 254, description: The owner's verified email }
+        expires_at_ms: { type: integer }
 paths:
   /v1/meta:
     get:
@@ -353,7 +408,7 @@ paths:
               schema: { $ref: "#/components/schemas/ServerMeta" }
   /v1/devices:
     post:
-      summary: Register a device's public keys (account token)
+      summary: Register a device's public keys (account token). In a shared notebook's space a member's live devices are capped (409 conflict; sharing.v1)
       requestBody:
         required: true
         content:
@@ -452,7 +507,7 @@ paths:
               schema: { $ref: "#/components/schemas/KeyLogPage" }
         default: { $ref: "#/components/responses/Error" }
     post:
-      summary: Append at exactly the current length (409 conflict otherwise)
+      summary: Append at exactly the current length (409 conflict otherwise). In a shared notebook's space, non-owners may only add, rename or remove their own devices (403), and a removeDevice must grant the new epoch to every remaining device and recovery (422 validation_failed; sharing.v1)
       requestBody:
         required: true
         content:
@@ -503,7 +558,7 @@ paths:
         default: { $ref: "#/components/responses/Error" }
   /v1/checkpoints:
     post:
-      summary: Advertise a signed checkpoint (device token; blob uploaded first)
+      summary: Advertise a signed checkpoint (device token; blob uploaded first). In a shared notebook's space only the owner may (403 forbidden for editors and viewers; sharing.v1)
       requestBody:
         required: true
         content:
@@ -770,6 +825,228 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SessionTokens" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/shared-notebooks:
+    get:
+      summary: Spaces the caller owns or belongs to, including revoked memberships, oldest first (sharing.v1)
+      responses:
+        "200":
+          description: The caller's shared notebooks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [spaces]
+                properties:
+                  spaces:
+                    type: array
+                    items: { $ref: "#/components/schemas/SharedNotebookRecord" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      summary: Create a sharing space owned by the caller; idempotent per idempotency_key (sharing.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idempotency_key, sealed_meta]
+              properties:
+                idempotency_key: { $ref: "#/components/schemas/Id" }
+                sealed_meta: { $ref: "#/components/schemas/SealedMeta" }
+      responses:
+        "200":
+          description: The space, with the caller as owner
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SharedNotebookRecord" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/shared-notebooks/{id}/meta:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    put:
+      summary: Replace the sealed notebook id and title; owner only (sharing.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sealed_meta]
+              properties:
+                sealed_meta: { $ref: "#/components/schemas/SealedMeta" }
+      responses:
+        "204": { description: Replaced }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/shared-notebooks/{id}/session:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    post:
+      summary: Get an account session on the space acting as the caller; active members (sharing.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: A session scoped to the space
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionTokens" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/shared-notebooks/{id}/key:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    get:
+      summary: The space's root secret; active members; 404 until stored (sharing.v1)
+      responses:
+        "200":
+          description: The stored key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountKeyDocument" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      summary: Store the space's root secret once; owner only; 409 conflict if one is stored (sharing.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AccountKeyDocument" }
+      responses:
+        "204": { description: Stored }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/shared-notebooks/{id}/members:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    get:
+      summary: Members, and for the owner the space's invitations; active members (sharing.v1)
+      responses:
+        "200":
+          description: Members and invitations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [members]
+                properties:
+                  members:
+                    type: array
+                    items: { $ref: "#/components/schemas/MemberRecord" }
+                  invitations:
+                    type: array
+                    description: Empty for everyone but the owner
+                    items: { $ref: "#/components/schemas/InvitationRecord" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/shared-notebooks/{id}/members/{account_id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+      - { name: account_id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    patch:
+      summary: Change a member's role; owner only; version must be the member's current one (sharing.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role, version]
+              properties:
+                role: { type: string, enum: [editor, viewer] }
+                version: { type: integer }
+      responses:
+        "200":
+          description: The updated member
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemberRecord" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Remove a member (owner), or leave (the member themselves); the owner cannot leave (sharing.v1)
+      responses:
+        "204": { description: Removed }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/shared-notebooks/{id}/invitations:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    post:
+      summary: Invite an email address; owner only; same answer whether or not it belongs to an account (sharing.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role, idempotency_key]
+              properties:
+                email: { type: string, maxLength: 254 }
+                role: { type: string, enum: [editor, viewer] }
+                idempotency_key: { $ref: "#/components/schemas/Id" }
+      responses:
+        "200":
+          description: The invitation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitationRecord" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/invitations:
+    get:
+      summary: Pending, unexpired invitations for the caller's verified email; if that verification is older than the server allows, an empty list with reauth_required true (sharing.v1)
+      responses:
+        "200":
+          description: Incoming invitations, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [invitations]
+                properties:
+                  invitations:
+                    type: array
+                    items: { $ref: "#/components/schemas/IncomingInvitation" }
+                  reauth_required:
+                    type: boolean
+                    default: false
+                    description: Sign in again to see invitations; omitted when false
+        default: { $ref: "#/components/responses/Error" }
+  /v1/invitations/{inv}:
+    parameters:
+      - { name: inv, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    delete:
+      summary: Cancel a pending invitation; space owner only, everyone else gets the 404 an unknown id gets (sharing.v1)
+      responses:
+        "204": { description: Cancelled }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/invitations/{inv}/accept:
+    parameters:
+      - { name: inv, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    post:
+      summary: Join the space; idempotent; 410 invitation_expired after expiry; 403 reauth_required if the email verification is older than the server allows (sharing.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: The joined space
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SharedNotebookRecord" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/invitations/{inv}/decline:
+    parameters:
+      - { name: inv, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    post:
+      summary: Decline an invitation; idempotent; 403 reauth_required if the email verification is older than the server allows (sharing.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "204": { description: Declined }
         default: { $ref: "#/components/responses/Error" }
   /v1/account/store-purchase:
     post:

@@ -1,0 +1,5 @@
+{
+  "code": "access_revoked",
+  "message": "access to this shared notebook was removed",
+  "request_id": "req-access-revoked"
+}

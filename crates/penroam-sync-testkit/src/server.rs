@@ -1,4 +1,19 @@
 //! In-memory fake sync server (development test server, not production).
+//!
+//! One [`Mutex`] guards the whole state, so every request (including the sharing routes in
+//! [`sharing`]) is atomic with respect to every other: sequence assignment, membership checks and
+//! the write they guard happen under the same lock. That is what makes "revoke while the member is
+//! pushing" and "accept while the owner cancels" race-free here; a real server needs the same
+//! property from its database transactions.
+//!
+//! Accounts come in three kinds, all stored as [`Account`]: ordinary accounts, vaults
+//! (`vault_of` set) and sharing spaces (`space` set). A request on a space is made by a *member*
+//! ([`Caller::member`], or the member who registered the calling device); [`InMemoryServer`]
+//! resolves that member's role before the route runs, answers `not_found` for non-members and
+//! `access_revoked` for removed members, and the route then applies role rules. See
+//! `docs/protocol/sync-protocol-v1.md` §10 and §12f.
+
+mod sharing;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::Write;
@@ -22,7 +37,7 @@ use penroam_sync_protocol::{
     PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse, ServerMeta, StorageState,
     UpdateVaultLockRequest, UsageResponse, VaultListResponse, VaultRecord,
 };
-use penroam_sync_protocol::{AccountKeyDocument, CreateVaultRequest};
+use penroam_sync_protocol::{AccountKeyDocument, CreateVaultRequest, Role};
 
 use crate::cursor::{self, CursorError, CursorPayload, STREAM_OPS};
 
@@ -89,6 +104,24 @@ struct DeviceState {
     applied_position: Option<u64>,
     #[serde(default)]
     keys: Option<DeviceKeys>,
+    /// In a sharing space: the member account that registered this device. Device-session
+    /// requests act as that member, and non-owners may only touch their own devices.
+    #[serde(default)]
+    registered_by: Option<AccountId>,
+}
+
+/// Per-request facts computed under the lock before a route runs (never persisted).
+#[derive(Default)]
+struct RequestCtx {
+    /// The caller's role when the account is a sharing space; `None` for ordinary accounts and
+    /// vaults, where the caller may do everything.
+    role: Option<Role>,
+    /// The member making a space request.
+    member: Option<AccountId>,
+    /// `(quota, bytes stored by the rest of the quota group)`. Spaces count towards their
+    /// owner's quota, so pushes and blob uploads check the whole group. `None` outside a request
+    /// (then the account's own quota applies).
+    quota: Option<(Option<u64>, u64)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +164,17 @@ struct Account {
     /// Set on a vault's own account: the account that owns the vault.
     #[serde(default)]
     vault_of: Option<AccountId>,
+    /// Set on a sharing space's own account (`sharing.v1`): owner, members, sealed title.
+    #[serde(default)]
+    space: Option<sharing::Space>,
+    /// The sharing spaces this account owns, oldest first.
+    #[serde(default)]
+    owned_spaces: Vec<AccountId>,
+    /// `POST /v1/shared-notebooks` idempotency keys of this account → the space created.
+    #[serde(default)]
+    space_creates: BTreeMap<String, AccountId>,
+    #[serde(skip)]
+    ctx: RequestCtx,
 }
 
 impl Account {
@@ -145,6 +189,56 @@ impl Account {
                 (op.header.device_id.clone(), op.header.device_seq),
                 op.header.op_id.clone(),
             );
+        }
+    }
+
+    /// The caller's role, or `None` outside a sharing space.
+    fn role(&self) -> Option<Role> {
+        self.ctx.role
+    }
+
+    /// Whether the caller may change this account's content (always, outside spaces).
+    fn may_write(&self) -> bool {
+        self.ctx.role.is_none_or(Role::may_write)
+    }
+
+    /// Whether storing `len` more bytes would exceed the quota (the owner's, for a space).
+    fn over_quota_with(&self, len: u64) -> bool {
+        let (quota, elsewhere) = self.ctx.quota.unwrap_or((self.quota_bytes, 0));
+        quota.is_some_and(|q| elsewhere + self.op_bytes + self.blob_bytes + len > q)
+    }
+}
+
+/// Who makes a request: the account whose data it touches, and for a sharing space, the member
+/// acting in it.
+///
+/// Every sync method of [`InMemoryServer`] takes `impl Into<Caller>`, so passing a plain
+/// `&AccountId` keeps working for ordinary accounts and vaults. For a space, either pass
+/// [`Caller::member`] (an account session on the space) or a device the member registered there
+/// (a device session; the member is looked up from the device).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caller<'a> {
+    /// The account the request is about (an ordinary account, a vault or a space).
+    pub account: &'a AccountId,
+    /// The member acting in a space, when known from the session.
+    pub member: Option<&'a AccountId>,
+}
+
+impl<'a> Caller<'a> {
+    /// A member's account session on a sharing space.
+    pub fn member(space: &'a AccountId, member: &'a AccountId) -> Self {
+        Self {
+            account: space,
+            member: Some(member),
+        }
+    }
+}
+
+impl<'a> From<&'a AccountId> for Caller<'a> {
+    fn from(account: &'a AccountId) -> Self {
+        Self {
+            account,
+            member: None,
         }
     }
 }
@@ -164,12 +258,31 @@ struct Persisted {
     secret: String,
     instance_id: String,
     accounts: BTreeMap<AccountId, Account>,
+    #[serde(default)]
+    invitations: Vec<sharing::Invitation>,
+    #[serde(default)]
+    emails: BTreeMap<AccountId, String>,
+    #[serde(default)]
+    email_verified_at: BTreeMap<AccountId, u64>,
 }
 
 const STATE_FORMAT: &str = "penroam-sync-testserver";
 
 struct State {
     accounts: BTreeMap<AccountId, Account>,
+    /// Shared-notebook invitations, oldest first.
+    invitations: Vec<sharing::Invitation>,
+    /// Verified (normalized) email per account, set by the test sign-in.
+    emails: BTreeMap<AccountId, String>,
+    /// When each verified email was last confirmed by a sign-in (test clock, Unix ms).
+    email_verified_at: BTreeMap<AccountId, u64>,
+    /// Listing and answering invitations needs an email verified within this long (`None`: no
+    /// check).
+    reauth_window_ms: Option<u64>,
+    /// Most live devices one member may register in one space.
+    member_device_cap: usize,
+    /// Test clock override in Unix milliseconds (never persisted).
+    clock_ms: Option<u64>,
     faults: Faults,
     request_counter: u64,
 }
@@ -257,7 +370,12 @@ impl InMemoryServer {
                     a.blob_data.insert(blob.clone(), data);
                 }
             }
-            server.lock().accounts = accounts;
+            let mut st = server.lock();
+            st.accounts = accounts;
+            st.invitations = p.invitations;
+            st.emails = p.emails;
+            st.email_verified_at = p.email_verified_at;
+            drop(st);
         } else {
             server.save(&server.lock())?;
         }
@@ -287,6 +405,19 @@ impl InMemoryServer {
     /// Writes `state.json` when persistent (caller holds the lock).
     fn save(&self, state: &State) -> std::io::Result<()> {
         let Some(dir) = &self.dir else { return Ok(()) };
+        Self::write_atomic(&dir.join("state.json"), &self.snapshot(state)?)
+    }
+
+    /// SHA-256 (hex) of everything the server would persist: accounts, logs, devices, key logs,
+    /// blob metadata, checkpoints, spaces, invitations and verified emails. Tests compare it
+    /// before and after a refused request to show the refusal had no side effects.
+    pub fn state_fingerprint(&self) -> String {
+        let s = self.lock();
+        sha256_hex(&self.snapshot(&s).expect("state serializes"))
+    }
+
+    /// The `state.json` bytes for `state`.
+    fn snapshot(&self, state: &State) -> std::io::Result<Vec<u8>> {
         #[derive(Serialize)]
         struct View<'a> {
             format: &'a str,
@@ -294,16 +425,21 @@ impl InMemoryServer {
             secret: String,
             instance_id: &'a str,
             accounts: &'a BTreeMap<AccountId, Account>,
+            invitations: &'a [sharing::Invitation],
+            emails: &'a BTreeMap<AccountId, String>,
+            email_verified_at: &'a BTreeMap<AccountId, u64>,
         }
-        let bytes = serde_json::to_vec(&View {
+        serde_json::to_vec(&View {
             format: STATE_FORMAT,
             version: 1,
             secret: hex::encode(&self.secret),
             instance_id: &self.instance_id,
             accounts: &state.accounts,
+            invitations: &state.invitations,
+            emails: &state.emails,
+            email_verified_at: &state.email_verified_at,
         })
-        .map_err(std::io::Error::other)?;
-        Self::write_atomic(&dir.join("state.json"), &bytes)
+        .map_err(std::io::Error::other)
     }
 
     /// Persist after an administrative change (panics only if the disk fails,
@@ -319,6 +455,12 @@ impl InMemoryServer {
         Self {
             state: Mutex::new(State {
                 accounts: BTreeMap::new(),
+                invitations: Vec::new(),
+                emails: BTreeMap::new(),
+                email_verified_at: BTreeMap::new(),
+                reauth_window_ms: None,
+                member_device_cap: sharing::DEFAULT_MEMBER_DEVICE_CAP,
+                clock_ms: None,
                 faults: Faults::default(),
                 request_counter: 0,
             }),
@@ -487,6 +629,7 @@ impl InMemoryServer {
                     c.push(capabilities::ACCOUNT_V1.into());
                     c.push(capabilities::ACCOUNT_KEY_V1.into());
                     c.push(capabilities::VAULTS_V1.into());
+                    c.push(capabilities::SHARING_V1.into());
                 }
                 c
             },
@@ -499,7 +642,7 @@ impl InMemoryServer {
     /// response dropping.
     fn request<T>(
         &self,
-        account: &AccountId,
+        caller: Caller<'_>,
         device: Option<&DeviceId>,
         mutates: bool,
         f: impl FnOnce(
@@ -521,11 +664,36 @@ impl InMemoryServer {
         if let Some(code) = s.faults.fail_next.pop_front() {
             return Err(RequestError::Api(err(code, "injected failure".into())));
         }
-        let Some(acct) = s.accounts.get_mut(account) else {
+        let account = caller.account;
+        let Some(acct) = s.accounts.get(account) else {
             return Err(RequestError::Api(err(
                 ErrorCode::Unauthenticated,
                 "unknown account".into(),
             )));
+        };
+        // Membership is checked before the device: a removed member gets `access_revoked`
+        // everywhere, even though their devices in the space are revoked too.
+        let (role, member) = match &acct.space {
+            Some(space) => {
+                let (role, member) = space
+                    .resolve(acct, caller.member, device)
+                    .map_err(|(code, m)| RequestError::Api(err(code, m.into())))?;
+                (Some(role), Some(member))
+            }
+            None if caller.member.is_some() => {
+                return Err(RequestError::Api(err(
+                    ErrorCode::Forbidden,
+                    "not a shared notebook".into(),
+                )))
+            }
+            None => (None, None),
+        };
+        let quota = Self::quota_group(&s.accounts, account);
+        let acct = s.accounts.get_mut(account).expect("looked up above");
+        acct.ctx = RequestCtx {
+            role,
+            member,
+            quota: Some(quota),
         };
         if let Some(device) = device {
             match acct.devices.get(device) {
@@ -545,6 +713,7 @@ impl InMemoryServer {
             }
         }
         let result = f(acct, &mut err).map_err(RequestError::Api);
+        acct.ctx = RequestCtx::default();
         if mutates && result.is_ok() {
             if let Err(e) = self.save(s) {
                 return Err(RequestError::Api(err(
@@ -561,14 +730,21 @@ impl InMemoryServer {
     }
 
     /// `POST /v1/ops/batch` with a framed body of [`EnvelopeHeader`]s.
-    pub fn push(
+    pub fn push<'c>(
         &self,
-        account: &AccountId,
+        caller: impl Into<Caller<'c>>,
         device: &DeviceId,
         body: &[u8],
     ) -> Result<PushOpsResponse, RequestError> {
+        let caller = caller.into();
         let limits = self.limits;
-        self.request(account, Some(device), true, |acct, err| {
+        self.request(caller, Some(device), true, |acct, err| {
+            if !acct.may_write() {
+                return Err(err(
+                    ErrorCode::Forbidden,
+                    "viewers cannot change a shared notebook".into(),
+                ));
+            }
             let items: Vec<(EnvelopeHeader, Vec<u8>)> =
                 decode_json_batch(body, &limits).map_err(|e| err(e.error_code(), e.to_string()))?;
             let acks = items
@@ -670,10 +846,8 @@ impl InMemoryServer {
             ));
         }
         let len = ciphertext.len() as u64;
-        if let Some(q) = acct.quota_bytes {
-            if acct.op_bytes + acct.blob_bytes + len > q {
-                return Err((ErrorCode::QuotaExceeded, "account quota exceeded".into()));
-            }
+        if acct.over_quota_with(len) {
+            return Err((ErrorCode::QuotaExceeded, "account quota exceeded".into()));
         }
         // Single lock held: sequence assignment and insert are atomic.
         let seq = acct.log.len() as u64 + 1;
@@ -729,14 +903,16 @@ impl InMemoryServer {
     }
 
     /// `GET /v1/ops`.
-    pub fn pull(
+    pub fn pull<'c>(
         &self,
-        account: &AccountId,
+        caller: impl Into<Caller<'c>>,
         device: &DeviceId,
         req: &PullOpsRequest,
     ) -> Result<PullPage, RequestError> {
+        let caller = caller.into();
+        let account = caller.account;
         let limits = self.limits;
-        self.request(account, Some(device), false, |acct, err| {
+        self.request(caller, Some(device), false, |acct, err| {
             if req.limit == 0 {
                 return Err(err(
                     ErrorCode::ValidationFailed,
@@ -788,13 +964,15 @@ impl InMemoryServer {
     }
 
     /// `POST /v1/acks`. Applied positions only move forward.
-    pub fn ack(
+    pub fn ack<'c>(
         &self,
-        account: &AccountId,
+        caller: impl Into<Caller<'c>>,
         device: &DeviceId,
         req: &AckRequest,
     ) -> Result<(), RequestError> {
-        self.request(account, Some(device), true, |acct, err| {
+        let caller = caller.into();
+        let account = caller.account;
+        self.request(caller, Some(device), true, |acct, err| {
             let pos = self
                 .open_cursor(account, acct, &req.applied_cursor)
                 .map_err(|(code, m)| err(code, m.into()))?;
@@ -805,15 +983,17 @@ impl InMemoryServer {
     }
 
     /// `GET /v1/usage`.
-    pub fn usage(&self, account: &AccountId) -> Result<UsageResponse, RequestError> {
-        self.request(account, None, false, |acct, _| {
+    pub fn usage<'c>(&self, caller: impl Into<Caller<'c>>) -> Result<UsageResponse, RequestError> {
+        let caller = caller.into();
+        let account = caller.account;
+        self.request(caller, None, false, |acct, _| {
             Ok(UsageResponse {
                 account_id: account.clone(),
                 op_count: acct.log.len() as u64,
                 op_bytes: acct.op_bytes,
                 blob_count: acct.blobs.len() as u64,
                 blob_bytes: acct.blob_bytes,
-                quota_bytes: acct.quota_bytes,
+                quota_bytes: acct.ctx.quota.map_or(acct.quota_bytes, |(q, _)| q),
             })
         })
     }
@@ -821,10 +1001,17 @@ impl InMemoryServer {
     /// `GET /v1/account` (capability `account.v1`). The test server sells nothing: every
     /// account is on a free plan whose allowance is the account's quota, no actions are offered,
     /// and the account is read-only (`over_quota`) once its stored bytes reach the quota.
-    pub fn account_state(&self, account: &AccountId) -> Result<AccountState, RequestError> {
-        self.request(account, None, false, |acct, _| {
-            let used = acct.op_bytes + acct.blob_bytes;
-            let over = acct.quota_bytes.is_some_and(|q| used >= q);
+    pub fn account_state<'c>(
+        &self,
+        caller: impl Into<Caller<'c>>,
+    ) -> Result<AccountState, RequestError> {
+        let caller = caller.into();
+        let account = caller.account;
+        self.request(caller, None, false, |acct, _| {
+            // Spaces count towards their owner's allowance, so report the whole group.
+            let (quota, elsewhere) = acct.ctx.quota.unwrap_or((acct.quota_bytes, 0));
+            let used = elsewhere + acct.op_bytes + acct.blob_bytes;
+            let over = quota.is_some_and(|q| used >= q);
             Ok(AccountState {
                 account_id: account.clone(),
                 plan: PlanState {
@@ -837,8 +1024,8 @@ impl InMemoryServer {
                 },
                 storage: StorageState {
                     used_bytes: used,
-                    quota_bytes: acct.quota_bytes,
-                    free_quota_bytes: acct.quota_bytes,
+                    quota_bytes: quota,
+                    free_quota_bytes: quota,
                 },
                 writable: !over,
                 read_only_reason: over.then(|| read_only_reasons::OVER_QUOTA.into()),
@@ -855,13 +1042,16 @@ impl InMemoryServer {
     /// `POST /v1/devices`: register a device with its public keys. The id is
     /// `req.device_id` or a generated one. Re-registering the same id with
     /// the same keys is idempotent; different keys are a `conflict`; a
-    /// revoked id stays revoked (`device_revoked`).
-    pub fn register_device_keys(
+    /// revoked id stays revoked (`device_revoked`). In a sharing space a member may have at
+    /// most [`Self::set_member_device_cap`] live devices; one more is `conflict`.
+    pub fn register_device_keys<'c>(
         &self,
-        account: &AccountId,
+        caller: impl Into<Caller<'c>>,
         req: &DeviceRegistrationRequest,
     ) -> Result<DeviceRegistrationResponse, RequestError> {
-        self.request(account, None, true, |acct, err| {
+        let caller = caller.into();
+        let cap = self.lock().member_device_cap;
+        self.request(caller, None, true, |acct, err| {
             req.validate()
                 .map_err(|field| err(ErrorCode::ValidationFailed, format!("invalid {field}")))?;
             let id = match &req.device_id {
@@ -874,6 +1064,16 @@ impl InMemoryServer {
                 encryption_public_key: req.encryption_public_key.clone(),
                 label: req.label.clone(),
             };
+            let member = acct.ctx.member.clone();
+            // In a space, a device id belongs to the member who registered it first.
+            if let (Some(m), Some(d)) = (&member, acct.devices.get(&id)) {
+                if d.registered_by.as_ref() != Some(m) {
+                    return Err(err(
+                        ErrorCode::Forbidden,
+                        "device registered by another member".into(),
+                    ));
+                }
+            }
             match acct.devices.get_mut(&id) {
                 Some(d) if d.revoked => {
                     return Err(err(ErrorCode::DeviceRevoked, "device revoked".into()))
@@ -891,10 +1091,24 @@ impl InMemoryServer {
                     _ => d.keys = Some(keys),
                 },
                 None => {
+                    if let Some(m) = &member {
+                        let live = acct
+                            .devices
+                            .values()
+                            .filter(|d| !d.revoked && d.registered_by.as_ref() == Some(m))
+                            .count();
+                        if live >= cap {
+                            return Err(err(
+                                ErrorCode::Conflict,
+                                "too many devices in this shared notebook; remove one first".into(),
+                            ));
+                        }
+                    }
                     acct.devices.insert(
                         id.clone(),
                         DeviceState {
                             keys: Some(keys),
+                            registered_by: member,
                             ..Default::default()
                         },
                     );
@@ -905,8 +1119,12 @@ impl InMemoryServer {
     }
 
     /// `GET /v1/devices`.
-    pub fn list_devices(&self, account: &AccountId) -> Result<DeviceListResponse, RequestError> {
-        self.request(account, None, false, |acct, _| {
+    pub fn list_devices<'c>(
+        &self,
+        caller: impl Into<Caller<'c>>,
+    ) -> Result<DeviceListResponse, RequestError> {
+        let caller = caller.into();
+        self.request(caller, None, false, |acct, _| {
             Ok(DeviceListResponse {
                 devices: acct
                     .devices
@@ -932,25 +1150,40 @@ impl InMemoryServer {
     }
 
     /// `DELETE /v1/devices/{id}` by an authenticated, non-revoked device.
-    pub fn revoke_device_as(
+    pub fn revoke_device_as<'c>(
         &self,
-        account: &AccountId,
-        caller: &DeviceId,
+        caller: impl Into<Caller<'c>>,
+        caller_device: &DeviceId,
         target: &DeviceId,
     ) -> Result<(), RequestError> {
-        self.request(account, Some(caller), true, |acct, err| {
+        let caller = caller.into();
+        self.request(caller, Some(caller_device), true, |acct, err| {
+            let member = acct.ctx.member.clone();
+            let owner = acct.role().is_none_or(|r| r == Role::Owner);
             let d = acct
                 .devices
                 .get_mut(target)
                 .ok_or_else(|| err(ErrorCode::NotFound, "unknown device".into()))?;
+            // In a space, only the owner may revoke another member's device.
+            if !owner && d.registered_by != member {
+                return Err(err(
+                    ErrorCode::Forbidden,
+                    "only the owner may remove another member's device".into(),
+                ));
+            }
             d.revoked = true;
             Ok(())
         })
     }
 
     /// `GET /v1/keylog?from=N` (at most [`KEYLOG_PAGE_MAX`] entries).
-    pub fn keylog_get(&self, account: &AccountId, from: u64) -> Result<KeyLogPage, RequestError> {
-        self.request(account, None, false, |acct, _| {
+    pub fn keylog_get<'c>(
+        &self,
+        caller: impl Into<Caller<'c>>,
+        from: u64,
+    ) -> Result<KeyLogPage, RequestError> {
+        let caller = caller.into();
+        self.request(caller, None, false, |acct, _| {
             let entries = acct
                 .keylog
                 .iter()
@@ -973,14 +1206,26 @@ impl InMemoryServer {
     /// it names the authenticated device, that its blob exists with the
     /// declared hash and length, that its cursor is valid for this account
     /// and matches `covers_server_seq`, and that it does not move backwards.
-    /// The signature is for clients; the server cannot verify it.
-    pub fn checkpoint_put(
+    /// The signature is for clients; the server cannot verify it. In a sharing space only the
+    /// owner may publish one (`forbidden` for editors and viewers).
+    pub fn checkpoint_put<'c>(
         &self,
-        account: &AccountId,
+        caller: impl Into<Caller<'c>>,
         device: &DeviceId,
         rec: &CheckpointRecord,
     ) -> Result<(), RequestError> {
-        self.request(account, Some(device), true, |acct, err| {
+        let caller = caller.into();
+        let account = caller.account;
+        self.request(caller, Some(device), true, |acct, err| {
+            // In a space only the owner publishes checkpoints: a checkpoint replaces history for
+            // lagging devices, and an editor could otherwise publish one that leaves out other
+            // members' operations.
+            if acct.role().is_some_and(|r| r != Role::Owner) {
+                return Err(err(
+                    ErrorCode::Forbidden,
+                    "only the owner may publish a shared notebook's checkpoint".into(),
+                ));
+            }
             if &rec.created_by != device {
                 return Err(err(
                     ErrorCode::Forbidden,
@@ -1024,12 +1269,13 @@ impl InMemoryServer {
     }
 
     /// `GET /v1/checkpoints/latest`: the latest record, or `not_found`.
-    pub fn checkpoint_latest(
+    pub fn checkpoint_latest<'c>(
         &self,
-        account: &AccountId,
+        caller: impl Into<Caller<'c>>,
         device: &DeviceId,
     ) -> Result<CheckpointRecord, RequestError> {
-        self.request(account, Some(device), false, |acct, err| {
+        let caller = caller.into();
+        self.request(caller, Some(device), false, |acct, err| {
             acct.checkpoint
                 .clone()
                 .ok_or_else(|| err(ErrorCode::NotFound, "no checkpoint yet".into()))
@@ -1037,14 +1283,19 @@ impl InMemoryServer {
     }
 
     /// `POST /v1/keylog`: append at exactly the current length.
-    pub fn keylog_append(
+    pub fn keylog_append<'c>(
         &self,
-        account: &AccountId,
+        caller: impl Into<Caller<'c>>,
         req: &KeyLogAppendRequest,
     ) -> Result<KeyLogAppendResponse, RequestError> {
-        self.request(account, None, true, |acct, err| {
+        let caller = caller.into();
+        self.request(caller, None, true, |acct, err| {
             req.validate()
                 .map_err(|_| err(ErrorCode::ValidationFailed, "invalid key-log entry".into()))?;
+            if acct.space.is_some() {
+                sharing::check_space_keylog_entry(acct, &req.data)
+                    .map_err(|(code, m)| err(code, m.into()))?;
+            }
             if req.index != acct.keylog.len() as u64 {
                 return Err(err(
                     ErrorCode::Conflict,
@@ -1061,11 +1312,17 @@ impl InMemoryServer {
 
     /// `GET /v1/account/key`. A vault account is refused: its root secret must never be here.
     pub fn account_key_get(&self, account: &AccountId) -> Result<AccountKeyDocument, RequestError> {
-        self.request(account, None, false, |acct, err| {
+        self.request(account.into(), None, false, |acct, err| {
             if acct.vault_of.is_some() {
                 return Err(err(
                     ErrorCode::Forbidden,
                     "vaults have no stored key".into(),
+                ));
+            }
+            if acct.space.is_some() {
+                return Err(err(
+                    ErrorCode::Forbidden,
+                    "a shared notebook's key is at /v1/shared-notebooks/{id}/key".into(),
                 ));
             }
             acct.root_key
@@ -1082,11 +1339,17 @@ impl InMemoryServer {
         account: &AccountId,
         doc: &AccountKeyDocument,
     ) -> Result<(), RequestError> {
-        self.request(account, None, true, |acct, err| {
+        self.request(account.into(), None, true, |acct, err| {
             if acct.vault_of.is_some() {
                 return Err(err(
                     ErrorCode::Forbidden,
                     "vaults have no stored key".into(),
+                ));
+            }
+            if acct.space.is_some() {
+                return Err(err(
+                    ErrorCode::Forbidden,
+                    "a shared notebook's key is at /v1/shared-notebooks/{id}/key".into(),
                 ));
             }
             if acct.root_key.is_some() {
@@ -1099,8 +1362,8 @@ impl InMemoryServer {
 
     /// `GET /v1/vaults`.
     pub fn vault_list(&self, account: &AccountId) -> Result<VaultListResponse, RequestError> {
-        self.request(account, None, false, |acct, err| {
-            if acct.vault_of.is_some() {
+        self.request(account.into(), None, false, |acct, err| {
+            if acct.vault_of.is_some() || acct.space.is_some() {
                 return Err(err(ErrorCode::Forbidden, "not from inside a vault".into()));
             }
             Ok(VaultListResponse {
@@ -1121,7 +1384,7 @@ impl InMemoryServer {
             .accounts
             .get(account)
             .ok_or_else(|| api(ErrorCode::NotFound, "unknown account"))?;
-        if owner.vault_of.is_some() {
+        if owner.vault_of.is_some() || owner.space.is_some() {
             return Err(api(ErrorCode::Forbidden, "not from inside a vault"));
         }
         let quota_bytes = owner.quota_bytes;
@@ -1159,7 +1422,7 @@ impl InMemoryServer {
         vault: &AccountId,
         req: &UpdateVaultLockRequest,
     ) -> Result<(), RequestError> {
-        self.request(account, None, true, |acct, err| {
+        self.request(account.into(), None, true, |acct, err| {
             let v = acct
                 .vaults
                 .iter_mut()
@@ -1203,17 +1466,25 @@ impl InMemoryServer {
     }
 
     /// `PUT /v1/blobs/{id}`: store an immutable encrypted blob.
-    pub fn blob_put(
+    pub fn blob_put<'c>(
         &self,
-        account: &AccountId,
+        caller: impl Into<Caller<'c>>,
         device: &DeviceId,
         id: &BlobId,
         sha256_hex_value: &str,
         bytes: &[u8],
     ) -> Result<BlobPutResponse, RequestError> {
+        let caller = caller.into();
+        let account = caller.account;
         let limits = self.limits;
         let dir = self.dir.clone();
-        self.request(account, Some(device), true, |acct, err| {
+        self.request(caller, Some(device), true, |acct, err| {
+            if !acct.may_write() {
+                return Err(err(
+                    ErrorCode::Forbidden,
+                    "viewers cannot change a shared notebook".into(),
+                ));
+            }
             if bytes.len() as u64 > limits.max_blob_bytes {
                 return Err(err(ErrorCode::PayloadTooLarge, "blob too large".into()));
             }
@@ -1244,13 +1515,11 @@ impl InMemoryServer {
                 };
             }
             let len = bytes.len() as u64;
-            if let Some(q) = acct.quota_bytes {
-                if acct.op_bytes + acct.blob_bytes + len > q {
-                    return Err(err(
-                        ErrorCode::QuotaExceeded,
-                        "account quota exceeded".into(),
-                    ));
-                }
+            if acct.over_quota_with(len) {
+                return Err(err(
+                    ErrorCode::QuotaExceeded,
+                    "account quota exceeded".into(),
+                ));
             }
             if let Some(dir) = &dir {
                 Self::write_atomic(&Self::blob_path(dir, account, id), bytes).map_err(|e| {
@@ -1277,13 +1546,14 @@ impl InMemoryServer {
     }
 
     /// `GET /v1/blobs/{id}`.
-    pub fn blob_get(
+    pub fn blob_get<'c>(
         &self,
-        account: &AccountId,
+        caller: impl Into<Caller<'c>>,
         device: &DeviceId,
         id: &BlobId,
     ) -> Result<Vec<u8>, RequestError> {
-        self.request(account, Some(device), false, |acct, err| {
+        let caller = caller.into();
+        self.request(caller, Some(device), false, |acct, err| {
             acct.blob_data
                 .get(id)
                 .cloned()
