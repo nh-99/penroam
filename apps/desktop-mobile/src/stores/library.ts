@@ -559,14 +559,14 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
-  async function exportNotebook(id: string, title: string, beforeExport?: () => Promise<void>) {
+  async function exportNotebook(id: string, title: string, beforeExport?: () => Promise<void>, includeComments = false, includeAuthors = false) {
     if (!(await confirmPlaintext())) return;
     const path = await pickSaveLocation("penroam", safeFileName(title));
     if (!path) return;
     busy.value = "Exporting…";
     try {
       await beforeExport?.();
-      const r = await api.exportNotebook(id, path);
+      const r = await api.exportNotebook(id, path, includeComments, includeAuthors);
       ui.success(`Exported ${r.pages} page${r.pages === 1 ? "" : "s"} (${(r.bytes / 1024).toFixed(0)} KB).`);
     } catch (e) {
       fail(e, "Export failed");

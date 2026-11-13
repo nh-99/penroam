@@ -3,4 +3,4 @@
 /**
  * What a person may do in a shared notebook.
  */
-export type SharedRole = "owner" | "editor" | "viewer";
+export type SharedRole = "owner" | "editor" | "viewer" | "commenter";

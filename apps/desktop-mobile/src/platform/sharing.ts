@@ -5,19 +5,26 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Notebook } from "../generated/Notebook";
-import type { SharedRole } from "../generated/SharedRole";
+import type { SharedRole as GeneratedRole } from "../generated/SharedRole";
 import type { SharedStateView } from "../generated/SharedStateView";
-import type { SharedSyncState } from "../generated/SharedSyncState";
+import type { SharedSyncState as GeneratedSyncState } from "../generated/SharedSyncState";
 import type { SharedView } from "../generated/SharedView";
 import type { SharedNotebookView } from "../generated/SharedNotebookView";
 import type { IncomingInvitationView } from "../generated/IncomingInvitationView";
 import type { MemberView } from "../generated/MemberView";
 import type { MembersView } from "../generated/MembersView";
 import type { InvitationView } from "../generated/InvitationView";
-import type { NotebookAccess } from "../generated/NotebookAccess";
+import type { NotebookAccess as GeneratedAccess } from "../generated/NotebookAccess";
+import { cleanName, cleanNames } from "./display";
 import { CommandError, hasHost } from "./ipc";
 
-export type { SharedRole, SharedSyncState, SharedView, SharedNotebookView, IncomingInvitationView, MemberView, MembersView, InvitationView, NotebookAccess };
+/** Roles, including `commenter`: may discuss but not edit (the generated type gains it with the Rust side). */
+export type SharedRole = GeneratedRole | "commenter";
+/** What the editor may do with a notebook; a commenter is read-only for the document but can comment. */
+export type NotebookAccess = Omit<GeneratedAccess, "role"> & { role?: SharedRole };
+/** How far a copy has got; `needsCatchUp` while it rebases from a checkpoint (the generated type gains it with the Rust side). */
+export type SharedSyncState = GeneratedSyncState | "needsCatchUp";
+export type { SharedView, SharedNotebookView, IncomingInvitationView, MemberView, MembersView, InvitationView };
 /** Roles an owner can hand out. */
 export type InviteRole = Exclude<SharedRole, "owner">;
 /** Where this device is with a shared notebook. */
@@ -26,7 +33,7 @@ export type SharedState = SharedStateView;
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!hasHost()) throw new CommandError("noHost", "Sharing needs the Penroam app.");
   try {
-    return await invoke<T>(cmd, args);
+    return cleanNames(await invoke<T>(cmd, args));
   } catch (e: any) {
     if (e && typeof e === "object" && "code" in e) throw new CommandError(e.code, e.message ?? String(e));
     throw new CommandError("io", String(e));
@@ -60,7 +67,7 @@ export const isSharedByMe = (v: SharedNotebookView) => v.owner && v.state !== "a
 
 /** Words for a role. */
 export function roleLabel(r: SharedRole): string {
-  return r === "owner" ? "Owner" : r === "editor" ? "Can edit" : "View only";
+  return r === "owner" ? "Owner" : r === "editor" ? "Can edit" : r === "commenter" ? "Can comment" : "View only";
 }
 
 /** Short sync label for a shared notebook, as the card and the editor show it. */
@@ -76,6 +83,8 @@ export function syncStateLabel(s: SharedSyncState): string {
       return "Access removed";
     case "needsResolution":
       return "Needs resolution";
+    case "needsCatchUp":
+      return "Needs catch-up";
   }
 }
 
@@ -89,6 +98,7 @@ export function sharedStatusLabel(v: SharedNotebookView): string {
 /** The banner above a read-only notebook; null when it can be edited. */
 export function accessBanner(a: NotebookAccess | null): string | null {
   if (!a?.readOnly) return null;
+  if (a.role === "commenter" && a.reason !== "accessRemoved") return "Comment only — you can read, comment and export, not edit.";
   return a.reason === "accessRemoved"
     ? "Access removed — you can still look and export what is on this device, but changes are no longer saved or shared."
     : "View only — you can look and export, not edit.";
@@ -141,7 +151,7 @@ export function acceptProblem(e: unknown): "reauth" | "oldCopy" | null {
 }
 
 /** What a person is called in the list; former members have no email any more. */
-export const memberName = (m: { display: string; state: string }) => m.display || (m.state === "revoked" ? "Former member" : "Unknown member");
+export const memberName = (m: { display: string; state: string }) => cleanName(m.display) || (m.state === "revoked" ? "Former member" : "Unknown member");
 
 /** Text of the privacy explanation; the dialog shows these and the tests check they stay. */
 export const SHARING_PRIVACY_POINTS: readonly string[] = [

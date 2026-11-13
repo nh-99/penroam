@@ -14,6 +14,9 @@ import { useSettings } from "./stores/settings";
 import { useUi } from "./stores/ui";
 import { useSync } from "./stores/sync";
 import { useSharing } from "./stores/sharing";
+import { useLive } from "./stores/live";
+import { useComments } from "./stores/comments";
+import NotificationCenter from "./components/NotificationCenter.vue";
 import { useSearch } from "./stores/search";
 import { useTour } from "./stores/tour";
 import { api, hasHost } from "./platform/ipc";
@@ -29,6 +32,8 @@ const settings = useSettings();
 const ui = useUi();
 const sync = useSync();
 const sharing = useSharing();
+const live = useLive();
+const comments = useComments();
 const search = useSearch();
 const tour = useTour();
 const nativeKind = ref<string | null>(null);
@@ -64,6 +69,8 @@ onMounted(async () => {
   void sync.init().then(() => {
     if (!sync.available) return;
     void sharing.init();
+    void live.init();
+    void comments.init();
     // signing in or out changes whether sharing is on offer
     watch(() => sync.configured, () => void sharing.refresh());
     // a notebook joined or lost: the library has to show it
@@ -139,6 +146,8 @@ onBeforeUnmount(() => {
   unlisten?.();
   sync.dispose();
   sharing.dispose();
+  live.dispose();
+  comments.dispose();
   search.dispose();
 });
 </script>
@@ -151,6 +160,7 @@ onBeforeUnmount(() => {
   <PlaintextExportDialog v-if="lib.plaintextQuestion" @answer="(ok) => lib.plaintextQuestion?.(ok)" />
   <ImportResultsDialog v-if="lib.importResults" :results="lib.importResults" @close="lib.importResults = null" />
   <PlansDialog v-if="sync.upgradeOpen" />
+  <NotificationCenter v-if="comments.centerOpen" @close="comments.centerOpen = false" />
   <div v-if="lib.busy" class="fixed inset-0 z-[70] flex items-center justify-center bg-black/20 epaper:bg-white/70" role="alert" aria-busy="true">
     <div class="w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-line bg-surface px-5 py-4 text-sm shadow-lg">
       <div class="flex items-center gap-3"><LoaderCircle :size="18" class="shrink-0 animate-spin" /><span class="min-w-0">{{ lib.progress?.label ?? lib.busy }}</span></div>

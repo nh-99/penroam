@@ -24,9 +24,12 @@ const _: () = assert!(
 mod backup;
 mod bench;
 mod commands;
+mod comments;
 mod desktop_entry;
 mod diagnostics;
 mod folder_access;
+mod history; // non-destructive restore, version compare, activity
+mod live;
 mod models;
 #[cfg(target_os = "linux")]
 mod pinch;
@@ -51,6 +54,8 @@ pub struct AppState {
     pub search: search::SearchSlot,
     /// Handwriting model downloads.
     pub models: models::ModelsSlot,
+    /// Live channels of shared notebooks.
+    pub live: live::LiveHub,
 }
 
 /// App entry point (desktop `main` and the mobile entry point): opens the
@@ -102,6 +107,7 @@ pub fn run() {
                 sync: sync::SyncSlot::default(),
                 search: search::SearchSlot::default(),
                 models: models::ModelsSlot::default(),
+                live: live::LiveHub::default(),
             });
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("main") {
@@ -154,6 +160,13 @@ pub fn run() {
             commands::restore_notebook_version,
             commands::history_stats,
             commands::clear_history,
+            // history: non-destructive restore, compare, activity (history.rs)
+            history::restore_preview,
+            history::restore_commit,
+            history::notebook_restore_preview,
+            history::notebook_restore_commit,
+            history::version_compare,
+            history::history_activity,
             commands::list_notebooks,
             commands::get_notebook,
             commands::create_notebook,
@@ -205,6 +218,21 @@ pub fn run() {
             sharing::shared_keep_private_copy,
             sharing::shared_remove_local,
             sharing::notebook_access,
+            live::live_awareness,
+            live::live_prefs,
+            comments::comments_list,
+            comments::comments_text_anchor,
+            comments::comments_create_thread,
+            comments::comments_reply,
+            comments::comments_edit,
+            comments::comments_delete,
+            comments::comments_set_resolved,
+            comments::comments_reattach,
+            comments::comments_mentionable,
+            comments::notifications_list,
+            comments::notifications_mark_read,
+            comments::notification_prefs,
+            comments::notification_prefs_set,
             sync::sync_server_info,
             sync::sync_sign_in,
             sync::sync_sign_out,
@@ -229,6 +257,7 @@ pub fn run() {
             sync::sync_pause,
             sync::sync_conflicts,
             sync::sync_resolve_conflict,
+            sync::sync_keep_both,
             sync::sync_diagnostics,
             sync::sync_disconnect,
             sync::sync_account,

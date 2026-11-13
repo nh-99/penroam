@@ -15,6 +15,8 @@ import ShareDialog from "../components/ShareDialog.vue";
 import SharedNotebookCard from "../components/SharedNotebookCard.vue";
 import InvitationCard from "../components/InvitationCard.vue";
 import ConflictsDialog from "../components/ConflictsDialog.vue";
+import NotificationBell from "../components/NotificationBell.vue";
+import ExportDialog from "../components/ExportDialog.vue";
 import { useSharing } from "../stores/sharing";
 import { sharedStatusLabel, type SharedNotebookView } from "../platform/sharing";
 import PromptDialog from "../components/PromptDialog.vue";
@@ -56,6 +58,12 @@ const list = computed(() => (showTrash.value ? lib.trashed : lib.shelf.filter((n
 const sharingNb = ref<{ id: string; title: string } | null>(null);
 const resolving = ref<{ id: string; title: string } | null>(null);
 const removingShared = ref<SharedNotebookView | null>(null);
+/** A shared notebook being exported: asks whether comments go in the file. */
+const exporting = ref<{ id: string; title: string } | null>(null);
+function startExport(id: string, title: string) {
+  if (sharing.byNotebook.has(id)) exporting.value = { id, title };
+  else void lib.exportNotebook(id, title);
+}
 /** Shared-with-me entries show at the top level only, like cloud-only notebooks. */
 const withMeHere = computed(() => (lib.openFolder ? [] : sharing.withMe));
 const invitesHere = computed(() => (lib.openFolder ? [] : sharing.invitations));
@@ -79,7 +87,7 @@ function openShared(v: SharedNotebookView) {
 }
 function exportShared(v: SharedNotebookView) {
   const nb = summaryOf(v.notebookId);
-  if (nb) void lib.exportNotebook(nb.id, nb.title);
+  if (nb) startExport(nb.id, nb.title);
 }
 function peopleOf(v: SharedNotebookView) {
   if (v.notebookId) sharingNb.value = { id: v.notebookId, title: summaryOf(v.notebookId)?.title ?? v.title };
@@ -160,6 +168,7 @@ function recolor(nb: NotebookSummary) {
         <img :src="logoUrl" alt="" class="h-8 w-8 shrink-0 rounded-lg" aria-hidden="true" />
         <h1 class="mr-auto min-w-0 truncate text-lg font-semibold tracking-tight">Penroam</h1>
         <IconBtn label="Search notebooks" :shortcut="`${mod}+K`" @click="search.panelOpen = true"><Search :size="20" /></IconBtn>
+        <NotificationBell v-if="sharing.available || sharing.notebooks.length" />
         <!-- icon-only on phones, so it needs its own name there; max-sm:px-0 keeps it a full square touch target -->
         <Btn variant="primary" class="shrink-0 max-sm:px-0" aria-label="New notebook" @click="showNew = true"><BookPlus :size="18" /><span class="hidden sm:inline" aria-hidden="true">New notebook</span></Btn>
         <!-- phones don't have room for every action, so the less frequent ones go in a menu -->
@@ -246,7 +255,7 @@ function recolor(nb: NotebookSummary) {
             :vault-name="vaultName(nb.id)" :can-move-to-vault="sync.openVaults.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-vault="moving = nb"
             :can-move-to-folder="lib.folders.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-folder="filing = nb"
             @open="lib.open(nb.id)" :shared-status="sharedStatusOf(nb.id)" @share="sharingNb = { id: nb.id, title: nb.title }" @rename="renaming = nb" @duplicate="lib.duplicate(nb.id)" @recolor="recolor(nb)"
-            @export="lib.exportNotebook(nb.id, nb.title)" @export-pdf="lib.exportPdf(nb.id, nb.title)" @print="lib.printNotebook(nb.id)" @trash="lib.trash(nb.id)" />
+            @export="startExport(nb.id, nb.title)" @export-pdf="lib.exportPdf(nb.id, nb.title)" @print="lib.printNotebook(nb.id)" @trash="lib.trash(nb.id)" />
           <CloudNotebookCard v-for="nb in cloudHere" :key="nb.notebookId" :nb="nb"
             :downloading="sync.downloading.includes(nb.notebookId)" @download="download(nb.notebookId)" />
         </div>
@@ -280,6 +289,7 @@ function recolor(nb: NotebookSummary) {
 
     <NewNotebookDialog v-if="showNew" @close="showNew = false" @create="create" />
     <ShareDialog v-if="sharingNb" :notebook-id="sharingNb.id" :title="sharingNb.title" @close="sharingNb = null" />
+    <ExportDialog v-if="exporting" :title="exporting.title" @close="exporting = null" @confirm="(o) => { const x = exporting!; exporting = null; lib.exportNotebook(x.id, x.title, undefined, o.includeComments, o.includeAuthors); }" />
     <ConflictsDialog v-if="resolving" :notebook-id="resolving.id" :current-title="resolving.title" @close="resolving = null" @resolved="lib.refresh(); sharing.refresh()" />
     <ConfirmDialog v-if="removingShared" danger title="Remove from this device?" confirm="Remove from this device"
       message="This only removes the copy on this device. Nothing is deleted for the owner or anyone else."

@@ -738,7 +738,30 @@ pub fn export_notebook(
     state: State<'_, AppState>,
     notebook_id: Uuid,
     path: String,
+    include_comments: Option<bool>,
+    include_authors: Option<bool>,
 ) -> R<ExportResult> {
+    // a shared notebook's comments and authors, only when asked for (they name its members)
+    let mut extra_entries = Vec::new();
+    if include_comments == Some(true) {
+        if let Some(b) = crate::comments::export_json(&state, notebook_id)? {
+            extra_entries.push((penroam_storage::COMMENTS_ENTRY.to_string(), b));
+        }
+    }
+    if include_authors == Some(true) {
+        // element ids page by page, each under a short lock (editing goes on meanwhile)
+        let ids: Vec<Uuid> = lib!(state).notebook(notebook_id)?.page_order.clone();
+        let pages: Vec<(Uuid, Vec<Uuid>)> = ids
+            .into_iter()
+            .filter_map(|p| {
+                let page = state.lib.lock().ok()?.load_page(notebook_id, p).ok()?;
+                Some((p, page.elements.iter().map(|e| e.id()).collect()))
+            })
+            .collect();
+        if let Some(b) = crate::sync::authors_json(&state, notebook_id, &pages) {
+            extra_entries.push((penroam_storage::AUTHORS_ENTRY.to_string(), b));
+        }
+    }
     let (buf, pages) = {
         let tmp = lib!(state)
             .staging_dir()
@@ -754,7 +777,10 @@ pub fn export_notebook(
             notebook_id,
             &mut f,
             GENERATOR,
-            &ExportOptions::default(),
+            &ExportOptions {
+                extra_entries,
+                ..Default::default()
+            },
         );
         let out = res.and_then(|m| {
             f.seek(SeekFrom::Start(0))?;
@@ -1151,6 +1177,9 @@ pub struct HistoryRow {
     at: Timestamp,
     added: u32,
     removed: u32,
+    /// Who made this version (versions from a shared notebook's log with attribution).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    authors: Vec<crate::history::AuthorView>,
 }
 
 impl From<HistoryPoint> for HistoryRow {
@@ -1162,6 +1191,7 @@ impl From<HistoryPoint> for HistoryRow {
             at: p.at,
             added: p.added,
             removed: p.removed,
+            authors: Vec::new(),
         }
     }
 }
@@ -1185,19 +1215,38 @@ pub fn page_history(
         .collect();
     let times: Vec<Timestamp> = synced.iter().map(|v| v.at).collect();
     let keep = penroam_storage::history::retained(&times, now_ms(), &HistoryRetention::default());
-    let mut rows: Vec<HistoryRow> = synced
-        .into_iter()
-        .zip(keep)
-        .filter(|(_, k)| *k)
-        .map(|(v, _)| HistoryRow {
+    // authors over every version (a thinned-out version's authors count towards the next one
+    // offered); only shared notebooks show them
+    let shared_nb = penroam_sync::vault::NotebookOwners::load(lib!(state).root())
+        .map(|o| o.shared_entry(&notebook_id).is_some())
+        .unwrap_or(false);
+    let mut by_version = if shared_nb {
+        let positions: Vec<u64> = synced.iter().map(|v| v.position).collect();
+        crate::sync::version_authors(&state, notebook_id, page_id, &positions)
+    } else {
+        vec![Vec::new(); synced.len()]
+    };
+    let mut carried: Vec<crate::history::AuthorView> = Vec::new();
+    let mut rows: Vec<HistoryRow> = Vec::new();
+    for ((v, k), who) in synced.into_iter().zip(keep).zip(by_version.drain(..)) {
+        for a in who {
+            if !carried.contains(&a) {
+                carried.push(a);
+            }
+        }
+        if !k {
+            continue;
+        }
+        rows.push(HistoryRow {
             page_id,
             revision: None,
             position: Some(v.position),
             at: v.at,
             added: v.added,
             removed: v.removed,
-        })
-        .collect();
+            authors: std::mem::take(&mut carried),
+        });
+    }
     rows.extend(local.into_iter().map(HistoryRow::from));
     Ok(rows)
 }
@@ -1240,8 +1289,10 @@ pub fn restore_page_version(
 ) -> R<ApplyOutcome> {
     state.sync.nudge();
     let target = version_of(&state, notebook_id, page_id, revision, position)?;
-    let r =
-        writable_lib!(state, notebook_id).restore_page_content(notebook_id, page_id, &target)?;
+    let mut lib = writable_lib!(state, notebook_id);
+    crate::history::refuse_destructive_restore(&lib, notebook_id)?;
+    let r = lib.restore_page_content(notebook_id, page_id, &target)?;
+    drop(lib);
     state.search.page_changed(notebook_id, page_id);
     Ok(r)
 }
@@ -1257,19 +1308,24 @@ pub fn restore_notebook_version(
     from_account: bool,
 ) -> R<NotebookRestore> {
     state.sync.nudge();
-    let r = if from_account {
-        let (nb, pages) = crate::sync::notebook_at(&state, notebook_id, at)?
-            .ok_or_else(|| invalid("that version isn't available"))?;
-        let targets = pages.into_iter().map(|p| (p.id, p)).collect();
-        writable_lib!(state, notebook_id).restore_notebook_content(
-            notebook_id,
-            &nb.title,
-            &nb.page_order,
-            &targets,
-        )?
+    let past = if from_account {
+        Some(
+            crate::sync::notebook_at(&state, notebook_id, at)?
+                .ok_or_else(|| invalid("that version isn't available"))?,
+        )
     } else {
-        writable_lib!(state, notebook_id).restore_notebook_version(notebook_id, at)?
+        None
     };
+    let mut lib = writable_lib!(state, notebook_id);
+    crate::history::refuse_destructive_restore(&lib, notebook_id)?;
+    let r = match past {
+        Some((nb, pages)) => {
+            let targets = pages.into_iter().map(|p| (p.id, p)).collect();
+            lib.restore_notebook_content(notebook_id, &nb.title, &nb.page_order, &targets)?
+        }
+        None => lib.restore_notebook_version(notebook_id, at)?,
+    };
+    drop(lib);
     state.search.notebook_changed(notebook_id);
     Ok(r)
 }

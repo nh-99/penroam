@@ -54,6 +54,11 @@ import { drawText, elementBounds, linkAt, PageRenderer, paintOf, pdfPageKey, sho
 import type { PageSession, SaveState } from "./session";
 import { rowsFor, toggledTask, type TaskBox } from "./markdown";
 import { MarkdownEditor } from "./markdownEditor";
+import { PresenceLayer } from "./presence";
+import { CommentMarkerLayer } from "./commentMarkers";
+import type { AnchorView, ThreadView } from "../platform/comments";
+import { diffSplices, editFromSplices } from "./textHistory";
+import type { AwarenessPayload, PresencePeer } from "../platform/live";
 import type { FormatAction } from "./markdownFormat";
 import { onMathReady } from "./math";
 import { DIAL_RADIUS_PX, fingerTurn, moveBy, normaliseAngle, outsideDialDeadZone, projectToEdge, reachFor, rotateAbout, RULER_HALF_WIDTH_PX, rulerPress, stepAngle, tickLayout, twoFingerTransform, type Ruler, type RulerSide } from "./ruler";
@@ -128,6 +133,12 @@ export interface EditorState {
   saveError: string | null;
   nativeActive: boolean;
   penSeen: boolean;
+  /** Comments: a range of text in the box last edited is selected, so a comment can be attached to it. */
+  hasTextRange: boolean;
+  /** Comments: the page has a PDF behind it, so a comment can be attached to part of it. */
+  pageHasPdf: boolean;
+  /** Comments: an area or object is being chosen for a comment. */
+  placing: string | null;
   /** The on-screen ruler is shown. */
   rulerShown: boolean;
   /** The ruler's angle in degrees, in [0, 180). */
@@ -154,6 +165,13 @@ export interface EditorCallbacks {
    * replaces the previous list, nearest page first.
    */
   wantPageImages?(wants: { id: string; width: number }[]): void;
+  /**
+   * Live collaboration: where this user is changed (page, view, caret or selection). Called only
+   * after `setAwareness(true)`, never per pen sample; the receiver throttles.
+   */
+  onAwareness?(a: AwarenessPayload): void;
+  /** Comments: a point, area or object was chosen after `beginCommentPlacement`. */
+  onCommentAnchor?(a: AnchorView): void;
 }
 
 export const ERASER_RADIUS_PX = 8;
@@ -250,6 +268,8 @@ interface TextEdit {
   composing: boolean;
 }
 
+type CommentRectLike = { x: number; y: number; w: number; h: number };
+
 export class InkEditor {
   readonly world: HTMLDivElement;
   readonly renderer: PageRenderer;
@@ -294,6 +314,20 @@ export class InkEditor {
   /** The scale when a platform pinch began. */
   private pinchStart: number | null = null;
   private edit: TextEdit | null = null;
+  /** Comment anchors over the page, below the presence layer. */
+  private commentLayer: CommentMarkerLayer;
+  private commentThreads: readonly ThreadView[] = [];
+  private commentSelected: string | null = null;
+  private onOpenThread: (id: string) => void = () => {};
+  /** What is being chosen for a comment; not a tool, so the user's pen or eraser stays selected. */
+  private placement: "point" | "rect" | "pdf" | "element" | null = null;
+  /** The text range last selected in a text box, kept after the box closes so a comment can use it. */
+  private textRange: { pageId: string; elementId: string; start: number; end: number } | null = null;
+  /** Other people's markers over the page (live collaboration). */
+  private presence: PresenceLayer;
+  private peers: readonly PresencePeer[] = [];
+  /** Send awareness through `cb.onAwareness`. Off outside shared notebooks or when presence is off. */
+  private awarenessOn = false;
   private touches = new Map<number, { x: number; y: number }>();
   private pinch: { dist: number; scale: number; ax: number; ay: number } | null = null;
   private pan: { pointerId: number; x: number; y: number } | null = null;
@@ -374,6 +408,9 @@ export class InkEditor {
     this.overlay.className = "absolute inset-0";
     this.overlay.style.pointerEvents = "none";
     this.world.appendChild(this.overlay);
+
+    this.commentLayer = new CommentMarkerLayer(this.world);
+    this.presence = new PresenceLayer(this.world);
 
     this.selBox = document.createElement("div");
     this.selBox.className = "penroam-selection absolute hidden";
@@ -529,6 +566,9 @@ export class InkEditor {
       saveError: this.session?.lastError ?? null,
       nativeActive: this.nativeVisible,
       penSeen: this.penSeen,
+      hasTextRange: !!this.textRange,
+      pageHasPdf: !!this.session?.page.background,
+      placing: this.placement,
       rulerShown: this.rulerShown,
       rulerAngle: this.ruler?.angle ?? 0,
     });
@@ -558,6 +598,12 @@ export class InkEditor {
     this.scrollRequested = null;
     this.session = session;
     session.readOnly = this.viewOnly;
+    session.measureText = (t) => this.textHeight(t as Text);
+    this.renderPresence();
+    this.textRange = null;
+    this.cancelCommentPlacement();
+    this.renderComments();
+    this.sendAwareness({ pageId: session.page.id, kind: "here" });
     // PDF page bitmaps belong to the notebook the cache reads from
     if (pdfCache !== this.pdfCache) {
       this.renderer.pdfPages.clear();
@@ -569,6 +615,7 @@ export class InkEditor {
       onSaveState: (s, err) => this.emit({ saveState: s, saveError: err ?? null }),
       onHistory: (u, r) => this.emit({ canUndo: u, canRedo: r }),
       onPageReplaced: () => this.pageReplaced(),
+      onRemoteElements: (c) => this.remoteElements(c),
     };
     const p = session.page;
     if (this.canvas) {
@@ -619,6 +666,211 @@ export class InkEditor {
     return !!(this.active || this.erase || this.drag || this.edit);
   }
 
+  /** True while a stroke, erase or drag is in progress (nothing may be sent or merged then). */
+  strokeActive(): boolean {
+    return !!(this.active || this.erase || this.drag);
+  }
+
+  /**
+   * Whether remote changes may be merged into the page now: not during a stroke, erase or drag,
+   * and not while an IME composition is open (the merge would cancel it). Ordinary typing is fine.
+   */
+  canMergeRemote(): boolean {
+    return !this.strokeActive() && !this.edit?.composing;
+  }
+
+  /** Saves the text typed so far, so the session holds what the editor holds before a merge. */
+  flushText() {
+    if (this.edit && !this.edit.composing) this.commitText(false);
+  }
+
+  /** Starts or stops reporting where this user is. */
+  setAwareness(on: boolean) {
+    this.awarenessOn = on;
+    if (on && this.session) {
+      this.sendAwareness({ pageId: this.session.page.id, kind: "here" });
+      this.applyTransform(false);
+    }
+  }
+
+  private sendAwareness(a: AwarenessPayload) {
+    if (this.awarenessOn) this.cb.onAwareness?.(a);
+  }
+
+  /** Other people's presence, drawn over the page (their page-space markers follow zoom and pan). */
+  setPeers(peers: readonly PresencePeer[]) {
+    this.peers = peers;
+    this.renderPresence();
+  }
+
+  // ------------------------------------------------------------ comments --
+
+  /** The threads to draw as markers, which one is open, and what a marker press does. */
+  setComments(threads: readonly ThreadView[], selected: string | null, onOpen: (threadId: string) => void) {
+    this.commentThreads = threads;
+    this.commentSelected = selected;
+    this.onOpenThread = onOpen;
+    this.renderComments();
+  }
+
+  private renderComments() {
+    this.commentLayer.setThreads(this.commentThreads, this.session?.page.id ?? null, this.commentSelected, (id) => this.onOpenThread(id));
+  }
+
+  /** The anchor for what is selected: one object follows itself; several become the area around them. */
+  selectionAnchor(): AnchorView | null {
+    const s = this.session;
+    if (!s || !this.selection.size) return null;
+    const els = [...this.selection].map((id) => s.elementById(id)).filter(Boolean) as Element[];
+    if (!els.length) return null;
+    const box = (e: Element) => elementBounds(e);
+    const toRect = ([x0, y0, x1, y1]: Rect) => ({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+    if (els.length === 1) return { kind: "element", pageId: s.page.id, elementId: els[0].id, fallbackRect: toRect(box(els[0])) };
+    let u: Rect | null = null;
+    for (const e of els) u = unionRect(u, box(e));
+    return { kind: "rect", pageId: s.page.id, rect: toRect(u!) };
+  }
+
+  /** The selected range of a text block, for a text-range comment (UTF-16 offsets), or null. */
+  textRangeSelection() {
+    return this.textRange;
+  }
+
+  /**
+   * Waits for a tap (a point or an object) or a drag (an area) on the page and reports the anchor
+   * through `onCommentAnchor`. It is a one-shot mode, not a tool: the pen, eraser or text tool
+   * stay selected and work again as soon as it ends.
+   */
+  beginCommentPlacement(kind: "point" | "rect" | "pdf" | "element") {
+    if (!this.session) return;
+    this.endTextEdit();
+    this.cancelGestures();
+    this.placement = kind;
+    this.viewport.dataset.placing = kind;
+    this.updateNative();
+    this.emit({ placing: kind });
+  }
+
+  cancelCommentPlacement() {
+    if (!this.placement) return;
+    this.placement = null;
+    delete this.viewport.dataset.placing;
+    this.commentLayer.preview(null);
+    this.updateNative();
+    this.emit({ placing: null });
+  }
+
+  private placementDown(e: PointerEvent) {
+    const kind = this.placement!;
+    const s = this.session!;
+    e.preventDefault();
+    const [sx, sy] = this.docPoint(e);
+    const area = (ex: number, ey: number): CommentRectLike => ({ x: Math.min(sx, ex), y: Math.min(sy, ey), w: Math.abs(ex - sx), h: Math.abs(ey - sy) });
+    const move = (m: PointerEvent) => {
+      if (kind === "rect" || kind === "pdf") this.commentLayer.preview(area(...this.docPoint(m)));
+    };
+    const up = (u: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      const [ex, ey] = this.docPoint(u);
+      this.commentLayer.preview(null);
+      if (u.type === "pointercancel" || !this.placement) return;
+      const pageId = s.page.id;
+      let anchor: AnchorView;
+      if (kind === "point") anchor = { kind: "point", pageId, x: sx, y: sy };
+      else if (kind === "element") {
+        const hit = this.hitElement(ex, ey);
+        if (!hit) return this.cb.onError("Tap a drawing, some text or an image to comment on it.");
+        const [x0, y0, x1, y1] = elementBounds(hit);
+        anchor = { kind: "element", pageId, elementId: hit.id, fallbackRect: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+      } else {
+        let r = area(ex, ey);
+        // a tap is a small box around it, not an empty one
+        if (r.w < 6 && r.h < 6) r = { x: sx - 20, y: sy - 20, w: 40, h: 40 };
+        if (kind === "rect") anchor = { kind: "rect", pageId, rect: r };
+        else {
+          const bg = s.page.background;
+          if (!bg) return this.cb.onError("This page has no PDF behind it.");
+          const { width, height } = s.page.size;
+          anchor = { kind: "pdf", pageId, pdfPageIndex: bg.pageIndex, normalizedRect: { x: r.x / width, y: r.y / height, w: r.w / width, h: r.h / height }, rotation: bg.rotation };
+        }
+      }
+      this.cancelCommentPlacement();
+      this.cb.onCommentAnchor?.(anchor);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  private renderPresence() {
+    const blockRect = (id: string) => {
+      const e = this.session?.elementById(id);
+      if (e?.type !== "text") return null;
+      const [x0, y0, x1, y1] = textBounds(e);
+      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    };
+    this.presence.setPeers(this.peers, this.session?.page.id ?? null, blockRect);
+  }
+
+  /** The caret or selection of the text box being edited, in page coordinates, for others to see. */
+  private reportSelection(view: import("@codemirror/view").EditorView) {
+    if (!this.edit || !this.session) return;
+    const sel = view.state.selection.main;
+    // kept after the box closes, for "comment on the selected text"
+    const had = !!this.textRange;
+    this.textRange = sel.empty ? null : { pageId: this.session.page.id, elementId: this.edit.id, start: sel.from, end: sel.to };
+    if (had !== !!this.textRange) this.emit({ hasTextRange: !!this.textRange });
+    if (!this.awarenessOn) return;
+    const r = this.rect ?? this.viewport.getBoundingClientRect();
+    const pt = (pos: number) => {
+      const c = view.coordsAtPos(pos);
+      if (!c) return null;
+      const [x, y] = toDoc(this.transform, c.left - r.left, c.top - r.top);
+      return { x, y, h: (c.bottom - c.top) / this.transform.scale };
+    };
+    const head = pt(sel.head);
+    if (!head) return;
+    const base = { pageId: this.session.page.id, blockId: this.edit.id };
+    if (sel.empty) this.sendAwareness({ ...base, kind: "caret", caret: head });
+    else {
+      const a = pt(sel.anchor) ?? head;
+      const x0 = Math.min(a.x, head.x), y0 = Math.min(a.y, head.y);
+      // a bounding box of the two ends: enough to show where, without lines of layout detail
+      this.sendAwareness({ ...base, kind: "selection", rect: { x: x0, y: y0, w: Math.max(Math.abs(a.x - head.x), 2), h: Math.abs(a.y - head.y) + Math.max(a.h, head.h) } });
+    }
+  }
+
+  /**
+   * Remote changes merged into the page: bring the text box being edited in line with the block's
+   * new text. Only what differs changes, so the caret and selection map through it, and the box's
+   * undo history is left alone.
+   */
+  private syncEditedText() {
+    const ed = this.edit;
+    const view = this.textEditor;
+    if (!ed || !view) return;
+    const el = this.session?.elementById(ed.id);
+    if (el?.type !== "text") return;
+    if (view.text !== el.text) view.applyRemote(el.text);
+    ed.committed = el;
+    ed.draft = { ...el, text: view.text };
+    this.layoutTextEditor();
+  }
+
+  /** Remote changes were few: draw only what differs. Nothing here touches the tool or a stroke. */
+  remoteElements(c: { added: Element[]; removed: Element[] }) {
+    const s = this.session;
+    if (!s) return;
+    for (const id of [...this.selection]) if (!s.elementById(id)) this.selection.delete(id);
+    this.onElementsChanged(c);
+    this.syncEditedText();
+    this.renderPresence();
+    this.renderComments();
+    this.emitAll();
+  }
+
   /** The session's page was replaced (remote changes merged): redraw, keep the view. */
   private pageReplaced() {
     const s = this.session;
@@ -633,6 +885,9 @@ export class InkEditor {
     this.scheduleSettle(); // the redraw replaced any change of resolution in progress
     if (this.native?.ownsCommittedInk && this.nativeMounted) this.nativeCall((n) => n.loadCommittedInk(this.inkElements()));
     if (this.selection.size) this.updateSelectionBox();
+    this.syncEditedText();
+    this.renderPresence();
+    this.renderComments();
     this.emitAll();
     this.cb.onPageEdited();
   }
@@ -944,6 +1199,10 @@ export class InkEditor {
       this.followScroll();
     }
     this.scheduleSettle();
+    if (this.awarenessOn && this.session) {
+      const [x0, y0, x1, y1] = this.visibleDocRect();
+      this.sendAwareness({ pageId: this.session.page.id, kind: "viewport", rect: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } });
+    }
   }
 
   // ========================================== continuous scrolling ==
@@ -1394,6 +1653,7 @@ export class InkEditor {
     if (!this.session) return;
     this.clearMatches();
     this.rect = this.viewport.getBoundingClientRect();
+    if (this.placement) return this.placementDown(e);
     if (e.pointerType === "pen") {
       this.markPenSeen();
       this.abandonFingerDraw();
@@ -2360,7 +2620,14 @@ export class InkEditor {
       text: t.text,
       fontSize: t.fontSize,
       rowPitch: t.rowPitch,
-      onChange: (text) => this.onTextInput(text),
+      onChange: (text, remote) => {
+        // a collaborator's text is already in the page: it is not typing and is never committed as mine
+        if (remote) {
+          if (this.edit) this.edit.draft.text = text;
+          this.layoutTextEditor();
+        } else this.onTextInput(text);
+      },
+      onSelection: (view) => this.reportSelection(view),
       onFormats: (textFormats) => this.emit({ textFormats }),
       onResize: () => this.layoutTextEditor(),
     });
@@ -2441,7 +2708,14 @@ export class InkEditor {
     } else if (empty) {
       return;
     } else if (prev.text !== next.text || prev.color !== next.color || prev.fontSize !== next.fontSize || prev.font !== next.font || prev.height !== next.height || prev.y !== next.y || prev.rowPitch !== next.rowPitch) {
-      s.commit({ label: "Edit text", forward: [{ op: "replaceElements", elements: [next] }], inverse: [{ op: "replaceElements", elements: [prev] }] });
+      const splices = diffSplices(prev.text, next.text);
+      s.commit({
+        label: "Edit text",
+        forward: [{ op: "replaceElements", elements: [next] }],
+        inverse: [{ op: "replaceElements", elements: [prev] }],
+        // own changes are kept as ranges, so undo later removes only this user's part of the text
+        text: splices.length ? { elementId: next.id, edit: editFromSplices(prev.text, splices), splices } : undefined,
+      });
     } else return;
     ed.committed = next;
     ed.isNew = false;
@@ -2865,7 +3139,7 @@ export class InkEditor {
 
   private wantNative(): boolean {
     // native layers draw strokes themselves and cannot lock them to the ruler
-    if (!this.native || !this.settings.useNativeInk || !this.session || this.viewOnly || this.overlayBlocked || this.edit || this.rulerShown) return false;
+    if (!this.native || !this.settings.useNativeInk || !this.session || this.viewOnly || this.placement || this.overlayBlocked || this.edit || this.rulerShown) return false;
     if (this.native.kind === "ios-pencil") return this.tool === "pen" || this.tool === "highlighter";
     return DRAW_TOOLS.includes(this.tool);
   }

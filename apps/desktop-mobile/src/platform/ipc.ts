@@ -27,6 +27,7 @@ import type { Paper } from "../generated/Paper";
 import type { RecoveryReport } from "../generated/RecoveryReport";
 import type { Template } from "../generated/Template";
 import type { Size } from "../generated/Size";
+import type { AuthorView } from "./history";
 
 /** One restorable version. Those older than this device's own record come from the account. */
 export interface HistoryRow {
@@ -36,6 +37,8 @@ export interface HistoryRow {
   at: number;
   added: number;
   removed: number;
+  /** Who made the changes of this version, when the account's log says (shared notebooks). */
+  authors?: AuthorView[];
 }
 
 /** Where automatic backups go. */
@@ -140,7 +143,7 @@ export const api = {
   /** Adds a PDF to the notebook without making pages, for placing its pages on a canvas. */
   addPdfAsset: (notebookId: string, path: string, fileName?: string) =>
     call<{ notebook: Notebook; pages: PdfBackgroundRef[] }>("add_pdf_asset", { notebookId, path, fileName }),
-  exportNotebook: (notebookId: string, path: string) => call<{ bytes: number; pages: number }>("export_notebook", { notebookId, path }),
+  exportNotebook: (notebookId: string, path: string, includeComments = false, includeAuthors = false) => call<{ bytes: number; pages: number }>("export_notebook", { notebookId, path, includeComments, includeAuthors }),
   importNotebook: (path: string) => call<ImportReport>("import_notebook", { path }),
   inspectNotebook: (path: string) => call<ArchiveSummary>("inspect_notebook", { path }),
   importDocument: (path: string, fileName: string) => call<{ notebook: Notebook; report: ImportLoss }>("import_document", { path, fileName }),

@@ -6,6 +6,7 @@ import { LoaderCircle, EllipsisVertical, Users, Download } from "@lucide/vue";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import { roleLabel, sharedStatusLabel, type SharedNotebookView } from "../platform/sharing";
 import Btn from "./ui/Btn.vue";
+import { cleanName } from "../platform/display";
 import Menu from "./ui/Menu.vue";
 import MenuItem from "./ui/MenuItem.vue";
 
@@ -37,7 +38,7 @@ const title = () => props.nb?.title ?? props.shared.title;
           <span class="rounded-full border border-line px-1.5 epaper:border-black epaper:text-black" data-testid="role-chip">{{ roleLabel(shared.role) }}</span>
           <span data-testid="state-label">{{ sharedStatusLabel(shared) }}</span>
         </p>
-        <p v-if="shared.ownerDisplay" class="truncate text-xs text-muted">From {{ shared.ownerDisplay }}</p>
+        <p v-if="shared.ownerDisplay" class="truncate text-xs text-muted">From <bdi>{{ cleanName(shared.ownerDisplay) }}</bdi></p>
         <button v-if="shared.syncState === 'needsResolution' && shared.state === 'active'" type="button" class="mt-1 text-xs underline" @click="emit('resolve')">Resolve differences</button>
       </div>
       <Menu v-if="shared.state === 'active'" :label="`${title()} actions`">

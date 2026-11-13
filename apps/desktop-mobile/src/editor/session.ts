@@ -12,11 +12,26 @@ import type { OperationBatch } from "../generated/OperationBatch";
 import type { Page } from "../generated/Page";
 import type { ApplyOutcome } from "../generated/ApplyOutcome";
 import { newId } from "./ids";
+import { diffSplices, invertEdit, mapEdit, type OwnEdit, type Splice } from "./textHistory";
+
+/**
+ * A change to the text of one block, kept as ranges of the current text (see textHistory.ts) so
+ * that undo and redo touch only this user's part of it after collaborators edited the block too.
+ * `forward`/`inverse` of the change stay as the whole-element fallback.
+ */
+export interface TextChange {
+  elementId: string;
+  /** What the change's last application did, as ranges of the text as it is now. */
+  edit: OwnEdit;
+  /** On commit only: the splices of this change itself, to map older stored edits through. */
+  splices?: Splice[];
+}
 
 export interface Change {
   label: string;
   forward: OpKind[];
   inverse: OpKind[];
+  text?: TextChange;
 }
 
 export type SaveState = "saved" | "dirty" | "saving" | "error";
@@ -128,6 +143,8 @@ export interface SessionEvents {
   onHistory?(canUndo: boolean, canRedo: boolean): void;
   /** The whole page was replaced (remote changes merged in): re-render everything. */
   onPageReplaced?(): void;
+  /** Remote changes were merged in and were few: only these elements differ (replaced ones are in both). */
+  onRemoteElements?(changed: { added: Element[]; removed: Element[] }): void;
 }
 
 export class PageSession {
@@ -141,7 +158,10 @@ export class PageSession {
   private closed = false;
   private index: Map<string, Element>;
   private rebases = 0;
+  private edits = 0;
   events: SessionEvents = {};
+  /** Height of a text block with new text, so undoing text keeps the block's size right. */
+  measureText: ((t: Element) => number) | null = null;
   /**
    * View-only access (a viewer, or access that was removed). This is the central guard: while
    * set, `commit`, `undo` and `redo` refuse, so nothing is applied locally or queued for Rust,
@@ -198,6 +218,11 @@ export class PageSession {
     if (this.closed) throw new Error("session closed");
     if (this.readOnlyFlag || change.forward.length === 0) return;
     this.applyLocal(change.forward);
+    if (change.text?.splices) {
+      // older edits of this block now sit in text this change rewrote
+      this.rebaseText(change.text.elementId, change.text.splices);
+      change.text = { elementId: change.text.elementId, edit: change.text.edit };
+    }
     this.undoStack.push(change);
     if (this.undoStack.length > this.historyLimit) this.undoStack.shift();
     this.redoStack.length = 0;
@@ -209,7 +234,7 @@ export class PageSession {
     if (this.readOnlyFlag) return null;
     const c = this.undoStack.pop();
     if (!c) return null;
-    const ops = this.tolerant(c.inverse);
+    const ops = this.textOps(c) ?? this.tolerant(c.inverse);
     this.applyLocal(ops);
     this.redoStack.push(c);
     this.enqueue(ops);
@@ -221,12 +246,36 @@ export class PageSession {
     if (this.readOnlyFlag) return null;
     const c = this.redoStack.pop();
     if (!c) return null;
-    const ops = this.tolerant(c.forward);
+    const ops = this.textOps(c) ?? this.tolerant(c.forward);
     this.applyLocal(ops);
     this.undoStack.push(c);
     this.enqueue(ops);
     this.emitHistory();
     return c;
+  }
+
+  /**
+   * Undo or redo of a text change as an edit of the block's current text: only this user's
+   * insertions go and only their deletions come back. Null when the block is gone, so the
+   * ordinary whole-element ops run (and are sanitised).
+   */
+  private textOps(c: Change): OpKind[] | null {
+    const t = c.text;
+    const el = t && this.index.get(t.elementId);
+    if (!t || !el || el.type !== "text") return null;
+    const r = invertEdit(el.text, t.edit);
+    this.rebaseText(t.elementId, r.splices, c);
+    t.edit = r.edit;
+    const next = { ...el, text: r.text };
+    return [{ op: "replaceElements", elements: [this.measureText ? { ...next, height: this.measureText(next) } : next] }];
+  }
+
+  /** Maps every stored edit of a block (both stacks, except `skip`) through changes made to its text. */
+  private rebaseText(elementId: string, splices: Splice[], skip?: Change) {
+    if (!splices.length) return;
+    for (const c of [...this.undoStack, ...this.redoStack]) {
+      if (c !== skip && c.text?.elementId === elementId) c.text.edit = mapEdit(c.text.edit, splices);
+    }
   }
 
   /** Undo/redo ops minus targets that disappeared since (remote changes). */
@@ -248,7 +297,9 @@ export class PageSession {
    * (unsaved local edits) on top, dropping parts that no longer apply.
    * Returns the ops that were applied (to be saved).
    */
-  replacePage(fresh: Page, ops: OpKind[] = []): OpKind[] {
+  replacePage(fresh: Page, ops: OpKind[] = [], opts: { incremental?: boolean } = {}): OpKind[] {
+    const old = this.page;
+    const oldIndex = this.index;
     this.page = fresh;
     this.revision = fresh.revision;
     this.index = new Map(fresh.elements.map((e) => [e.id, e]));
@@ -259,8 +310,42 @@ export class PageSession {
       applyOpLocal(this.page, s, this.index);
       kept.push(s);
     }
-    this.events.onPageReplaced?.();
+    // text other people changed moves this user's stored text edits along with it
+    for (const [id, now] of this.index) {
+      const before = oldIndex.get(id);
+      if (before?.type === "text" && now.type === "text" && before.text !== now.text) this.rebaseText(id, diffSplices(before.text, now.text));
+    }
+    const delta = opts.incremental ? elementDelta(old, fresh, oldIndex, this.index) : null;
+    if (delta) this.events.onRemoteElements?.(delta);
+    else this.events.onPageReplaced?.();
     return kept;
+  }
+
+  /**
+   * Counts every change this user applied to the page (commit, undo, redo). A caller that reads the
+   * page from storage in the background compares it before and after: if it moved, the snapshot is
+   * older than something just drawn and must not be installed.
+   */
+  get editCount() {
+    return this.edits;
+  }
+
+  /**
+   * Merges the page as storage has it now (synced remote changes) into this session, unless that
+   * would be wrong. `load` reads storage; it takes time, and the user may draw meanwhile. So the
+   * snapshot is dropped ("stale", read it again later) when anything was applied here while it was
+   * loading, when its revision is lower than the page's, when `canMerge` says no (a stroke or an
+   * IME composition is in progress), or when edits are still being saved. Never installs a
+   * snapshot older than the page.
+   */
+  async mergeRemote(load: () => Promise<Page>, canMerge: () => boolean = () => true): Promise<"merged" | "stale"> {
+    const edits = this.edits;
+    const revision = this.page.revision;
+    const fresh = await load();
+    const older = fresh.revision < Math.max(revision, this.page.revision);
+    if (this.closed || this.edits !== edits || older || !canMerge() || !this.idle) return "stale";
+    this.replacePage(fresh, [], { incremental: true });
+    return "merged";
   }
 
   /** True while nothing is waiting to be saved. */
@@ -269,6 +354,7 @@ export class PageSession {
   }
 
   private applyLocal(ops: OpKind[]) {
+    this.edits++;
     const added: Element[] = [];
     const removed: Element[] = [];
     let templateChanged = false;
@@ -375,6 +461,42 @@ export class PageSession {
     await this.flush();
     this.closed = true;
   }
+}
+
+/** How many differing elements a remote merge may have and still be drawn incrementally. */
+const INCREMENTAL_LIMIT = 64;
+
+/** Cheap change test: ink is compared by shape summary, everything else structurally. */
+function sameElement(a: Element, b: Element): boolean {
+  if (a === b) return true;
+  if (a.type !== b.type) return false;
+  if (a.type === "ink" && b.type === "ink") {
+    const pa = a.points, pb = b.points;
+    return a.z === b.z && a.color === b.color && a.width === b.width && pa.length === pb.length && JSON.stringify(pa[0]) === JSON.stringify(pb[0]) && JSON.stringify(pa[pa.length - 1]) === JSON.stringify(pb[pb.length - 1]);
+  }
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * The elements that differ between two copies of a page, or null when the page itself changed
+ * (template, size, background) or too much did, so that a full redraw is the better answer.
+ */
+export function elementDelta(old: Page, fresh: Page, oldIndex: Map<string, Element>, newIndex: Map<string, Element>): { added: Element[]; removed: Element[] } | null {
+  if (old.size.width !== fresh.size.width || old.size.height !== fresh.size.height) return null;
+  if (JSON.stringify(old.template) !== JSON.stringify(fresh.template) || JSON.stringify(old.background ?? null) !== JSON.stringify(fresh.background ?? null)) return null;
+  const added: Element[] = [];
+  const removed: Element[] = [];
+  for (const [id, e] of oldIndex) {
+    const n = newIndex.get(id);
+    if (!n) removed.push(e);
+    else if (!sameElement(e, n)) {
+      removed.push(e);
+      added.push(n);
+    }
+    if (removed.length + added.length > INCREMENTAL_LIMIT) return null;
+  }
+  for (const [id, e] of newIndex) if (!oldIndex.has(id)) added.push(e);
+  return removed.length + added.length > INCREMENTAL_LIMIT ? null : { added, removed };
 }
 
 export function errorMessage(e: unknown): string {

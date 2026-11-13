@@ -6,14 +6,19 @@ import { CloudCheck, CloudUpload, CloudOff, CloudAlert, Cloud } from "@lucide/vu
 import { useSync } from "../stores/sync";
 import { describeStatus, statusIcon } from "../platform/sync";
 
+// `live`: the live channel's words for a shared notebook ("Live", "Live disconnected — …").
+const props = defineProps<{ live?: string | null }>();
 const emit = defineEmits<{ open: [] }>();
 const sync = useSync();
 const icon = computed(() => statusIcon(sync.status));
 const label = computed(() => {
   const s = sync.status;
   const base = describeStatus(s).text;
-  return s && s.conflicts > 0 ? `${base} · ${s.conflicts} conflict(s)` : base;
+  const withConflicts = s && s.conflicts > 0 ? `${base} · ${s.conflicts} conflict(s)` : base;
+  return props.live ? `${withConflicts} · ${props.live}` : withConflicts;
 });
+// a closed channel is a warning; a live one is not a promise that anything was saved
+const liveDown = computed(() => !!props.live && props.live.startsWith("Live disconnected"));
 </script>
 
 <template>
@@ -23,5 +28,6 @@ const label = computed(() => {
     <CloudOff v-else-if="icon === 'off'" :size="18" class="text-muted" />
     <CloudAlert v-else-if="icon === 'alert'" :size="18" class="text-danger" />
     <Cloud v-else :size="18" class="text-muted" />
+    <span v-if="live" class="hidden whitespace-nowrap sm:inline" :class="liveDown ? 'text-warn' : 'text-muted'" data-testid="live-status">{{ live }}</span>
   </button>
 </template>

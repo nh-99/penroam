@@ -6,6 +6,7 @@ import { computed, onMounted, ref } from "vue";
 import { LoaderCircle, Mail, UserMinus, X, ShieldAlert } from "@lucide/vue";
 import Modal from "./ui/Modal.vue";
 import Btn from "./ui/Btn.vue";
+import { cleanName } from "../platform/display";
 import ConfirmDialog from "./ConfirmDialog.vue";
 import { useSync } from "../stores/sync";
 import { useSharing } from "../stores/sharing";
@@ -153,11 +154,12 @@ const asInviteRole = (e: Event) => (e.target as HTMLSelectElement).value as Invi
           <h3 id="share-people" class="text-sm font-semibold">People with access</h3>
           <ul class="mt-2 divide-y divide-line rounded-xl border border-line">
             <li v-for="m in members" :key="m.accountId" class="flex flex-wrap items-center gap-2 px-3 py-2">
-              <span class="min-w-0 flex-1 truncate text-sm">{{ memberName(m) }}<span v-if="m.isYou" class="text-muted"> (you)</span></span>
+              <span class="min-w-0 flex-1 truncate text-sm"><bdi>{{ memberName(m) }}</bdi><span v-if="m.isYou" class="text-muted"> (you)</span></span>
               <template v-if="isOwner && m.role !== 'owner' && !m.isYou && m.state !== 'revoked'">
                 <label class="sr-only" :for="`role-${m.accountId}`">Role for {{ memberName(m) }}</label>
                 <select :id="`role-${m.accountId}`" class="h-11 rounded-xl border border-line bg-surface px-2 text-sm epaper:border-2" :value="m.role" :disabled="busy" @change="changeRole(m, asInviteRole($event))">
                   <option value="editor">Can edit</option>
+                  <option value="commenter">Can comment</option>
                   <option value="viewer">View only</option>
                 </select>
                 <button type="button" class="touch-target inline-flex items-center justify-center rounded-lg text-danger hover:bg-surface-2" :aria-label="`Remove ${memberName(m)}`" :disabled="busy" @click="removing = m">
@@ -174,9 +176,9 @@ const asInviteRole = (e: Event) => (e.target as HTMLSelectElement).value as Invi
           <ul class="mt-2 divide-y divide-line rounded-xl border border-line">
             <li v-for="i in pending" :key="i.invitationId" class="flex flex-wrap items-center gap-2 px-3 py-2">
               <Mail :size="16" class="shrink-0 text-muted" aria-hidden="true" />
-              <span class="min-w-0 flex-1 truncate text-sm">{{ i.email }}</span>
+              <span class="min-w-0 flex-1 truncate text-sm"><bdi>{{ cleanName(i.email) }}</bdi></span>
               <span class="rounded-full border border-line px-2 py-0.5 text-xs text-muted epaper:border-black epaper:text-black">{{ roleLabel(i.role) }}</span>
-              <button type="button" class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" :aria-label="`Cancel invitation to ${i.email}`" :disabled="busy" @click="cancel(i)">
+              <button type="button" class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" :aria-label="`Cancel invitation to ${cleanName(i.email)}`" :disabled="busy" @click="cancel(i)">
                 <X :size="18" />
               </button>
             </li>
@@ -195,6 +197,7 @@ const asInviteRole = (e: Event) => (e.target as HTMLSelectElement).value as Invi
               <span class="sr-only">Role</span>
               <select v-model="inviteRole" class="h-11 rounded-xl border border-line bg-surface px-2 text-sm epaper:border-2">
                 <option value="editor">Can edit</option>
+                <option value="commenter">Can comment</option>
                 <option value="viewer">View only</option>
               </select>
             </label>

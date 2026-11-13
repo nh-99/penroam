@@ -15,6 +15,7 @@ export type SyncPhase =
   | "revoked"
   | "needsUpgrade"
   | "accessRemoved"
+  | "needsCatchUp"
   | "quotaExceeded"
   | "rebaseRequired"
   | "integrityAlert"
@@ -105,7 +106,9 @@ export interface SyncConflict {
   winner: string;
   /** The value currently shown (same shapes as the alternates' values). */
   winnerValue: unknown;
-  alternates: { opId: string; value: unknown }[];
+  /** Who made the shown version, when the server's record says (shared notebooks). */
+  winnerAuthor?: import("./history").AuthorView;
+  alternates: { opId: string; value: unknown; author?: import("./history").AuthorView }[];
 }
 
 /** What a server needs before setup (see `sync_server_info`). */
@@ -331,6 +334,8 @@ export function describeStatus(s: SyncStatus | null): { tone: "ok" | "busy" | "m
       return { tone: "danger", text: "This device was removed from the account; local notes are kept" };
     case "needsUpgrade":
       return { tone: "warn", text: "Another device uses a newer Penroam · update to receive those changes (nothing is lost)" };
+    case "needsCatchUp":
+      return { tone: "busy", text: "Needs catch-up · rebuilding from the server's checkpoint; changes not sent yet are kept and go up afterwards" };
     case "accessRemoved":
       return { tone: "warn", text: "Your access to this shared notebook was removed · nothing more is sent or received" };
     case "quotaExceeded":

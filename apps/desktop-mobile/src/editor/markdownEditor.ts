@@ -7,21 +7,24 @@
 // same way whatever the formatting. Undo inside a box is CodeMirror's; the page's undo history gets
 // the batched result when the engine commits.
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { activeFormats, type FormatAction, formatTransaction, taskToggleAt } from "./markdownFormat";
 import { HEADING_SCALE, rowsFor } from "./markdown";
 import { livePreview, markdownSyntax } from "./markdownPreview";
 import { focusedGrid } from "./sheetGrid";
 import { lineHeight } from "./textLayout";
+import { diffSplices } from "./textHistory";
 
 export interface MarkdownEditorOptions {
   text: string;
   fontSize: number;
   /** The paper's row height, for text locked to rows. */
   rowPitch?: number;
-  /** The source changed. */
-  onChange(text: string): void;
+  /** The source changed. `remote`: a collaborator's change was merged in, not typing. */
+  onChange(text: string, remote?: boolean): void;
+  /** The caret or selection moved, or the text under it changed. */
+  onSelection?(view: EditorView): void;
   /** The commands that are on at the selection may have changed. */
   onFormats(formats: FormatAction[]): void;
   /** The rendered height may have changed without the source changing. */
@@ -72,9 +75,12 @@ export class MarkdownEditor {
             },
           }),
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) opts.onChange(u.state.doc.toString());
+            if (u.docChanged) opts.onChange(u.state.doc.toString(), u.transactions.some((t) => t.annotation(Transaction.remote) === true));
             else if (u.geometryChanged || u.heightChanged) opts.onResize();
-            if (u.docChanged || u.selectionSet) opts.onFormats(activeFormats(u.state));
+            if (u.docChanged || u.selectionSet) {
+              opts.onFormats(activeFormats(u.state));
+              opts.onSelection?.(u.view);
+            }
           }),
         ],
       }),
@@ -99,6 +105,27 @@ export class MarkdownEditor {
 
   focus() {
     this.view.focus();
+  }
+
+  /** The current source. */
+  get text(): string {
+    return this.view.state.doc.toString();
+  }
+
+  /**
+   * Merges a collaborator's version of the text in, changing only what differs. The caret and
+   * selection map through the change, composition isn't touched (the caller waits for it to end),
+   * and the change is kept out of this box's undo history, which CodeMirror rebases over it, so
+   * undo removes only what was typed here.
+   */
+  applyRemote(target: string) {
+    const doc = this.view.state.doc.toString();
+    const splices = diffSplices(doc, target);
+    if (!splices.length) return;
+    this.view.dispatch({
+      changes: splices.map((s) => ({ from: s.from, to: s.to, insert: s.insert })),
+      annotations: [Transaction.remote.of(true), Transaction.addToHistory.of(false)],
+    });
   }
 
   /** Runs a toolbar command. Always reports handled, as a keyboard shortcut must not fall through. */

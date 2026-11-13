@@ -62,6 +62,7 @@ use crate::AppState;
 use penroam_core::replica::{Conflict, ConflictTarget};
 use penroam_core::{Notebook, Page};
 use penroam_storage::ErrorCode;
+use penroam_sync::attribution::{self, AttributionStore, AuthorContext, Stream};
 use penroam_sync::auth;
 use penroam_sync::crypto::RootSecret;
 use penroam_sync::locker::{self, LockerError};
@@ -98,6 +99,9 @@ const IDLE_INTERVAL: Duration = Duration::from_secs(60);
 /// Replaces [`IDLE_INTERVAL`] while the OS battery saver is on. Local edits still sync at once.
 const SAVER_INTERVAL: Duration = Duration::from_secs(300);
 const DEBOUNCE: Duration = Duration::from_millis(1500);
+/// Replaces [`DEBOUNCE`] while a shared notebook's live channel is connected, so the others see
+/// an edit within a moment.
+const LIVE_DEBOUNCE: Duration = Duration::from_millis(150);
 /// How long a browser sign-in may take before it is abandoned.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 /// Pause between attempts while the sign-in has ended (the user must act).
@@ -206,8 +210,12 @@ enum Cmd {
     /// Notebooks in the account that were permanently deleted here.
     Erased(Reply<Vec<ErasedNotebook>>),
     RestoreErased(Uuid, Reply<()>),
-    Conflicts(Uuid, Reply<Vec<Conflict>>),
+    Conflicts(Uuid, Reply<Vec<serde_json::Value>>),
     Resolve(Uuid, ConflictTarget, Uuid, Reply<()>),
+    /// Keep both versions of an element conflict (the alternate's op id) as copies.
+    KeepBoth(Uuid, ConflictTarget, Uuid, Reply<()>),
+    /// What the history commands need about a notebook's authors ([`WorkerHistory`]).
+    HistoryData(Uuid, Reply<Option<crate::history::NotebookHistory>>),
     /// The account's vaults and which notebooks belong to them.
     Vaults(Reply<VaultsView>),
     /// Name and passphrase. Answers the new vault's recovery code.
@@ -235,6 +243,14 @@ enum Cmd {
     Reauth,
     /// A shared notebook request ([`crate::sharing`]).
     Shared(crate::sharing::SharedCmd),
+    /// A live channel says a space has new commits (or just connected): sync that space now.
+    SpaceHint(String),
+    /// A live channel says a space has new comments: pull its comment stream now.
+    CommentHint(String),
+    /// A comments or notifications request ([`crate::comments`]).
+    Comments(crate::comments::CommentCmd),
+    /// A live channel says access to a space was removed: stop it now.
+    SpaceRevoked(String),
     /// Plan and storage (`account.v1`); `None` when the server has no accounts.
     Account(Reply<Option<AccountView>>),
     /// A billing page URL (`account.v1`): action and offer id.
@@ -309,6 +325,109 @@ pub(crate) fn ask_shared<T>(
     make: impl FnOnce(Reply<T>) -> crate::sharing::SharedCmd,
 ) -> Result<T, CmdError> {
     ask(slot, |r| Cmd::Shared(make(r)))
+}
+
+/// Asks the worker to pull one space's comment stream now (a live comment hint).
+pub(crate) fn hint_comments(app: &AppHandle, space: &str) {
+    let _ = app
+        .state::<AppState>()
+        .sync
+        .send(Cmd::CommentHint(space.to_string()));
+}
+
+/// Sends a comments request to the worker and waits (bounded) for its answer.
+pub(crate) fn ask_comments<T>(
+    slot: &SyncSlot,
+    make: impl FnOnce(Reply<T>) -> crate::comments::CommentCmd,
+) -> Result<T, CmdError> {
+    ask(slot, |r| Cmd::Comments(make(r)))
+}
+
+/// Asks the worker to sync one space now (a live commit hint). Does nothing without sync.
+pub(crate) fn hint_space(app: &AppHandle, space: &str) {
+    let _ = app
+        .state::<AppState>()
+        .sync
+        .send(Cmd::SpaceHint(space.to_string()));
+}
+
+/// Asks the worker to check over HTTP whether access to a space was removed (its live channel
+/// said so, which is only a cue).
+pub(crate) fn revoke_space(app: &AppHandle, space: &str) {
+    let _ = app
+        .state::<AppState>()
+        .sync
+        .send(Cmd::SpaceRevoked(space.to_string()));
+}
+
+/// Keeps one live channel per active shared notebook on a server with `live.v1`: starts the
+/// missing ones (with the space's device session and awareness key), hands renewed sessions to
+/// running ones, and stops those whose notebook is no longer active here.
+fn sync_live(app: &AppHandle, main: &mut Engine, spaces: &mut SpaceSet<HttpTransport>) {
+    let state = app.state::<AppState>();
+    let url = main.store.state.server_url.clone();
+    let live_ok = HttpTransport::new(&url, String::new())
+        .meta()
+        .is_ok_and(|m| m.has_capability(capabilities::LIVE_V1));
+    let root = library_root(app);
+    let owners = NotebookOwners::load(&root).unwrap_or_default();
+    let active: Vec<(Uuid, String)> = owners
+        .shared
+        .iter()
+        .filter(|(_, e)| e.state == penroam_sync::shared::SharedState::Active)
+        .map(|(n, e)| (*n, e.space_id.clone()))
+        .collect();
+    for s in state.live.spaces() {
+        if !live_ok || !active.iter().any(|(_, a)| *a == s) {
+            state.live.stop(&s);
+        }
+    }
+    if !live_ok {
+        return;
+    }
+    let Ok(store) = secrets(app, &root) else {
+        return;
+    };
+    let member = main.store.state.account_id.clone();
+    for (nb, space) in active {
+        let Some(e) = spaces.engine(&space) else {
+            continue;
+        };
+        let token = e.transport_mut().token().to_string();
+        if token.is_empty() {
+            continue;
+        }
+        if state.live.spaces().contains(&space) {
+            state.live.set_token(&space, &token);
+            continue;
+        }
+        let Ok(Some(key_root)) = penroam_sync::shared::load_root(store.as_ref(), &space) else {
+            continue;
+        };
+        crate::live::ensure(
+            app,
+            crate::live::Start {
+                space: space.clone(),
+                notebook: nb,
+                member: member.clone(),
+                device: e.device_id().to_string(),
+                base_url: url.clone(),
+                token,
+                key: key_root.awareness_key(),
+            },
+        );
+        // who is who, for presence (best effort; a neutral label until known)
+        if let Ok(id) = space.parse::<AccountId>() {
+            if let Ok(l) = main.transport_mut().shared_members(&id) {
+                let m = l
+                    .members
+                    .into_iter()
+                    .map(|m| (m.account_id.to_string(), (m.display, m.role)))
+                    .collect();
+                state.live.set_members(&space, m);
+            }
+        }
+    }
 }
 
 /// Gives `f` what the shared notebook functions need: space sessions obtained with the main
@@ -1693,6 +1812,15 @@ fn emit_status(app: &AppHandle, e: &Engine) {
 /// the next attempt is scheduled from the engine's backoff policy, and a
 /// rejected token triggers a fresh sign-in.
 fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
+    // the history commands ask this worker who wrote what (it answers nothing once it stops)
+    crate::history::install(std::sync::Arc::new(crate::history::AttributedHistory(
+        std::sync::Arc::new(WorkerHistory(app.clone())),
+    )));
+    // a catch-up from a checkpoint can take a while: show it while it runs
+    let hook_app = app.clone();
+    engine.set_phase_hook(Box::new(move |s| {
+        let _ = hook_app.emit("sync://status", s);
+    }));
     let mut slots = open_vault_slots(&app);
     // shared notebook engines are opened by the first pass, with sessions from the main one
     let mut spaces: SpaceSet<HttpTransport> = SpaceSet::new();
@@ -1740,11 +1868,86 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
         let wait = due.map_or(idle, |d| d.saturating_duration_since(Instant::now()));
         match rx.recv_timeout(wait) {
             Ok(Cmd::Nudge) => {
-                let d = Instant::now() + DEBOUNCE;
-                due = Some(
-                    due.map_or(d, |x| x.min(d))
-                        .max(Instant::now() + Duration::from_millis(300)),
-                );
+                let live = app.state::<AppState>().live.any_live();
+                let (wait, floor) = if live {
+                    (LIVE_DEBOUNCE, Duration::from_millis(100))
+                } else {
+                    (DEBOUNCE, Duration::from_millis(300))
+                };
+                let d = Instant::now() + wait;
+                due = Some(due.map_or(d, |x| x.min(d)).max(Instant::now() + floor));
+                continue;
+            }
+            Ok(Cmd::SpaceHint(space)) => {
+                // one space, now: the hint only makes the pull sooner
+                if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                    let state = app.state::<AppState>();
+                    let before = crate::sharing::view_now(&app, &spaces);
+                    let url = engine.store.state.server_url.clone();
+                    let report = with_space_access(&app, &url, |access| {
+                        spaces.reconcile_space(&mut engine, &state.lib, access, &space)
+                    });
+                    if let Some(r) = report {
+                        announce(&app, &r);
+                    }
+                    if crate::sharing::view_now(&app, &spaces) != before {
+                        let _ = app.emit("sync://shared", ());
+                    }
+                }
+                continue;
+            }
+            Ok(Cmd::CommentHint(space)) => {
+                if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                    let state = app.state::<AppState>();
+                    if spaces
+                        .sync_comments(&mut engine, &state.lib, &space)
+                        .is_ok()
+                    {
+                        if let Some(nb) = NotebookOwners::load(&library_root(&app))
+                            .ok()
+                            .and_then(|o| o.space(&space).map(|(n, _)| n))
+                        {
+                            let _ = app.emit(
+                                "comments://changed",
+                                serde_json::json!({ "notebookId": nb }),
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
+            Ok(Cmd::Comments(c)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let url = engine.store.state.server_url.clone();
+                let (changed, notes) = with_space_access(&app, &url, |access| {
+                    crate::comments::handle(&app, &mut engine, &mut spaces, access, c)
+                });
+                if let Some(nb) = changed {
+                    let _ = app.emit(
+                        "comments://changed",
+                        serde_json::json!({ "notebookId": nb }),
+                    );
+                }
+                if notes {
+                    let _ = app.emit("notifications://changed", ());
+                }
+                continue;
+            }
+            Ok(Cmd::SpaceRevoked(space)) => {
+                // the live channel's notice is a cue; HTTP decides
+                if ensure(&mut engine, &mut have_token, &mut signed_out) {
+                    let state = app.state::<AppState>();
+                    let url = engine.store.state.server_url.clone();
+                    let still = with_space_access(&app, &url, |access| {
+                        spaces.confirm_access(&mut engine, &state.lib, access, &space)
+                    });
+                    match still {
+                        Ok(true) => sync_live(&app, &mut engine, &mut spaces),
+                        Ok(false) => state.live.stop(&space),
+                        Err(e) => eprintln!("penroam: shared notebook access not checked: {e}"),
+                    }
+                    let _ = app.emit("sync://shared", ());
+                }
                 continue;
             }
             Ok(Cmd::SyncNow) => {
@@ -1875,8 +2078,39 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
             }
             Ok(Cmd::Conflicts(nb, r)) => {
                 let res = engine_for(&app, nb, &mut engine, &mut slots, &mut spaces)
-                    .and_then(|e| e.conflicts(nb).map_err(|e| e.to_string()));
+                    .and_then(|e| e.conflicts(nb).map_err(|e| e.to_string()))
+                    .map(|cs| {
+                        let h = history_data(&app, nb, &mut engine, &mut slots, &mut spaces);
+                        conflicts_with_authors(cs, h.as_ref())
+                    });
                 let _ = r.send(res);
+                continue;
+            }
+            Ok(Cmd::HistoryData(nb, r)) => {
+                let _ = r.send(Ok(history_data(
+                    &app,
+                    nb,
+                    &mut engine,
+                    &mut slots,
+                    &mut spaces,
+                )));
+                continue;
+            }
+            Ok(Cmd::KeepBoth(nb, target, op, r)) => {
+                let res = {
+                    let state = app.state::<AppState>();
+                    let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+                    crate::sharing::require_writable(&lib, nb)
+                        .map_err(|e| e.message)
+                        .and_then(|()| engine_for(&app, nb, &mut engine, &mut slots, &mut spaces))
+                        .and_then(|e| {
+                            e.keep_both(&mut lib, nb, &target, op)
+                                .map(|_| ())
+                                .map_err(|e| e.to_string())
+                        })
+                };
+                let _ = r.send(res);
+                due = Some(Instant::now());
                 continue;
             }
             Ok(Cmd::Resolve(nb, target, choose, r)) => {
@@ -2089,9 +2323,16 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                     .lock()
                     .map(|l| l.last_seq())
                     .unwrap_or(0);
+                // notifications the server sent that no verified comment backs (no content)
+                let forged: usize = spaces
+                    .comments
+                    .values()
+                    .map(|c| c.forged_notifications().len())
+                    .sum();
                 let report = serde_json::json!({
                     "status": engine.status(last),
                     "events": engine.events,
+                    "forgedNotifications": forged,
                     "note": "privacy-safe: no note content, keys or tokens",
                 });
                 let _ = r.send(Ok(serde_json::to_string_pretty(&report).unwrap_or_default()));
@@ -2191,6 +2432,7 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                         eprintln!("penroam: a vault was not cleaned up: {e}");
                     }
                 }
+                app.state::<AppState>().live.stop_all();
                 // Shared notebooks stay assigned (so the main account never takes them), and
                 // join again from scratch after the next connect.
                 if let Ok(store) = secrets(&app, &root) {
@@ -2238,6 +2480,12 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
         }
         let state = app.state::<AppState>();
         let result = engine.reconcile(&state.lib);
+        // who pushed the account's operations, for the activity list (incremental)
+        if result.is_ok() && spaces.history_available {
+            if let Ok(mut store) = AttributionStore::open(&engine.store.dir) {
+                let _ = attribution::fetch(&mut store, engine.transport_mut(), Stream::Ops);
+            }
+        }
         // Vaults after the main stream, whatever became of it. Each failure stays with its vault
         // (shown in the settings), and the next pass retries it.
         if result.is_ok() {
@@ -2282,6 +2530,7 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                     announce(&app, r);
                 }
             }
+            sync_live(&app, &mut engine, &mut spaces);
             if crate::sharing::view_now(&app, &spaces) != before {
                 let _ = app.emit("sync://shared", ());
             }
@@ -2758,13 +3007,238 @@ pub fn sync_pause(state: State<'_, AppState>, paused: bool) -> Result<(), CmdErr
     state.sync.send(Cmd::Pause(paused))
 }
 
-/// Unresolved conflicts of a notebook, with every retained version.
+/// Unresolved conflicts of a notebook, with every retained version. In a shared notebook the
+/// shown version (`winnerAuthor`) and each alternate (`author`) carry who wrote them, when the
+/// server's record says.
 #[tauri::command(async)]
 pub fn sync_conflicts(
     state: State<'_, AppState>,
     notebook_id: Uuid,
-) -> Result<Vec<Conflict>, CmdError> {
+) -> Result<Vec<serde_json::Value>, CmdError> {
     ask(&state.sync, |r| Cmd::Conflicts(notebook_id, r))
+}
+
+/// "Keep both as copies" for an element conflict: the shown version stays and the alternate
+/// written by `op_id` is added next to it as a new element.
+#[tauri::command(async)]
+pub fn sync_keep_both(
+    state: State<'_, AppState>,
+    notebook_id: Uuid,
+    target: serde_json::Value,
+    op_id: Uuid,
+) -> Result<(), CmdError> {
+    let target: ConflictTarget = serde_json::from_value(target).map_err(|e| err(e.to_string()))?;
+    ask(&state.sync, |r| {
+        Cmd::KeepBoth(notebook_id, target, op_id, r)
+    })
+}
+
+/// Conflicts as JSON, with each version's author added (shared notebooks with attribution).
+fn conflicts_with_authors(
+    cs: Vec<Conflict>,
+    h: Option<&crate::history::NotebookHistory>,
+) -> Vec<serde_json::Value> {
+    let author = |op: Uuid| -> Option<serde_json::Value> {
+        let h = h?;
+        let (_, entry) = h.entries.iter().find(|(_, o)| o.id == op)?;
+        let a = attribution::classify(entry, h.attribution.get(Stream::Ops, op), &h.ctx);
+        serde_json::to_value(crate::history::author_view(&a.key, &h.ctx, h.me.as_deref())).ok()
+    };
+    cs.into_iter()
+        .map(|c| {
+            let winner = author(c.winner);
+            let alts: Vec<Option<serde_json::Value>> =
+                c.alternates.iter().map(|a| author(a.op_id)).collect();
+            let mut v = serde_json::to_value(&c).unwrap_or_default();
+            if let Some(w) = winner {
+                v["winnerAuthor"] = w;
+            }
+            if let Some(list) = v["alternates"].as_array_mut() {
+                for (a, who) in list.iter_mut().zip(alts) {
+                    if let Some(who) = who {
+                        a["author"] = who;
+                    }
+                }
+            }
+            v
+        })
+        .collect()
+}
+
+/// What the history commands know about a notebook's authors: the operations of the engine that
+/// syncs it, their stored attribution, and the members. A shared notebook uses its space's
+/// member list; a personal one has the account as its only member. `None` when the notebook's
+/// engine isn't here (a shared notebook still joining) or its log can't be read.
+fn history_data(
+    app: &AppHandle,
+    nb: Uuid,
+    engine: &mut Engine,
+    slots: &mut [VaultSlot],
+    spaces: &mut SpaceSet<HttpTransport>,
+) -> Option<crate::history::NotebookHistory> {
+    let owners = NotebookOwners::load(&library_root(app)).ok()?;
+    if let Some(e) = owners.shared_entry(&nb) {
+        let space = e.space_id.clone();
+        if !spaces.members.contains_key(&space) {
+            let _ = spaces.refresh_roster(engine, &space);
+        }
+        let members = spaces.members.get(&space)?.clone();
+        let me = members
+            .members
+            .iter()
+            .find(|m| m.is_you)
+            .map(|m| m.account_id.to_string());
+        let created = spaces
+            .records
+            .iter()
+            .find(|r| r.space_id.as_str() == space)
+            .map(|r| r.created_at_ms);
+        // the sharing device knows which account operations were carried into the space
+        let account_ops: Vec<Uuid> = engine
+            .logged_ops(nb)
+            .map(|v| v.into_iter().map(|(_, o)| o.id).collect())
+            .unwrap_or_default();
+        let transplanted = attribution::transplanted_ids(&space, &account_ops);
+        let se = spaces.engine(&space)?;
+        return Some(crate::history::NotebookHistory {
+            entries: se.logged_ops(nb).ok()?,
+            attribution: AttributionStore::open(&se.store.dir).ok()?,
+            ctx: AuthorContext::for_space(&members, created, transplanted),
+            me,
+        });
+    }
+    let e = engine_for(app, nb, engine, slots, spaces).ok()?;
+    let me = e.account_id().to_string();
+    Some(crate::history::NotebookHistory {
+        entries: e.logged_ops(nb).ok()?,
+        attribution: AttributionStore::open(&e.store.dir).ok()?,
+        ctx: AuthorContext::for_account(&me, ""),
+        me: Some(me),
+    })
+}
+
+/// Who wrote each version of a page: for each log position of `positions` (ascending, as
+/// `page_versions` lists them), the authors of the page's operations since the previous one.
+/// Empty lists when the worker has no attribution for the notebook.
+pub fn version_authors(
+    state: &State<'_, AppState>,
+    nb: Uuid,
+    page: Uuid,
+    positions: &[u64],
+) -> Vec<Vec<crate::history::AuthorView>> {
+    let h = if state.sync.running() {
+        ask(&state.sync, |r| Cmd::HistoryData(nb, r)).ok().flatten()
+    } else {
+        None
+    };
+    let Some(h) = h else {
+        return vec![Vec::new(); positions.len()];
+    };
+    let mut from = 0usize;
+    positions
+        .iter()
+        .map(|&to| {
+            let to = (to as usize).min(h.entries.len());
+            let mut keys: Vec<String> = Vec::new();
+            for (_, op) in h.entries.get(from..to).unwrap_or_default() {
+                let on_page = op.body.content_page() == Some(page)
+                    || matches!(&op.body, penroam_core::operation::DocumentOperation::PageCreated { page_id, .. } if *page_id == page);
+                if !on_page {
+                    continue;
+                }
+                let k = attribution::classify(op, h.attribution.get(Stream::Ops, op.id), &h.ctx).key;
+                if !keys.contains(&k) {
+                    keys.push(k);
+                }
+            }
+            from = from.max(to);
+            keys.iter()
+                .map(|k| crate::history::author_view(k, &h.ctx, h.me.as_deref()))
+                .collect()
+        })
+        .collect()
+}
+
+/// Who wrote each element of a shared notebook, as the JSON of an export with authors (see
+/// [`authors_document`]). `None` for a notebook that isn't shared or whose history isn't here.
+pub fn authors_json(
+    state: &State<'_, AppState>,
+    nb: Uuid,
+    pages: &[(Uuid, Vec<Uuid>)],
+) -> Option<Vec<u8>> {
+    let shared = NotebookOwners::load(state.lib.lock().unwrap_or_else(|p| p.into_inner()).root())
+        .ok()?
+        .shared_entry(&nb)
+        .is_some();
+    if !shared || !state.sync.running() {
+        return None;
+    }
+    let h = ask(&state.sync, |r| Cmd::HistoryData(nb, r))
+        .ok()
+        .flatten()?;
+    authors_document(&h, nb, pages)
+}
+
+/// `{format: "penroam-authors", version: 1, notebookId, elements: [{pageId, elementId,
+/// authors: [{kind, accountId?}]}]}` for the elements of `pages` (page id, element ids).
+///
+/// Only account ids and kinds (`member`, `former`, `erased`, `beforeSharing`, `unknown`,
+/// `unverified`): never a member's email, which only the notebook's members may see. An erased
+/// account appears as its tombstone id.
+pub fn authors_document(
+    h: &crate::history::NotebookHistory,
+    nb: Uuid,
+    pages: &[(Uuid, Vec<Uuid>)],
+) -> Option<Vec<u8>> {
+    let mut elements = Vec::new();
+    for (page, ids) in pages {
+        let writers = attribution::writers_since(&h.entries, &h.attribution, &h.ctx, *page, 0);
+        for id in ids {
+            let mut keys: Vec<&String> = writers
+                .get(id)
+                .map(|s| s.iter().collect())
+                .unwrap_or_default();
+            keys.sort();
+            let authors: Vec<serde_json::Value> = keys
+                .into_iter()
+                .map(|k| {
+                    let v = crate::history::author_view(k, &h.ctx, None);
+                    let mut a = serde_json::json!({ "kind": v.kind });
+                    if let Some(acct) = v.account_id {
+                        a["accountId"] = acct.into();
+                    }
+                    a
+                })
+                .collect();
+            elements.push(serde_json::json!({
+                "pageId": page,
+                "elementId": id,
+                "authors": authors,
+            }));
+        }
+    }
+    serde_json::to_vec_pretty(&serde_json::json!({
+        "format": "penroam-authors",
+        "version": 1,
+        "notebookId": nb,
+        "elements": elements,
+    }))
+    .ok()
+}
+
+/// The history commands' view of the worker: each request is answered on the worker thread.
+struct WorkerHistory(AppHandle);
+
+impl crate::history::HistoryData for WorkerHistory {
+    fn notebook(&self, notebook: Uuid) -> Option<crate::history::NotebookHistory> {
+        let state = self.0.state::<AppState>();
+        if !state.sync.running() {
+            return None;
+        }
+        ask(&state.sync, |r| Cmd::HistoryData(notebook, r))
+            .ok()
+            .flatten()
+    }
 }
 
 /// Keeps one version of a conflict (an ordinary local edit that supersedes
@@ -3607,4 +4081,103 @@ pub fn sync_request_account_deletion(
 #[tauri::command(async)]
 pub fn sync_cancel_account_deletion(state: State<'_, AppState>) -> Result<(), CmdError> {
     ask(&state.sync, Cmd::CancelDeletion)
+}
+
+#[cfg(test)]
+mod authors_export_tests {
+    use super::*;
+    use penroam_core::operation::{DocumentOperation, LocalOperation};
+    use penroam_sync::attribution::{AttributionRecord, MemberInfo};
+    use penroam_sync::store::{OpMeta, Origin};
+
+    #[test]
+    fn the_authors_file_names_accounts_not_emails_and_import_skips_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lib = penroam_storage::Library::open(dir.path().join("lib")).unwrap();
+        let (nb, page) = lib
+            .create_notebook("Shared", Default::default(), None)
+            .unwrap();
+        let el = Uuid::from_u128(0xe1);
+        let dev = Uuid::from_u128(0xd1);
+        let op = LocalOperation {
+            id: Uuid::from_u128(0x0b),
+            device_id: dev,
+            local_sequence: 1,
+            schema_version: 1,
+            causal_dependencies: Vec::new(),
+            at: 1,
+            body: DocumentOperation::ElementsRemoved {
+                notebook_id: nb.id,
+                page_id: page.id,
+                ids: vec![el],
+            },
+        };
+        let meta = OpMeta {
+            origin: Origin::Remote,
+            nb: nb.id,
+            op: op.id,
+            dev,
+            seq: 1,
+            ct: None,
+            lib: None,
+            epoch: None,
+        };
+        let mut store = AttributionStore::open(dir.path()).unwrap();
+        store
+            .append(vec![AttributionRecord {
+                stream: Stream::Ops,
+                seq: 1,
+                op: op.id.to_string(),
+                account: "ann".into(),
+                device: dev.to_string(),
+                accepted_at_ms: 5,
+                pin_mismatch: false,
+            }])
+            .unwrap();
+        let mut ctx = AuthorContext::default();
+        ctx.members.insert(
+            "ann".into(),
+            MemberInfo {
+                display: "ann@example.org".into(),
+                active: true,
+            },
+        );
+        let h = crate::history::NotebookHistory {
+            entries: vec![(meta, op)],
+            attribution: store,
+            ctx,
+            me: None,
+        };
+        let doc = authors_document(&h, nb.id, &[(page.id, vec![el])]).unwrap();
+        let text = String::from_utf8(doc.clone()).unwrap();
+        assert!(!text.contains("example.org"), "{text}");
+        let v: serde_json::Value = serde_json::from_slice(&doc).unwrap();
+        assert_eq!(v["elements"][0]["authors"][0]["accountId"], "ann");
+        assert_eq!(v["elements"][0]["authors"][0]["kind"], "member");
+        assert!(v["elements"][0]["authors"][0].get("display").is_none());
+        // into an archive, and out of it again without a trace
+        let mut buf = std::io::Cursor::new(Vec::new());
+        lib.export_archive_with(
+            nb.id,
+            &mut buf,
+            "test",
+            &penroam_storage::ExportOptions {
+                extra_entries: vec![(penroam_storage::AUTHORS_ENTRY.into(), doc)],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let bytes = buf.get_ref();
+        assert!(bytes
+            .windows(penroam_storage::AUTHORS_ENTRY.len())
+            .any(|w| w == penroam_storage::AUTHORS_ENTRY.as_bytes()));
+        let mut other = penroam_storage::Library::open(dir.path().join("other")).unwrap();
+        buf.set_position(0);
+        let r = other.import_archive(buf).unwrap();
+        assert!(
+            r.warnings.iter().all(|w| !w.contains("authors")),
+            "{:?}",
+            r.warnings
+        );
+    }
 }

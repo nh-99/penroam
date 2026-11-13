@@ -51,6 +51,8 @@ pub enum SharedRole {
     Editor,
     /// Can look and export.
     Viewer,
+    /// Can look, export and comment.
+    Commenter,
 }
 
 impl From<Role> for SharedRole {
@@ -59,6 +61,9 @@ impl From<Role> for SharedRole {
             Role::Owner => Self::Owner,
             Role::Editor => Self::Editor,
             Role::Viewer => Self::Viewer,
+            Role::Commenter => Self::Commenter,
+            // a role from a newer server: shown, and treated, as read-only
+            Role::Unknown => Self::Viewer,
         }
     }
 }
@@ -101,6 +106,8 @@ pub enum SharedSyncState {
     AccessRemoved,
     /// A conflict to resolve.
     NeedsResolution,
+    /// Catching up from a checkpoint after a long time away.
+    NeedsCatchUp,
 }
 
 impl From<NotebookSyncState> for SharedSyncState {
@@ -111,6 +118,7 @@ impl From<NotebookSyncState> for SharedSyncState {
             NotebookSyncState::Synced => Self::Synced,
             NotebookSyncState::AccessRemoved => Self::AccessRemoved,
             NotebookSyncState::NeedsResolution => Self::NeedsResolution,
+            NotebookSyncState::NeedsCatchUp => Self::NeedsCatchUp,
         }
     }
 }
@@ -377,12 +385,10 @@ fn read_only(lib: &Library, nb: Uuid) -> Option<Access> {
 /// The check every command that changes notebook `nb` makes first, with the library lock held:
 /// refuses a notebook shared with this account to view only, and one whose access was removed.
 pub fn require_writable(lib: &Library, nb: Uuid) -> Result<(), CmdError> {
-    match read_only(lib, nb)
-        .as_ref()
-        .and_then(Access::read_only_reason)
-    {
+    let access = read_only(lib, nb);
+    match access.as_ref().and_then(Access::read_only_reason) {
         None => Ok(()),
-        Some("viewer") => Err(cmd_err(VIEWER_REFUSAL)),
+        Some("viewer") => Err(cmd_err(refusal(access.as_ref()))),
         Some(_) => Err(cmd_err(
             "your access to this shared notebook was removed; keep a private copy to go on editing",
         )),
@@ -394,17 +400,27 @@ pub fn require_writable(lib: &Library, nb: Uuid) -> Result<(), CmdError> {
 /// they stay on this device (and in a private copy); refusing them would lose batches the editor
 /// had in flight when access was removed. The UI accepts no new input there.
 pub fn require_page_writable(lib: &Library, nb: Uuid) -> Result<(), CmdError> {
-    match read_only(lib, nb)
-        .as_ref()
-        .and_then(Access::read_only_reason)
-    {
-        Some("viewer") => Err(cmd_err(VIEWER_REFUSAL)),
+    let access = read_only(lib, nb);
+    match access.as_ref().and_then(Access::read_only_reason) {
+        Some("viewer") => Err(cmd_err(refusal(access.as_ref()))),
         _ => Ok(()),
+    }
+}
+
+/// Why a read-only member can't edit: commenters and viewers are told what they can do.
+fn refusal(access: Option<&Access>) -> &'static str {
+    match access {
+        Some(Access::Shared {
+            role: Role::Commenter,
+            ..
+        }) => COMMENTER_REFUSAL,
+        _ => VIEWER_REFUSAL,
     }
 }
 
 const VIEWER_REFUSAL: &str =
     "this notebook is shared with you to view only; you can look and export, not edit";
+const COMMENTER_REFUSAL: &str = "This notebook is shared with you to comment on, not to edit";
 
 /// Notebook ids imports must not reuse ([`NotebookOwners::reserved_import_ids`]). Call with the
 /// library lock held, right before an import or a restore.
@@ -548,6 +564,7 @@ fn grantable(r: SharedRole) -> Result<Role, String> {
     match r {
         SharedRole::Editor => Ok(Role::Editor),
         SharedRole::Viewer => Ok(Role::Viewer),
+        SharedRole::Commenter => Ok(Role::Commenter),
         SharedRole::Owner => Err("that role isn't available".into()),
     }
 }
@@ -982,6 +999,39 @@ pub fn shared_remove_local(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_commenter_may_not_edit_and_is_told_so() {
+        use penroam_sync::shared::SharedEntry;
+        let dir = tempfile::tempdir().unwrap();
+        let mut lib = Library::open(dir.path()).unwrap();
+        let (nb, _) = lib
+            .create_notebook("Shared", Default::default(), None)
+            .unwrap();
+        let mut owners = NotebookOwners::load(dir.path()).unwrap();
+        owners.shared.insert(
+            nb.id,
+            SharedEntry::new(
+                "0123456789abcdef0123456789abcdef",
+                Role::Commenter,
+                SharedState::Active,
+                0,
+            ),
+        );
+        owners.save(dir.path()).unwrap();
+        let e = require_writable(&lib, nb.id).unwrap_err();
+        assert_eq!(e.message, COMMENTER_REFUSAL);
+        assert!(require_page_writable(&lib, nb.id).is_err());
+        owners.shared.get_mut(&nb.id).unwrap().role = Role::Viewer;
+        owners.save(dir.path()).unwrap();
+        assert_eq!(
+            require_writable(&lib, nb.id).unwrap_err().message,
+            VIEWER_REFUSAL
+        );
+        owners.shared.get_mut(&nb.id).unwrap().role = Role::Editor;
+        owners.save(dir.path()).unwrap();
+        assert!(require_writable(&lib, nb.id).is_ok());
+    }
 
     #[test]
     fn views_serialize_as_the_frontend_expects() {

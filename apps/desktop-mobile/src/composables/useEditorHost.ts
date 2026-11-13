@@ -15,6 +15,10 @@ import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
 import { useSync } from "../stores/sync";
+import { useLive } from "../stores/live";
+import { useSharing } from "../stores/sharing";
+import { AwarenessSender, liveApi } from "../platform/live";
+import type { AnchorView } from "../platform/comments";
 import { benchHooks } from "../bench/hooks";
 
 interface PinchEvent {
@@ -29,6 +33,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   const settings = useSettings();
   const ui = useUi();
   const sync = useSync();
+  const live = useLive();
+  const sharing = useSharing();
   const state = reactive<EditorState>({
     tool: "pen",
     scale: 1,
@@ -44,12 +50,19 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     saveError: null,
     nativeActive: false,
     penSeen: false,
+    hasTextRange: false,
+    pageHasPdf: false,
+    placing: null,
   });
   const editor = shallowRef<InkEditor | null>(null);
+  /** An anchor the user just chose for a comment (selection, tap or drag), until the UI takes it. */
+  const commentAnchor = shallowRef<AnchorView | null>(null);
   const native = shallowRef<NativeInkSurface | null>(null);
   const loading = ref(false);
   const pageError = ref<string | null>(null);
   let session: PageSession | null = null;
+  /** Sends where this user is, at a bounded rate and never during a stroke (shared notebooks only). */
+  let awareness: AwarenessSender | null = null;
   let pdfCache: PdfCache | null = null;
   let pdfCacheFor: string | null = null;
   let openSeq = 0;
@@ -315,16 +328,18 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     if (!nb || !e) return;
     const s = session;
     if (s && remotePending.has(s.page.id) && s.notebookId === nb.id) {
-      if (e.isBusy() || !s.idle) {
-        // never interrupt a stroke, drag or text edit: try again shortly
+      if (!e.canMergeRemote() || !s.idle) {
+        // never interrupt a stroke, a drag or an IME composition: try again shortly
         remoteTimer = setTimeout(() => void applyRemoteChanges(), 700);
         return;
       }
       remotePending.delete(s.page.id);
       try {
-        const fresh = await api.loadPage(nb.id, s.page.id);
-        if (session === s && s.idle && !e.isBusy()) s.replacePage(fresh);
-        else remotePending.add(s.page.id);
+        // typing so far goes to the session first, so that the box and the page agree before merging
+        e.flushText();
+        // the session drops a snapshot that anything drawn or saved meanwhile has made older
+        const r = await s.mergeRemote(() => api.loadPage(nb.id, s.page.id), () => e.canMergeRemote());
+        if (r === "stale" || session !== s) remotePending.add(s.page.id); // read it again once things are quiet
       } catch (err) {
         console.warn("reload after sync", err);
       }
@@ -361,6 +376,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       onError: (m) => ui.error(m),
       readAsset: (hash) => api.readAsset(lib.current!.id, hash),
       onPageEdited: () => void thumbnailNow(),
+      onAwareness: (a) => awareness?.push(a),
+      onCommentAnchor: (a) => (commentAnchor.value = a),
       openLink: (url) => void api.openLink(url).catch((err) => ui.error(`Could not open the link (${errorMessage(err)}).`)),
       onScrollToPage: (id) => {
         if (!lib.current?.pageOrder.includes(id) || lib.currentPageId === id) return;
@@ -409,6 +426,7 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     offChanged?.();
     offPinch?.();
     if (remoteTimer) clearTimeout(remoteTimer);
+    awareness?.clear();
     document.removeEventListener("visibilitychange", onVisibility);
     const e = editor.value;
     editor.value = null;
@@ -421,6 +439,27 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   });
 
   watch(() => lib.currentPageId, (id) => void openPage(id));
+  // live collaboration: report where I am only in a shared notebook, with presence on
+  const sharedHere = () => sharing.byNotebook.get(lib.current?.id ?? "")?.state === "active";
+  watch(
+    [() => lib.current?.id, () => live.sharePresence, sharedHere, editor],
+    () => {
+      const e = editor.value;
+      const id = lib.current?.id;
+      awareness?.clear();
+      awareness = null;
+      const on = !!e && !!id && live.sharePresence && sharedHere();
+      if (on) awareness = new AwarenessSender((p) => liveApi.awareness(id, p), () => !editor.value?.strokeActive());
+      e?.setAwareness(on);
+    },
+    { immediate: true },
+  );
+  // other people's carets and areas, drawn over the page
+  watch(
+    [() => live.peersOf(lib.current?.id), editor],
+    ([peers]) => editor.value?.setPeers(peers),
+    { immediate: true },
+  );
   // switched here by `reload`, or on another device and synced
   watch(() => !!lib.current?.infiniteCanvas, (on) => editor.value?.setCanvas(on));
   watch([() => lib.current?.id, () => lib.current?.pageOrder.join(","), () => lib.thumbs], pushPageList);
@@ -460,5 +499,5 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     if (!on) e.setTool(settings.s.tool);
   }
 
-  return { state, editor, native, setReadOnly, loading, pageError, flush, openPage, reload, markChanged, renderPagePng, retry: () => session?.retry(), session: () => session };
+  return { state, editor, native, setReadOnly, commentAnchor, loading, pageError, flush, openPage, reload, markChanged, renderPagePng, retry: () => session?.retry(), session: () => session };
 }

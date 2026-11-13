@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search, FileText, FileImage, ClipboardCopy, History, File, GalleryVertical, Infinity as InfinityIcon, Check, Users, Eye } from "@lucide/vue";
+import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search, FileText, FileImage, ClipboardCopy, History, File, GalleryVertical, Infinity as InfinityIcon, Check, Users, Eye, MessageSquare, Activity } from "@lucide/vue";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
@@ -15,6 +15,15 @@ import HistoryDialog from "../components/HistoryDialog.vue";
 import { useSync } from "../stores/sync";
 import SettingsDialog from "../components/SettingsDialog.vue";
 import ShareDialog from "../components/ShareDialog.vue";
+import CollaboratorStrip from "../components/CollaboratorStrip.vue";
+import CommentsDrawer, { type StartKind } from "../components/CommentsDrawer.vue";
+import NotificationBell from "../components/NotificationBell.vue";
+import ExportDialog from "../components/ExportDialog.vue";
+import ActivityDialog from "../components/ActivityDialog.vue";
+import { useComments } from "../stores/comments";
+import { commentsApi, type AnchorView } from "../platform/comments";
+import { useLive } from "../stores/live";
+import { liveStatusLabel } from "../platform/live";
 import { useSharing } from "../stores/sharing";
 import { accessBanner, sharingApi, syncStateLabel, type NotebookAccess } from "../platform/sharing";
 import CloudBanner from "../components/CloudBanner.vue";
@@ -66,14 +75,98 @@ async function loadAccess() {
     if (lib.current?.id === id) access.value = null;
   }
 }
+
+
 const blocked = computed(() => narrow.value && drawerOpen.value);
 const host = useEditorHost(viewport, blocked);
 const st = host.state;
 // loaded again when the notebook changes, and when the shared list does (role changed, access removed)
 watch([() => lib.current?.id, () => sharing.notebooks], loadAccess, { immediate: true });
 watch([readOnly, () => host.editor.value], () => host.setReadOnly(readOnly.value), { immediate: true });
+const live = useLive();
+const comments = useComments();
+/** Comments exist for shared notebooks you are an active member of. */
+const commentsOn = computed(() => sharedEntry.value?.state === "active");
+watch([() => lib.current?.id, commentsOn], () => void comments.load(commentsOn.value ? (lib.current?.id ?? null) : null), { immediate: true });
 const mod = modKey();
-
+const pendingAnchor = ref<AnchorView | null>(null);
+/** The thread whose anchor is being chosen again, when re-attaching. */
+const reattaching = ref<string | null>(null);
+const selfId = computed(() => sync.status?.accountId ?? "");
+const startable = computed<Record<StartKind, boolean>>(() => ({
+  selection: st.selectionCount > 0,
+  element: true,
+  text: st.hasTextRange,
+  point: true,
+  rect: true,
+  pdf: st.pageHasPdf,
+}));
+async function startComment(kind: StartKind) {
+  const ed = host.editor.value;
+  if (!ed) return;
+  reattaching.value = null;
+  if (kind === "selection") pendingAnchor.value = ed.selectionAnchor();
+  else if (kind === "text") {
+    const r = ed.textRangeSelection();
+    if (!r) return;
+    try {
+      pendingAnchor.value = await commentsApi.textAnchor(nb.value.id, r.pageId, r.elementId, r.start, r.end);
+    } catch (e) {
+      ui.error(`Could not attach to that text: ${(e as Error).message}`);
+    }
+  } else ed.beginCommentPlacement(kind);
+}
+function cancelComment() {
+  host.editor.value?.cancelCommentPlacement();
+  pendingAnchor.value = null;
+  reattaching.value = null;
+}
+// an anchor chosen on the page: a new comment's, or the new place of an orphaned thread
+watch(host.commentAnchor, (a) => {
+  if (!a) return;
+  host.commentAnchor.value = null;
+  if (reattaching.value) {
+    void comments.reattach(reattaching.value, a);
+    reattaching.value = null;
+  } else pendingAnchor.value = a;
+});
+async function submitComment(body: string) {
+  const a = pendingAnchor.value;
+  if (!a) return;
+  pendingAnchor.value = null;
+  await comments.createThread(a, body);
+}
+function locateThread(id: string) {
+  const t = comments.find(id);
+  const page = t?.placement.kind === "placed" ? t.placement.pageId : t?.placement.lastPageId;
+  if (page && nb.value.pageOrder.includes(page)) lib.currentPageId = page;
+  comments.focusThread = id;
+}
+function reattachThread(id: string) {
+  reattaching.value = id;
+  host.editor.value?.beginCommentPlacement("rect");
+}
+function openThreadFromMarker(id: string) {
+  comments.drawerOpen = true;
+  comments.focusThread = id;
+}
+// markers on the page follow the threads and the open one
+watch([() => comments.threads, () => comments.focusThread, () => host.editor.value], () => host.editor.value?.setComments(commentsOn.value ? comments.threads : [], comments.focusThread, openThreadFromMarker), { immediate: true });
+// following a notification, or tapping a marker: show the page the thread is on
+watch([() => comments.focusThread, () => comments.view], () => {
+  const t = comments.focusThread ? comments.find(comments.focusThread) : undefined;
+  if (t?.placement.kind === "placed" && nb.value.pageOrder.includes(t.placement.pageId) && lib.currentPageId !== t.placement.pageId) lib.currentPageId = t.placement.pageId;
+});
+const showExport = ref(false);
+const showActivity = ref(false);
+function startExport() {
+  if (sharedEntry.value) showExport.value = true;
+  else void exportNb();
+}
+/** Other people in this shared notebook now, and the live channel's words for the header. */
+const collaborators = computed(() => (sharedEntry.value?.state === "active" ? live.peersOf(lib.current?.id) : []));
+const liveLabel = computed(() => (sharedEntry.value?.state === "active" ? liveStatusLabel(live.stateOf(lib.current?.id)) : null));
+const pageNumbers = computed(() => Object.fromEntries((lib.current?.pageOrder ?? []).map((id, i) => [id, i + 1])));
 const nb = computed(() => lib.current!);
 const idx = computed(() => lib.pageIndex);
 const canvas = computed(() => !!lib.current?.infiniteCanvas);
@@ -180,7 +273,7 @@ watch(
   { immediate: true },
 );
 
-const exportNb = () => lib.exportNotebook(nb.value.id, nb.value.title, host.flush);
+const exportNb = (o: { includeComments?: boolean; includeAuthors?: boolean } = {}) => lib.exportNotebook(nb.value.id, nb.value.title, host.flush, !!o.includeComments, !!o.includeAuthors);
 const exportPdf = () => lib.exportPdf(nb.value.id, nb.value.title, host.flush);
 const exportText = (markdown: boolean) => lib.exportText(nb.value.id, nb.value.title, markdown, host.flush);
 const pageFileName = () => `${nb.value.title} page ${lib.pageIndex + 1}`;
@@ -261,6 +354,10 @@ function onKey(e: KeyboardEvent) {
   if (!ed) return;
   const m = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
+  if (k === "escape" && st.placing) {
+    cancelComment();
+    return;
+  }
   if (readOnly.value) return onViewOnlyKey(e, ed, m, k);
   if (m && k === "z") {
     e.preventDefault();
@@ -336,11 +433,17 @@ watch(narrow, (n) => {
         </div>
         <div class="ml-auto flex items-center gap-0.5">
           <SaveIndicator class="mr-1.5" :state="st.saveState" :error="st.saveError" @retry="host.retry()" />
-          <SyncIndicator class="mr-1" @open="openSync" />
+          <CollaboratorStrip class="mr-2" :peers="collaborators" :page-numbers="pageNumbers" :current-page-id="lib.currentPageId" />
+          <SyncIndicator class="mr-1" :live="liveLabel" @open="openSync" />
           <component :is="sharedEntry.syncState === 'needsResolution' ? 'button' : 'span'" v-if="sharedEntry && sharedEntry.state !== 'joining'" class="mr-1 hidden whitespace-nowrap text-xs text-muted sm:inline"
             :class="sharedEntry.syncState === 'needsResolution' ? 'underline' : ''" data-testid="shared-sync-state"
             v-bind="sharedEntry.syncState === 'needsResolution' ? { type: 'button', onClick: () => (showConflicts = true) } : {}">Shared · {{ syncStateLabel(sharedEntry.syncState) }}</component>
           <IconBtn label="Search notebooks" :shortcut="`${mod}+F`" @click="search.panelOpen = true"><Search :size="20" /></IconBtn>
+          <span v-if="commentsOn" class="relative inline-flex">
+            <IconBtn :label="comments.unreadThreads ? `Comments, ${comments.unreadThreads} with new activity` : 'Comments'" :active="comments.drawerOpen" :aria-expanded="comments.drawerOpen" @click="comments.drawerOpen = !comments.drawerOpen"><MessageSquare :size="20" /></IconBtn>
+            <span v-if="comments.unreadThreads" class="pointer-events-none absolute right-0.5 top-0.5 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] font-bold leading-4 text-white epaper:border epaper:border-black epaper:bg-black" aria-hidden="true" data-testid="comments-badge">{{ comments.unreadThreads }}</span>
+          </span>
+          <NotificationBell />
           <IconBtn v-if="!readOnly" label="Add page after this one" :shortcut="`${mod}+Shift+N`" @click="addPage()"><Plus :size="20" /></IconBtn>
           <Menu v-if="!readOnly" label="Page template">
             <template #trigger="{ toggle, open }">
@@ -361,7 +464,7 @@ watch(narrow, (n) => {
             <template #trigger="{ toggle, open }">
               <IconBtn label="Export and print" :aria-expanded="open" aria-haspopup="menu" @click="toggle"><Download :size="20" /></IconBtn>
             </template>
-            <MenuItem @click="exportNb"><Download :size="16" />Notebook (.penroam, editable)…</MenuItem>
+            <MenuItem @click="startExport"><Download :size="16" />Notebook (.penroam, editable)…</MenuItem>
             <MenuItem @click="exportPdf"><FileDown :size="16" />Annotated PDF…</MenuItem>
             <MenuItem @click="print"><Printer :size="16" />Print…</MenuItem>
             <MenuItem @click="exportText(true)"><FileText :size="16" />Markdown (text only)…</MenuItem>
@@ -372,6 +475,7 @@ watch(narrow, (n) => {
             <MenuItem @click="copyText"><ClipboardCopy :size="16" />Copy this page's text</MenuItem>
           </Menu>
           <IconBtn v-if="!readOnly" label="Version history" @click="openHistory"><History :size="20" /></IconBtn>
+          <IconBtn v-if="sharedEntry?.state === 'active'" label="Activity" @click="showActivity = true"><Activity :size="20" /></IconBtn>
           <IconBtn :label="sharedEntry && !sharedEntry.owner ? 'People and leaving' : 'Share notebook'" @click="showShare = true"><Users :size="20" /></IconBtn>
           <IconBtn class="hidden sm:inline-flex" label="Settings" @click="showSettings = true"><Settings :size="20" /></IconBtn>
         </div>
@@ -423,6 +527,8 @@ watch(narrow, (n) => {
           </div>
         </div>
       </main>
+      <CommentsDrawer v-if="commentsOn && comments.drawerOpen" :can="startable" :pending="pendingAnchor" :placing="(st.placing as StartKind | null)" :self-id="selfId" :narrow="narrow"
+        @close="comments.drawerOpen = false; cancelComment()" @start="startComment" @cancel-start="cancelComment" @submit-new="submitComment" @locate="locateThread" @reattach="reattachThread" />
     </div>
 
     <!-- bottom tray on narrow screens -->
@@ -434,6 +540,8 @@ watch(narrow, (n) => {
 
     <ConflictsDialog v-if="showConflicts" :notebook-id="nb.id" :current-title="nb.title" @close="showConflicts = false" @resolved="lib.reloadCurrent(); lib.currentPageId && host.markChanged([lib.currentPageId])" />
     <HistoryDialog v-if="showHistory && lib.currentPageId" :notebook="nb" :page-id="lib.currentPageId" :render="(p, w) => host.renderPagePng(p, w, { paper: true })" @close="showHistory = false" @restored="onHistoryRestored" />
+    <ActivityDialog v-if="showActivity" :notebook-id="nb.id" :page-numbers="pageNumbers" @close="showActivity = false" @goto="(id) => { showActivity = false; lib.currentPageId = id; }" />
+    <ExportDialog v-if="showExport" :title="nb.title" @close="showExport = false" @confirm="(o) => { showExport = false; exportNb(o); }" />
     <ShareDialog v-if="showShare" :notebook-id="nb.id" :title="nb.title" @close="showShare = false" />
     <SettingsDialog v-if="showSettings" :native-kind="host.native.value?.kind ?? null" @close="showSettings = false" />
     <SearchPanel v-if="search.panelOpen" @close="search.panelOpen = false" @open="openHit" />

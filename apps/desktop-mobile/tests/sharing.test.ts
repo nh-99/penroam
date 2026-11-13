@@ -330,3 +330,32 @@ describe("accepting problems and former members", () => {
     expect(labels).toContain("Remove from this device");
   });
 });
+
+describe("when the server offers no sharing", () => {
+  it("shows no notification bell and no people, comment or settings controls", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const { useSharing } = await import("../src/stores/sharing");
+    const { useComments } = await import("../src/stores/comments");
+    const sharing = useSharing();
+    sharing.available = false;
+    sharing.notebooks = [];
+    const Bell = (await import("../src/components/NotificationBell.vue")).default;
+    const w = mount(Bell, { global: { plugins: [pinia] } });
+    expect(w.find("button").exists()).toBe(false);
+    sharing.available = true;
+    await flushPromises();
+    expect(w.find("button").exists()).toBe(true);
+    sharing.available = false;
+    useComments().notifications = [{ notificationId: "n", notebookId: "nb", threadId: "t", commentId: "c", kind: "mention", actorDisplay: "x", at: 1, read: false }];
+    await flushPromises();
+    expect(w.find("button").exists()).toBe(true); // old notifications stay reachable
+  });
+
+  it("explains in the share dialog instead of offering to share", async () => {
+    const { w } = await setup({ available: false });
+    expect(document.body.textContent).toContain("doesn't support shared notebooks");
+    expect(button("Start sharing")).toBeUndefined();
+    w.unmount();
+  });
+});

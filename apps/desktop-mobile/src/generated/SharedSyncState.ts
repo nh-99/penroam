@@ -3,4 +3,4 @@
 /**
  * How far this device's copy has got.
  */
-export type SharedSyncState = "localSaved" | "waitingToUpload" | "synced" | "accessRemoved" | "needsResolution";
+export type SharedSyncState = "localSaved" | "waitingToUpload" | "synced" | "accessRemoved" | "needsResolution" | "needsCatchUp";

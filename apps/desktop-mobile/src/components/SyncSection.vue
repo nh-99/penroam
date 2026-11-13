@@ -9,10 +9,14 @@ import ConfirmDialog from "./ConfirmDialog.vue";
 import PromptDialog from "./PromptDialog.vue";
 import CloudAccountSection from "./CloudAccountSection.vue";
 import { useSync } from "../stores/sync";
+import { useLive } from "../stores/live";
+import { useSharing } from "../stores/sharing";
 import { useUi } from "../stores/ui";
 import { describeStatus, formatAgo, type SyncDevice } from "../platform/sync";
 
 const sync = useSync();
+const live = useLive();
+const sharing = useSharing();
 const ui = useUi();
 const serverUrl = ref("http://127.0.0.1:8787");
 const account = ref("");
@@ -178,6 +182,14 @@ async function confirmDisconnect() {
           </li>
         </ul>
       </div>
+
+      <label v-if="sharing.available" class="flex items-center justify-between gap-4 rounded-xl border border-line p-3">
+        <span>
+          <span class="block text-sm">Share my presence in shared notebooks</span>
+          <span class="block text-xs text-muted">Lets people in a shared notebook see which page you're on and where your cursor is. Your edits sync either way.</span>
+        </span>
+        <input type="checkbox" class="h-5 w-5 shrink-0" :checked="live.sharePresence" @change="live.setSharePresence(($event.target as HTMLInputElement).checked)" />
+      </label>
 
       <p v-if="sync.vaults.supported && sync.status?.phase !== 'revoked'" class="text-xs leading-relaxed text-muted">Vaults are on the library screen, above your notebooks.</p>
 
