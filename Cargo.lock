@@ -3549,7 +3549,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-app"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "gethostname",
  "gtk",
@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-core"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -3604,7 +3604,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-interchange"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "flate2",
  "md-5",
@@ -3623,7 +3623,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-pdf"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "flate2",
  "lopdf",
@@ -3638,7 +3638,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-search"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "objc2",
  "objc2-core-foundation",
@@ -3665,7 +3665,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-storage"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "crc32fast",
  "penroam-core",
@@ -3684,7 +3684,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-sync"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "android-native-keyring-store",
  "apple-native-keyring-store",
@@ -3720,7 +3720,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-sync-protocol"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -3730,7 +3730,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-sync-testkit"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "penroam-sync-protocol",
  "serde",
@@ -3744,7 +3744,7 @@ dependencies = [
 
 [[package]]
 name = "penroam-webdav"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "quick-xml",
  "serde",
@@ -5279,7 +5279,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-native-ink"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -5289,7 +5289,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-native-print"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "gtk",
  "penroam-pdf",
@@ -5323,7 +5323,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-store-billing"
-version = "0.1.0-beta.9"
+version = "0.1.0-beta.10"
 dependencies = [
  "serde",
  "serde_json",

@@ -3,6 +3,30 @@
 User-visible changes for each release. The release workflow copies a version's section into its
 release notes and stops if the version has no entry.
 
+## 0.1.0-beta.10
+
+* New: shared notebooks. Share a notebook from **Share notebook…** in its **⋮** menu and invite people
+  by their verified email address as editors, commenters or viewers. Notebooks shared with you appear
+  under **Shared with me**. Everyone can work offline; changes merge when you're back online, and
+  two people typing in the same text block keep both their text. While you're both online you see
+  who else is in the notebook and where they are. Shared notebooks have comments with mentions and
+  notifications, an activity list that shows who changed what, and version history with a restore
+  preview that keeps other people's newer work. Shared notebooks need a sync server that offers
+  them: **Penroam Cloud doesn't offer sharing yet** and will turn it on after testing, so until then
+  **Share notebook…** only explains that the server doesn't support it. See the manual's chapters on
+  shared notebooks, comments, and history and activity.
+* Changed: restoring an earlier version now shows a preview of exactly what will change before
+  anything is touched, for a page or the whole notebook. You can untick parts of it. In your own
+  notebooks the default still puts everything back as it was; pages made since go to the trash.
+* New: **Keep both as copies** in the sync conflicts window keeps the version shown and adds the
+  other one as a copy next to it. Keeping the version shown now also ends the conflict on your other
+  devices, which it didn't always do before.
+* New: exports of shared notebooks can include comments and who wrote what. Both are off unless you
+  tick them.
+* Fixed: a notebook that arrived from another device showed no cover in the library until you
+  opened it on this one. The library now draws missing covers itself, and redraws a cover when a
+  synced change alters the page.
+
 ## 0.1.0-beta.9
 
 * New: an on-screen ruler for straight lines. Show it with the **Ruler** button in the toolbar or
