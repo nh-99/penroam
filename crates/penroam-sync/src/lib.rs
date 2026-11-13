@@ -16,6 +16,8 @@
 //! * [`models`]: the signed handwriting model catalog and model downloads.
 //! * [`vault`]: passphrase-locked vaults, and which notebooks belong to them.
 //! * [`locker`]: vaults locked on this device, encrypted at rest.
+//! * [`shared`]: shared notebooks: sharing an existing notebook, joining a shared one, roles
+//!   and access loss.
 //! * `auth` (feature `http`): OpenID Connect sign-in with PKCE in the system
 //!   browser and device sessions, for servers that advertise `auth.v1`.
 //!
@@ -44,6 +46,7 @@ pub mod keylog;
 pub mod locker;
 pub mod models;
 pub mod secrets;
+pub mod shared;
 pub mod store;
 pub mod transport;
 pub mod vault;

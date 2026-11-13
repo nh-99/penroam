@@ -30,6 +30,10 @@
 //!   folder's name isn't worth interrupting anyone for.
 //! * Whether a notebook shows infinite canvases is a register that raises no
 //!   conflict either: it only changes how the pages are shown.
+//! * The shared notebook space a notebook moved to (`notebookShared`) is a
+//!   register too, without a conflict: the highest operation id wins, so every
+//!   device routes the notebook to the same space even if two devices shared it
+//!   at once.
 
 use crate::folder::{Folder, FolderSet};
 use crate::model::*;
@@ -152,6 +156,8 @@ struct NotebookState {
     folder: Option<Register<Option<Uuid>>>,
     /// Infinite canvases on or off; `None` until first set.
     canvas: Option<Register<bool>>,
+    /// The shared notebook space it moved to; `None` until shared.
+    shared: Option<Register<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -433,8 +439,11 @@ impl Replica {
         *f = (*f).max(op.local_sequence);
         self.applied.insert(op.id, (key, fp.0, fp.1));
         self.by_key.insert(key, op.id);
-        // filing isn't a change to the notebook, as on the local path
-        if !matches!(op.body, DocumentOperation::NotebookFiled { .. }) {
+        // filing and sharing aren't changes to the notebook, as on the local path
+        if !matches!(
+            op.body,
+            DocumentOperation::NotebookFiled { .. } | DocumentOperation::NotebookShared { .. }
+        ) {
             self.updated_at = self.updated_at.max(op.at);
         }
         Ok(Applied::New)
@@ -515,6 +524,7 @@ impl Replica {
             }
             NotebookRenamed { .. }
             | NotebookFiled { .. }
+            | NotebookShared { .. }
             | NotebookCanvasSet { .. }
             | NotebookCoverChanged { .. }
             | NotebookDeleted { .. }
@@ -559,6 +569,7 @@ impl Replica {
                     purges: HashSet::new(),
                     folder: None,
                     canvas: None,
+                    shared: None,
                 });
             }
             NotebookFiled { folder, .. } => {
@@ -573,6 +584,13 @@ impl Replica {
                 match nb.canvas.as_mut() {
                     Some(r) => r.write(w.of(*infinite)),
                     None => nb.canvas = Some(Register::new(w.of(*infinite))),
+                }
+            }
+            NotebookShared { space_id, .. } => {
+                let nb = self.nb();
+                match nb.shared.as_mut() {
+                    Some(r) => r.write(w.of(space_id.clone())),
+                    None => nb.shared = Some(Register::new(w.of(space_id.clone()))),
                 }
             }
             FolderCreated {
@@ -831,6 +849,14 @@ impl Replica {
                 })
                 .collect(),
         )
+    }
+
+    /// The shared notebook space this notebook moved to (`notebookShared`), if any. When two
+    /// devices shared it concurrently, the operation with the highest id decides, on every
+    /// replica alike.
+    pub fn shared_space(&self) -> Option<String> {
+        let s = self.notebook.as_ref()?;
+        s.shared.as_ref().map(|r| r.winner().value.clone())
     }
 
     /// Whether the notebook is permanently deleted: no device should keep a

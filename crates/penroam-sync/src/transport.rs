@@ -22,6 +22,11 @@ use penroam_sync_protocol::{
     KeyLogPage, Limits, PullOpsRequest, PullOpsResponse, PulledOp, PushOpsResponse, ServerMeta,
     SessionTokens, UpdateVaultLockRequest, VaultListResponse, VaultRecord,
 };
+use penroam_sync_protocol::{
+    ChangeRoleRequest, CreateInvitationRequest, CreateSpaceRequest, IncomingInvitationList,
+    InvitationId, InvitationRecord, MemberList, MemberRecord, SharedNotebookList,
+    SharedNotebookRecord, SpaceId, UpdateSpaceMetaRequest,
+};
 
 /// A transport failure, classified for the retry policy.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -134,6 +139,94 @@ pub trait SyncTransport: Send {
     fn vault_delete(&mut self, id: &AccountId) -> TResult<()>;
     /// `POST /v1/vaults/{id}/session`: an account session for the vault's own account.
     fn vault_session(&mut self, id: &AccountId) -> TResult<SessionTokens>;
+
+    // Shared notebooks (`sharing.v1`). All need a session of the caller's own account. The
+    // defaults refuse, for transports that don't implement them.
+
+    /// `GET /v1/shared-notebooks`: spaces the caller owns or belongs to (revoked ones once).
+    fn shared_list(&mut self) -> TResult<SharedNotebookList> {
+        Err(no_sharing())
+    }
+    /// `POST /v1/shared-notebooks`: creates a space (idempotent by `idempotency_key`).
+    fn shared_create(&mut self, req: &CreateSpaceRequest) -> TResult<SharedNotebookRecord> {
+        let _ = req;
+        Err(no_sharing())
+    }
+    /// `PUT /v1/shared-notebooks/{id}/meta`: replaces the sealed title.
+    fn shared_set_meta(&mut self, id: &SpaceId, req: &UpdateSpaceMetaRequest) -> TResult<()> {
+        let _ = (id, req);
+        Err(no_sharing())
+    }
+    /// `POST /v1/shared-notebooks/{id}/session`: an account session on the space.
+    fn shared_session(&mut self, id: &SpaceId) -> TResult<SessionTokens> {
+        let _ = id;
+        Err(no_sharing())
+    }
+    /// `GET /v1/shared-notebooks/{id}/key`: the space's root; `None` when it isn't stored yet.
+    fn shared_key_get(&mut self, id: &SpaceId) -> TResult<Option<AccountKeyDocument>> {
+        let _ = id;
+        Err(no_sharing())
+    }
+    /// `PUT /v1/shared-notebooks/{id}/key`: stores the space's root once (owner); `conflict` if
+    /// one is stored.
+    fn shared_key_put(&mut self, id: &SpaceId, doc: &AccountKeyDocument) -> TResult<()> {
+        let _ = (id, doc);
+        Err(no_sharing())
+    }
+    /// `GET /v1/shared-notebooks/{id}/members`: members, and for the owner, invitations.
+    fn shared_members(&mut self, id: &SpaceId) -> TResult<MemberList> {
+        let _ = id;
+        Err(no_sharing())
+    }
+    /// `POST /v1/shared-notebooks/{id}/invitations` (owner).
+    fn shared_invite(
+        &mut self,
+        id: &SpaceId,
+        req: &CreateInvitationRequest,
+    ) -> TResult<InvitationRecord> {
+        let _ = (id, req);
+        Err(no_sharing())
+    }
+    /// `PATCH /v1/shared-notebooks/{id}/members/{account}` (owner).
+    fn shared_change_role(
+        &mut self,
+        id: &SpaceId,
+        account: &AccountId,
+        req: &ChangeRoleRequest,
+    ) -> TResult<MemberRecord> {
+        let _ = (id, account, req);
+        Err(no_sharing())
+    }
+    /// `DELETE /v1/shared-notebooks/{id}/members/{account}`: the owner removes a member, or a
+    /// member removes themselves (leaving).
+    fn shared_remove_member(&mut self, id: &SpaceId, account: &AccountId) -> TResult<()> {
+        let _ = (id, account);
+        Err(no_sharing())
+    }
+    /// `GET /v1/invitations`: invitations waiting for the caller's verified email.
+    fn invitations_list(&mut self) -> TResult<IncomingInvitationList> {
+        Err(no_sharing())
+    }
+    /// `POST /v1/invitations/{inv}/accept`.
+    fn invitation_accept(&mut self, inv: &InvitationId) -> TResult<SharedNotebookRecord> {
+        let _ = inv;
+        Err(no_sharing())
+    }
+    /// `POST /v1/invitations/{inv}/decline`.
+    fn invitation_decline(&mut self, inv: &InvitationId) -> TResult<()> {
+        let _ = inv;
+        Err(no_sharing())
+    }
+    /// `DELETE /v1/invitations/{inv}`: the owner withdraws an invitation.
+    fn invitation_cancel(&mut self, inv: &InvitationId) -> TResult<()> {
+        let _ = inv;
+        Err(no_sharing())
+    }
+}
+
+/// What the default sharing methods answer.
+fn no_sharing() -> TransportError {
+    TransportError::Protocol("this transport doesn't support shared notebooks".into())
 }
 
 /// Pairs a pull control document with its frame and rejects a frame whose
@@ -172,7 +265,7 @@ pub use in_process::InProcessTransport;
 mod in_process {
     use super::*;
     use penroam_sync_protocol::AccountId;
-    use penroam_sync_testkit::{InMemoryServer, RequestError};
+    use penroam_sync_testkit::{Caller, InMemoryServer, RequestError};
     use std::sync::Arc;
 
     /// Calls an [`InMemoryServer`] directly as `(account, device)`.
@@ -187,6 +280,15 @@ mod in_process {
         pub offline: bool,
         /// Test knob: the next this-many blob downloads fail (network error).
         pub fail_blob_gets: u32,
+        /// Test knob: blob downloads return altered bytes (a server serving corrupt data).
+        pub corrupt_blob_gets: bool,
+        /// Test knob: the latest checkpoint is returned with an altered signature.
+        pub corrupt_checkpoints: bool,
+        /// Test knob: `GET /v1/invitations` fails (server error).
+        pub fail_invitation_lists: bool,
+        /// When `account` is a shared notebook space: the member this client acts as (an account
+        /// session on the space). Sharing routes then act as this member's own account.
+        pub member: Option<AccountId>,
     }
 
     impl InProcessTransport {
@@ -198,7 +300,37 @@ mod in_process {
                 device,
                 offline: false,
                 fail_blob_gets: 0,
+                corrupt_blob_gets: false,
+                corrupt_checkpoints: false,
+                fail_invitation_lists: false,
+                member: None,
             }
+        }
+
+        /// A client of shared notebook space `space`, acting as `member` (what a space session
+        /// gives).
+        pub fn for_space(
+            server: Arc<InMemoryServer>,
+            space: AccountId,
+            member: AccountId,
+            device: DeviceId,
+        ) -> Self {
+            let mut t = Self::new(server, space, device);
+            t.member = Some(member);
+            t
+        }
+
+        /// Who a sync request is made by.
+        fn caller(&self) -> Caller<'_> {
+            Caller {
+                account: &self.account,
+                member: self.member.as_ref(),
+            }
+        }
+
+        /// The account sharing requests act as: the member's own account inside a space.
+        fn own(&self) -> &AccountId {
+            self.member.as_ref().unwrap_or(&self.account)
         }
 
         fn up(&self) -> TResult<()> {
@@ -229,32 +361,32 @@ mod in_process {
             self.up()?;
             let r = self
                 .server
-                .register_device_keys(&self.account, req)
+                .register_device_keys(self.caller(), req)
                 .map_err(map)?;
             self.device = r.device_id.clone();
             Ok(r)
         }
         fn list_devices(&mut self) -> TResult<DeviceListResponse> {
             self.up()?;
-            self.server.list_devices(&self.account).map_err(map)
+            self.server.list_devices(self.caller()).map_err(map)
         }
         fn revoke_device(&mut self, id: &DeviceId) -> TResult<()> {
             self.up()?;
             self.server
-                .revoke_device_as(&self.account, &self.device, id)
+                .revoke_device_as(self.caller(), &self.device, id)
                 .map_err(map)
         }
         fn push(&mut self, frame: Vec<u8>) -> TResult<PushOpsResponse> {
             self.up()?;
             self.server
-                .push(&self.account, &self.device, &frame)
+                .push(self.caller(), &self.device, &frame)
                 .map_err(map)
         }
         fn pull(&mut self, req: &PullOpsRequest, limits: &Limits) -> TResult<PulledPage> {
             self.up()?;
             let page = self
                 .server
-                .pull(&self.account, &self.device, req)
+                .pull(self.caller(), &self.device, req)
                 .map_err(map)?;
             let items: Vec<(PulledOp, Vec<u8>)> = decode_json_batch(&page.frame, limits)
                 .map_err(|e| TransportError::Protocol(e.to_string()))?;
@@ -263,17 +395,17 @@ mod in_process {
         fn ack(&mut self, req: &AckRequest) -> TResult<()> {
             self.up()?;
             self.server
-                .ack(&self.account, &self.device, req)
+                .ack(self.caller(), &self.device, req)
                 .map(|_| ())
                 .map_err(map)
         }
         fn keylog_get(&mut self, from: u64) -> TResult<KeyLogPage> {
             self.up()?;
-            self.server.keylog_get(&self.account, from).map_err(map)
+            self.server.keylog_get(self.caller(), from).map_err(map)
         }
         fn keylog_append(&mut self, req: &KeyLogAppendRequest) -> TResult<KeyLogAppendResponse> {
             self.up()?;
-            self.server.keylog_append(&self.account, req).map_err(map)
+            self.server.keylog_append(self.caller(), req).map_err(map)
         }
         fn blob_put(
             &mut self,
@@ -283,7 +415,7 @@ mod in_process {
         ) -> TResult<BlobPutResponse> {
             self.up()?;
             self.server
-                .blob_put(&self.account, &self.device, id, sha256_hex, bytes)
+                .blob_put(self.caller(), &self.device, id, sha256_hex, bytes)
                 .map_err(map)
         }
         fn blob_get(&mut self, id: &BlobId) -> TResult<Vec<u8>> {
@@ -294,20 +426,32 @@ mod in_process {
                     "injected blob download failure".into(),
                 ));
             }
-            self.server
-                .blob_get(&self.account, &self.device, id)
-                .map_err(map)
+            let mut b = self
+                .server
+                .blob_get(self.caller(), &self.device, id)
+                .map_err(map)?;
+            if self.corrupt_blob_gets {
+                if let Some(x) = b.last_mut() {
+                    *x ^= 0x55;
+                }
+            }
+            Ok(b)
         }
         fn checkpoint_put(&mut self, rec: &CheckpointRecord) -> TResult<()> {
             self.up()?;
             self.server
-                .checkpoint_put(&self.account, &self.device, rec)
+                .checkpoint_put(self.caller(), &self.device, rec)
                 .map_err(map)
         }
         fn checkpoint_latest(&mut self) -> TResult<Option<CheckpointRecord>> {
             self.up()?;
-            match self.server.checkpoint_latest(&self.account, &self.device) {
-                Ok(r) => Ok(Some(r)),
+            match self.server.checkpoint_latest(self.caller(), &self.device) {
+                Ok(mut r) => {
+                    if self.corrupt_checkpoints {
+                        r.signature = penroam_sync_protocol::base64url::encode(&[7u8; 64]);
+                    }
+                    Ok(Some(r))
+                }
                 Err(RequestError::Api(b)) if b.code == ErrorCode::NotFound => Ok(None),
                 Err(e) => Err(map(e)),
             }
@@ -355,6 +499,99 @@ mod in_process {
                 expires_in_s: 3600,
                 refresh_token: String::new(),
             })
+        }
+
+        fn shared_list(&mut self) -> TResult<SharedNotebookList> {
+            self.up()?;
+            self.server.shared_list(self.own()).map_err(map)
+        }
+        fn shared_create(&mut self, req: &CreateSpaceRequest) -> TResult<SharedNotebookRecord> {
+            self.up()?;
+            self.server.shared_create(self.own(), req).map_err(map)
+        }
+        fn shared_set_meta(&mut self, id: &SpaceId, req: &UpdateSpaceMetaRequest) -> TResult<()> {
+            self.up()?;
+            self.server
+                .shared_set_meta(self.own(), id, req)
+                .map_err(map)
+        }
+        fn shared_session(&mut self, id: &SpaceId) -> TResult<SessionTokens> {
+            self.up()?;
+            self.server
+                .shared_session_check(self.own(), id)
+                .map_err(map)?;
+            // the in-process server has no tokens: a caller uses `for_space`
+            Ok(SessionTokens {
+                account_id: id.clone(),
+                device_id: None,
+                access_token: String::new(),
+                expires_in_s: 3600,
+                refresh_token: String::new(),
+            })
+        }
+        fn shared_key_get(&mut self, id: &SpaceId) -> TResult<Option<AccountKeyDocument>> {
+            self.up()?;
+            match self.server.shared_key_get(self.own(), id) {
+                Ok(d) => Ok(Some(d)),
+                Err(RequestError::Api(b)) if b.code == ErrorCode::NotFound => Ok(None),
+                Err(e) => Err(map(e)),
+            }
+        }
+        fn shared_key_put(&mut self, id: &SpaceId, doc: &AccountKeyDocument) -> TResult<()> {
+            self.up()?;
+            self.server.shared_key_put(self.own(), id, doc).map_err(map)
+        }
+        fn shared_members(&mut self, id: &SpaceId) -> TResult<MemberList> {
+            self.up()?;
+            self.server.shared_members(self.own(), id).map_err(map)
+        }
+        fn shared_invite(
+            &mut self,
+            id: &SpaceId,
+            req: &CreateInvitationRequest,
+        ) -> TResult<InvitationRecord> {
+            self.up()?;
+            self.server.shared_invite(self.own(), id, req).map_err(map)
+        }
+        fn shared_change_role(
+            &mut self,
+            id: &SpaceId,
+            account: &AccountId,
+            req: &ChangeRoleRequest,
+        ) -> TResult<MemberRecord> {
+            self.up()?;
+            self.server
+                .shared_change_role(self.own(), id, account, req)
+                .map_err(map)
+        }
+        fn shared_remove_member(&mut self, id: &SpaceId, account: &AccountId) -> TResult<()> {
+            self.up()?;
+            self.server
+                .shared_remove_member(self.own(), id, account)
+                .map_err(map)
+        }
+        fn invitations_list(&mut self) -> TResult<IncomingInvitationList> {
+            self.up()?;
+            if self.fail_invitation_lists {
+                return Err(TransportError::Api(ErrorBody::new(
+                    ErrorCode::InternalError,
+                    "injected failure",
+                    "",
+                )));
+            }
+            self.server.invitations_incoming(self.own()).map_err(map)
+        }
+        fn invitation_accept(&mut self, inv: &InvitationId) -> TResult<SharedNotebookRecord> {
+            self.up()?;
+            self.server.invitation_accept(self.own(), inv).map_err(map)
+        }
+        fn invitation_decline(&mut self, inv: &InvitationId) -> TResult<()> {
+            self.up()?;
+            self.server.invitation_decline(self.own(), inv).map_err(map)
+        }
+        fn invitation_cancel(&mut self, inv: &InvitationId) -> TResult<()> {
+            self.up()?;
+            self.server.invitation_cancel(self.own(), inv).map_err(map)
         }
     }
 }
@@ -438,10 +675,30 @@ mod http {
             account: &str,
             device_id: Option<&str>,
         ) -> TResult<(String, String)> {
+            Self::test_session_as(base_url, account, device_id, None, None)
+        }
+
+        /// [`HttpTransport::test_session`] with the development test server's other options:
+        /// `member` makes a session on a shared notebook space act as that member (with
+        /// `device_id`, a device session there), and `email` records a verified sign-in email
+        /// for `account`, which invitations match.
+        pub fn test_session_as(
+            base_url: &str,
+            account: &str,
+            device_id: Option<&str>,
+            member: Option<&str>,
+            email: Option<&str>,
+        ) -> TResult<(String, String)> {
             let base = base_url.trim_end_matches('/');
             let mut body = serde_json::json!({ "account": account });
             if let Some(d) = device_id {
                 body["device_id"] = serde_json::Value::String(d.to_string());
+            }
+            if let Some(m) = member {
+                body["member"] = serde_json::Value::String(m.to_string());
+            }
+            if let Some(e) = email {
+                body["email"] = serde_json::Value::String(e.to_string());
             }
             let mut r = agent()
                 .post(format!("{base}/_test/session"))
@@ -755,10 +1012,161 @@ mod http {
             )?
             .ok_or_else(|| TransportError::Protocol("empty session response".into()))
         }
+
+        fn shared_list(&mut self) -> TResult<SharedNotebookList> {
+            self.sharing_impl_list()
+        }
+        fn shared_create(&mut self, req: &CreateSpaceRequest) -> TResult<SharedNotebookRecord> {
+            let r = self
+                .post_json(routes::SHARED_NOTEBOOKS, req)?
+                .ok_or_else(|| TransportError::Protocol("empty shared notebook".into()))?;
+            checked_record(r)
+        }
+        fn shared_set_meta(&mut self, id: &SpaceId, req: &UpdateSpaceMetaRequest) -> TResult<()> {
+            self.send_json(
+                "PUT",
+                &space_path(routes::SHARED_NOTEBOOK_META, id),
+                Some(req),
+            )
+            .map(|_| ())
+        }
+        fn shared_session(&mut self, id: &SpaceId) -> TResult<SessionTokens> {
+            self.post_json(
+                &space_path(routes::SHARED_NOTEBOOK_SESSION, id),
+                &serde_json::json!({}),
+            )?
+            .ok_or_else(|| TransportError::Protocol("empty session response".into()))
+        }
+        fn shared_key_get(&mut self, id: &SpaceId) -> TResult<Option<AccountKeyDocument>> {
+            match self.get_json(&space_path(routes::SHARED_NOTEBOOK_KEY, id)) {
+                Ok(d) => Ok(Some(d)),
+                Err(TransportError::Api(b)) if b.code == ErrorCode::NotFound => Ok(None),
+                Err(e) => Err(e),
+            }
+        }
+        fn shared_key_put(&mut self, id: &SpaceId, doc: &AccountKeyDocument) -> TResult<()> {
+            self.send_json(
+                "PUT",
+                &space_path(routes::SHARED_NOTEBOOK_KEY, id),
+                Some(doc),
+            )
+            .map(|_| ())
+        }
+        fn shared_members(&mut self, id: &SpaceId) -> TResult<MemberList> {
+            let l: MemberList = self.get_json(&space_path(routes::SHARED_NOTEBOOK_MEMBERS, id))?;
+            for m in &l.members {
+                m.validate()
+                    .map_err(|e| TransportError::Protocol(format!("member: {e}")))?;
+            }
+            Ok(l)
+        }
+        fn shared_invite(
+            &mut self,
+            id: &SpaceId,
+            req: &CreateInvitationRequest,
+        ) -> TResult<InvitationRecord> {
+            self.post_json(&space_path(routes::SHARED_NOTEBOOK_INVITATIONS, id), req)?
+                .ok_or_else(|| TransportError::Protocol("empty invitation".into()))
+        }
+        fn shared_change_role(
+            &mut self,
+            id: &SpaceId,
+            account: &AccountId,
+            req: &ChangeRoleRequest,
+        ) -> TResult<MemberRecord> {
+            let path = space_path(routes::SHARED_NOTEBOOK_MEMBER, id)
+                .replace("{account_id}", account.as_str());
+            Self::json(&self.send_json("PATCH", &path, Some(req))?)
+        }
+        fn shared_remove_member(&mut self, id: &SpaceId, account: &AccountId) -> TResult<()> {
+            let path = space_path(routes::SHARED_NOTEBOOK_MEMBER, id)
+                .replace("{account_id}", account.as_str());
+            self.send_json::<()>("DELETE", &path, None).map(|_| ())
+        }
+        fn invitations_list(&mut self) -> TResult<IncomingInvitationList> {
+            let l: IncomingInvitationList = self.get_json(routes::INVITATIONS)?;
+            for i in &l.invitations {
+                i.validate()
+                    .map_err(|e| TransportError::Protocol(format!("invitation: {e}")))?;
+            }
+            Ok(l)
+        }
+        fn invitation_accept(&mut self, inv: &InvitationId) -> TResult<SharedNotebookRecord> {
+            let r = self
+                .post_json(
+                    &inv_path(routes::INVITATION_ACCEPT, inv),
+                    &serde_json::json!({}),
+                )?
+                .ok_or_else(|| TransportError::Protocol("empty shared notebook".into()))?;
+            checked_record(r)
+        }
+        fn invitation_decline(&mut self, inv: &InvitationId) -> TResult<()> {
+            self.post_json::<_, serde_json::Value>(
+                &inv_path(routes::INVITATION_DECLINE, inv),
+                &serde_json::json!({}),
+            )
+            .map(|_| ())
+        }
+        fn invitation_cancel(&mut self, inv: &InvitationId) -> TResult<()> {
+            self.send_json::<()>("DELETE", &inv_path(routes::INVITATION, inv), None)
+                .map(|_| ())
+        }
     }
 
     fn vault_path(id: &AccountId) -> String {
         routes::VAULT.replace("{id}", id.as_str())
+    }
+
+    fn space_path(route: &str, id: &SpaceId) -> String {
+        route.replace("{id}", id.as_str())
+    }
+
+    fn inv_path(route: &str, inv: &InvitationId) -> String {
+        route.replace("{inv}", inv.as_str())
+    }
+
+    /// Records from the server are checked before the app relies on them.
+    fn checked_record(r: SharedNotebookRecord) -> TResult<SharedNotebookRecord> {
+        r.validate()
+            .map_err(|e| TransportError::Protocol(format!("shared notebook: {e}")))?;
+        Ok(r)
+    }
+
+    impl HttpTransport {
+        fn send_json<B: serde::Serialize>(
+            &self,
+            method: &str,
+            path: &str,
+            body: Option<&B>,
+        ) -> TResult<Vec<u8>> {
+            let url = self.url(path);
+            let auth = self.auth();
+            let r = match (method, body) {
+                ("PUT", Some(b)) => self
+                    .agent
+                    .put(url)
+                    .header("Authorization", auth)
+                    .send_json(b),
+                ("PATCH", Some(b)) => self
+                    .agent
+                    .patch(url)
+                    .header("Authorization", auth)
+                    .send_json(b),
+                ("DELETE", _) => self.agent.delete(url).header("Authorization", auth).call(),
+                _ => return Err(TransportError::Protocol(format!("unsupported {method}"))),
+            }
+            .map_err(net)?;
+            Ok(Self::finish(r, JSON_LIMIT)?.2)
+        }
+
+        fn sharing_impl_list(&self) -> TResult<SharedNotebookList> {
+            let l: SharedNotebookList = self.get_json(routes::SHARED_NOTEBOOKS)?;
+            for r in &l.spaces {
+                r.validate()
+                    .map_err(|e| TransportError::Protocol(format!("shared notebook: {e}")))?;
+            }
+            Ok(l)
+        }
     }
 }
 

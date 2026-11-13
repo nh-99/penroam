@@ -283,6 +283,9 @@ pub struct Library {
     installed: std::collections::BTreeMap<Uuid, u64>,
     tuning: Tuning,
     id_counter: Option<u128>,
+    /// Notebook ids an import must not take even though they aren't here (see
+    /// [`Library::set_reserved_ids`]).
+    reserved_ids: HashSet<Uuid>,
     /// Per-page history bookkeeping, filled lazily.
     history_chains: HashMap<(Uuid, Uuid), ChainMeta>,
     /// Last recorded title and page order per notebook.
@@ -420,6 +423,7 @@ impl Library {
                 min_compact_bytes: JOURNAL_MIN_COMPACT_BYTES,
             },
             id_counter: None,
+            reserved_ids: HashSet::new(),
             history_chains: HashMap::new(),
             history_structure: HashMap::new(),
             _lock: lock,
@@ -2549,6 +2553,20 @@ impl Library {
 
     /// Whether an id is taken (including notebooks purged while their
     /// journal entries are still retained).
+    /// Ids that imports (`.penroam` files, backups) must not give a notebook even when no notebook
+    /// here has them: an imported notebook with one of these ids gets a new id, as if it were
+    /// already in the library. The app reserves the ids of notebooks that are or were shared,
+    /// so a re-import can't be taken for the shared notebook and pulled into its space. Replaces
+    /// the previous set; not persisted.
+    pub fn set_reserved_ids(&mut self, ids: impl IntoIterator<Item = Uuid>) {
+        self.reserved_ids = ids.into_iter().collect();
+    }
+
+    /// Whether an import must give notebook `id` a new id.
+    pub(crate) fn import_id_taken(&self, id: Uuid) -> bool {
+        self.contains_notebook(id) || self.reserved_ids.contains(&id)
+    }
+
     pub(crate) fn contains_notebook(&self, id: Uuid) -> bool {
         self.notebooks.contains_key(&id) || self.purged.contains(&id)
     }

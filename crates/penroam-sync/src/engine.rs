@@ -66,7 +66,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use penroam_core::folder::LIBRARY_STREAM_ID;
-use penroam_core::operation::{DocumentOperation, LocalOperation, OperationRef};
+use penroam_core::operation::{validate_body, DocumentOperation, LocalOperation, OperationRef};
 use penroam_core::replica::{Conflict, ConflictTarget, Replica};
 use penroam_core::{Element, Notebook, OpKind, OperationBatch, Page, PageOperation};
 use penroam_storage::journal::{decode_txn, encode_txn, RecordError, Txn, TxnTarget};
@@ -190,6 +190,9 @@ pub enum Phase {
     RebaseRequired,
     /// Something failed verification (signature, tag, key log, reused id).
     IntegrityAlert,
+    /// This account's access to a shared notebook was removed. The engine stops; the notebook
+    /// and every change not uploaded yet stay on this device.
+    AccessRemoved,
     /// Any other failure; see `last_error`.
     Error,
 }
@@ -318,6 +321,9 @@ pub struct ReconcileReport {
     pub quarantined: usize,
     /// Merged library folders were installed.
     pub folders_changed: bool,
+    /// Notebooks this reconcile moved to a shared notebook space (another device of the account
+    /// shared them); the app starts joining those spaces.
+    pub shared_assigned: Vec<Uuid>,
 }
 
 /// The sync engine for one library and one sync device. Single writer: run
@@ -374,6 +380,9 @@ pub struct SyncEngine<T: SyncTransport> {
     pub attempt: u32,
     /// Privacy-safe diagnostic events (no content, no keys, no tokens).
     pub events: Vec<String>,
+    /// Test knob: behave like a build that applies operation schemas only up to this one.
+    #[doc(hidden)]
+    pub max_op_schema_for_tests: Option<u16>,
 }
 
 /// Wall clock in ms (display only; never used for ordering).
@@ -463,6 +472,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             conflicts: HashMap::new(),
             attempt: 0,
             events: Vec::new(),
+            max_op_schema_for_tests: None,
         }
     }
 
@@ -666,8 +676,11 @@ impl<T: SyncTransport> SyncEngine<T> {
         if raw.is_empty() {
             return Err(SyncError::AccountHasNoKeys);
         }
-        let m = keylog::verify_log(&raw, Some(&acct), None)?;
-        let all = m.epoch_keys_with_recovery(&root.recovery_dh());
+        let m = keylog::verify_log_with(&raw, Some(&acct), None, setup.scope.grant_rule())?;
+        let all = match setup.scope {
+            Scope::Shared(_) => m.epoch_keys_by_recovery(&root.recovery_dh()),
+            _ => m.epoch_keys_with_recovery(&root.recovery_dh()),
+        };
         let keys = Self::new_device(&setup, secrets.as_ref())?;
         Self::register(&mut transport, &keys, &setup.label)?;
         let mut grants = Vec::new();
@@ -770,6 +783,44 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// epoch is started for everyone else, and the server revokes it.
     /// (It keeps whatever it already downloaded.)
     pub fn remove_device(&mut self, device_id: &str) -> Result<()> {
+        self.remove_device_inner(device_id, true)
+    }
+
+    /// For a shared notebook space's owner: takes every device the server reports as revoked in
+    /// the space (the devices of members who were removed or left) out of the space's key log,
+    /// which starts a new content epoch wrapped only to the devices that remain. Operations
+    /// sealed from then on can't be read with the keys a removed member kept. Devices already
+    /// out of the key log are skipped, so this is safe to repeat and to race between the owner's
+    /// devices (a lost append race re-reads the log). Returns how many devices it took out.
+    ///
+    /// The server decides who is revoked, so a hostile server can make the owner rotate members
+    /// out; it could deny them service anyway.
+    pub fn remove_revoked_devices(&mut self) -> Result<usize> {
+        self.require_member()?;
+        let revoked: Vec<String> = self
+            .transport
+            .list_devices()?
+            .devices
+            .into_iter()
+            .filter(|d| d.revoked)
+            .map(|d| d.device_id.as_str().to_string())
+            .collect();
+        let mut n = 0;
+        for d in revoked {
+            if d == self.keys.device_id {
+                continue;
+            }
+            self.refresh_keylog()?;
+            if !self.membership.as_ref().is_some_and(|m| m.is_active(&d)) {
+                continue;
+            }
+            self.remove_device_inner(&d, false)?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    fn remove_device_inner(&mut self, device_id: &str, revoke_on_server: bool) -> Result<()> {
         self.require_member()?;
         // Pull first, so the cutoff recorded below covers everything the
         // device managed to upload before its removal (best effort: if this
@@ -820,10 +871,12 @@ impl<T: SyncTransport> SyncEngine<T> {
             }
         }
         self.refresh_keylog()?;
-        match self.transport.revoke_device(&did(device_id)?) {
-            Ok(()) => {}
-            Err(TransportError::Api(b)) if b.code == ErrorCode::NotFound => {}
-            Err(e) => return Err(e.into()),
+        if revoke_on_server {
+            match self.transport.revoke_device(&did(device_id)?) {
+                Ok(()) => {}
+                Err(TransportError::Api(b)) if b.code == ErrorCode::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
         }
         self.event("removed a device and started a new key epoch");
         Ok(())
@@ -982,7 +1035,36 @@ impl<T: SyncTransport> SyncEngine<T> {
 
     /// Whether this engine syncs `notebook`, by the owners read in the current local phase.
     fn in_scope(&self, notebook: &Uuid) -> bool {
-        self.scope.contains(self.owners.owner(notebook))
+        self.owners.scope_of(notebook) == self.scope
+    }
+
+    /// Whether this engine may publish a checkpoint: always for the account and vaults; in a
+    /// shared notebook space only on the owner's devices. A checkpoint is vouched for by its
+    /// signer, and an editor could otherwise publish one that leaves out other members' work.
+    fn may_checkpoint(&self) -> bool {
+        match &self.scope {
+            Scope::Shared(id) => {
+                self.may_upload()
+                    && self
+                        .owners
+                        .space(id)
+                        .is_some_and(|(_, e)| e.role == penroam_sync_protocol::Role::Owner)
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether this engine may upload: always for the account and vaults; in a shared notebook
+    /// space only while this device's entry for it is active and its role may write. A viewer's
+    /// engine (or one whose role was lowered while edits were queued) keeps local operations in
+    /// its log and never sends them.
+    fn may_upload(&self) -> bool {
+        match &self.scope {
+            Scope::Shared(id) => self.owners.space(id).is_some_and(|(_, e)| {
+                e.state == crate::shared::SharedState::Active && e.role.may_write()
+            }),
+            _ => true,
+        }
     }
 
     /// Rereads the notebook owners. Local phases call this with the library lock held, the lock
@@ -1004,6 +1086,21 @@ impl<T: SyncTransport> SyncEngine<T> {
         let mut dirs = vec![Scope::Account.dir(&self.library_root)];
         for id in crate::vault::local_vaults(&self.library_root) {
             dirs.push(Scope::Vault(id).dir(&self.library_root));
+        }
+        // Shared notebook spaces. One whose access was removed has stopped for good, and its
+        // copies were made when it stopped, so it holds nothing back. One assigned but without
+        // an engine yet (joining) holds back everything from the moment it was assigned, so
+        // edits made before it starts are still in the journal when it does.
+        for e in self.owners.shared.values() {
+            if e.state == crate::shared::SharedState::AccessRemoved {
+                continue;
+            }
+            let d = Scope::Shared(e.space_id.clone()).dir(&self.library_root);
+            if !d.join("state.json").exists() && d != self.scope.dir(&self.library_root) {
+                floor = floor.min(e.since_lib_seq);
+                continue;
+            }
+            dirs.push(d);
         }
         for d in dirs
             .iter()
@@ -1080,7 +1177,7 @@ impl<T: SyncTransport> SyncEngine<T> {
     fn refresh_keylog(&mut self) -> Result<()> {
         let raw = Self::fetch_keylog(&mut self.transport, std::mem::take(&mut self.keylog_raw))?;
         let pin = self.store.state.pin.clone();
-        let m = match keylog::verify_log(&raw, None, pin.as_ref()) {
+        let m = match keylog::verify_log_with(&raw, None, pin.as_ref(), self.scope.grant_rule()) {
             Ok(m) => m,
             Err(e) => {
                 self.keylog_raw = raw;
@@ -1090,6 +1187,31 @@ impl<T: SyncTransport> SyncEngine<T> {
         };
         self.keylog_raw = raw;
         self.epoch_keys = m.epoch_keys_for(&self.keys);
+        // In a shared notebook space every member holds the root, so the recovery grant decides
+        // each epoch's key for everyone alike (`Membership::epoch_keys_by_recovery`); device
+        // grants that disagree are ignored, and an epoch whose recovery grant doesn't open is
+        // void. A member who writes a bad removal entry can then neither lock the others out nor
+        // split them onto different keys. Not an integrity alert: sync goes on.
+        if let Scope::Shared(id) = &self.scope {
+            if let Ok(Some(root)) = crate::shared::load_root(self.secrets.as_ref(), id) {
+                let by_recovery = m.epoch_keys_by_recovery(&root.recovery_dh());
+                let disagree = self
+                    .epoch_keys
+                    .iter()
+                    .filter(|(e, k)| by_recovery.get(e).is_none_or(|r| r.0 != k.0))
+                    .count();
+                let void = (1..=m.current_epoch)
+                    .filter(|e| !by_recovery.contains_key(e))
+                    .count();
+                if disagree > 0 || void > 0 {
+                    self.event(format!(
+                        "security: space key log has {disagree} device grants that disagree with \
+                         the recovery grant and {void} void epochs; using the recovery grants"
+                    ));
+                }
+                self.epoch_keys = by_recovery;
+            }
+        }
         let me_member = m.devices.get(&self.keys.device_id);
         if let Some(me) = me_member {
             if me.cert.sign_pk()? == self.keys.sign_pk() {
@@ -1108,13 +1230,31 @@ impl<T: SyncTransport> SyncEngine<T> {
         Ok(())
     }
 
-    /// The epoch new writes use and its key.
+    /// The epoch new writes use and its key. In a shared notebook space, when the current epoch
+    /// is void (its recovery grant doesn't open), the last epoch that has a key, with its own
+    /// number: envelopes are opened by the epoch they name, so every member still reads them,
+    /// and the next proper removal starts a fresh epoch.
     fn current_epoch(&self) -> Result<(u32, &EpochKey)> {
         let m = self.membership.as_ref().ok_or(SyncError::NotEnrolled)?;
-        let k = self.epoch_keys.get(&m.current_epoch).ok_or_else(|| {
-            SyncError::Integrity("this device has no key for the current epoch".into())
-        })?;
-        Ok((m.current_epoch, k))
+        if let Some(k) = self.epoch_keys.get(&m.current_epoch) {
+            return Ok((m.current_epoch, k));
+        }
+        if matches!(self.scope, Scope::Shared(_)) {
+            if let Some((e, k)) = self.epoch_keys.range(..=m.current_epoch).next_back() {
+                return Ok((*e, k));
+            }
+        }
+        Err(SyncError::Integrity(
+            "this device has no key for the current epoch".into(),
+        ))
+    }
+
+    /// The epoch a new local operation will be sealed with (see [`Self::current_epoch`]).
+    fn sealing_epoch(&self) -> Option<u32> {
+        match self.current_epoch() {
+            Ok((e, _)) => Some(e),
+            Err(_) => self.membership.as_ref().map(|m| m.current_epoch),
+        }
     }
 
     // ---------------------------------------------------------- prepare --
@@ -1173,7 +1313,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             });
             // remember the epoch: a retry after a lost response must be
             // sealed with the same key even if the epoch changed meanwhile
-            let epoch = self.membership.as_ref().map(|m| m.current_epoch);
+            let epoch = self.sealing_epoch();
             self.store.oplog.append_buffered(
                 OpMeta {
                     epoch,
@@ -1341,6 +1481,16 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// Synthesizes creation operations for every existing notebook (the
     /// library may have checkpointed its history away).
     fn seed(&mut self, lib: &mut Library) -> Result<usize> {
+        if let Scope::Shared(id) = &self.scope {
+            // A shared notebook's content comes from its history (moved over when it was
+            // shared) or from the space; synthesizing creations here would duplicate it. Local
+            // edits count from the moment the notebook was assigned to the space.
+            let since = self.owners.space(id).map_or(0, |(_, e)| e.since_lib_seq);
+            self.store.state.seeded = true;
+            self.store.state.ingested_lib_seq = self.store.state.ingested_lib_seq.max(since);
+            self.store.save()?;
+            return Ok(0);
+        }
         // A permanent delete only ever meant "erased on this device". Connecting
         // starts over with what the account holds, so an old one doesn't apply:
         // the notebooks would arrive, and be quietly dropped.
@@ -1380,6 +1530,18 @@ impl<T: SyncTransport> SyncEngine<T> {
             if !self.in_scope(&op.body.notebook_id()) {
                 continue;
             }
+            // In a shared notebook, where it's filed is this person's own business, and erasing
+            // it erases only this device's copy: neither goes to the other members.
+            if matches!(self.scope, Scope::Shared(_))
+                && matches!(
+                    op.body,
+                    DocumentOperation::NotebookFiled { .. }
+                        | DocumentOperation::NotebookPurged { .. }
+                        | DocumentOperation::NotebookShared { .. }
+                )
+            {
+                continue;
+            }
             if let DocumentOperation::NotebookPurged { notebook_id } = op.body {
                 // never synced, so there is nothing to delete; or this is the
                 // install of another device's purge, which must not echo
@@ -1415,8 +1577,12 @@ impl<T: SyncTransport> SyncEngine<T> {
         // Everything created or edited locally after enabling sync arrives
         // through the journal instead, and remote notebooks are in the log.
         let mut seeded_any = false;
+        let seeds_notebooks = !matches!(self.scope, Scope::Shared(_));
         for nb_id in lib.notebook_ids() {
-            if self.in_scope(&nb_id) && self.store.oplog.indexes_for(&nb_id).is_empty() {
+            if seeds_notebooks
+                && self.in_scope(&nb_id)
+                && self.store.oplog.indexes_for(&nb_id).is_empty()
+            {
                 let k = self.seed_notebook(lib, nb_id)?;
                 self.event(format!(
                     "seeded {k} operations for a notebook added without history"
@@ -1746,7 +1912,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             )?;
             return Ok(None);
         }
-        if h.check_op_schema_supported().is_err() {
+        if h.check_op_schema_supported().is_err() || self.schema_too_new(h.op_schema_version) {
             return Ok(Some("upgrade"));
         }
         // the signer must be certified by the verified key log; keys the
@@ -1781,6 +1947,11 @@ impl<T: SyncTransport> SyncEngine<T> {
             return Ok(Some("key"));
         }
         Ok(Some("deps"))
+    }
+
+    /// Whether the test knob [`SyncEngine::max_op_schema_for_tests`] refuses this schema.
+    fn schema_too_new(&self, v: u16) -> bool {
+        self.max_op_schema_for_tests.is_some_and(|max| v > max)
     }
 
     /// Causal delivery check: the writer's previous sequence and every
@@ -2015,7 +2186,9 @@ impl<T: SyncTransport> SyncEngine<T> {
     ) -> Result<Option<&'static str>> {
         // re-check reasons that may have changed (new key-log entries, epoch keys)
         let m = self.membership.as_ref().ok_or(SyncError::NotEnrolled)?;
-        if p.header.check_op_schema_supported().is_err() {
+        if p.header.check_op_schema_supported().is_err()
+            || self.schema_too_new(p.header.op_schema_version)
+        {
             return Ok(Some("upgrade"));
         }
         let Some(member) = m.devices.get(p.header.device_id.as_str()) else {
@@ -2208,7 +2381,9 @@ impl<T: SyncTransport> SyncEngine<T> {
                 )),
             }
         }
-        self.push(report)?;
+        if self.may_upload() {
+            self.push(report)?;
+        }
         self.pull(report)?;
         self.fetch_blobs();
         // publish a checkpoint now and then so devices that fall far behind
@@ -2220,6 +2395,7 @@ impl<T: SyncTransport> SyncEngine<T> {
                 .checkpointed_len
                 .min(self.store.oplog.len() as u64);
         if grown >= CHECKPOINT_EVERY
+            && self.may_checkpoint()
             && meta.has_capability(penroam_sync_protocol::dto::capabilities::CHECKPOINTS_V1)
         {
             if let Err(e) = self.create_checkpoint() {
@@ -2236,11 +2412,21 @@ impl<T: SyncTransport> SyncEngine<T> {
     /// durably staged. Returns `None` (nothing published) while envelopes
     /// are still parked, because the checkpoint would not cover them.
     ///
+    /// In a shared notebook space only the owner's devices publish checkpoints; on any other
+    /// device this returns `None`.
+    ///
     /// Other devices trust a checkpoint only if a current member signed it;
     /// the operations inside are vouched for by that signer (see the threat
     /// model).
     pub fn create_checkpoint(&mut self) -> Result<Option<CheckpointRecord>> {
         self.require_member()?;
+        if matches!(self.scope, Scope::Shared(_)) {
+            // the owners file says which role this device has in the space
+            self.load_owners()?;
+            if !self.may_checkpoint() {
+                return Ok(None);
+            }
+        }
         if self.store.parked_count("pending") > 0 {
             return Ok(None);
         }
@@ -2537,6 +2723,10 @@ impl<T: SyncTransport> SyncEngine<T> {
             if lib.notebook(id).is_ok() || self.store.state.dirty.contains(&id) {
                 continue;
             }
+            // a notebook that moved to a shared notebook space isn't erased; it syncs there
+            if self.replica(id)?.shared_space().is_some() {
+                continue;
+            }
             if let Some(nb) = self.replica(id)?.notebook() {
                 out.push(ErasedNotebook {
                     notebook_id: id,
@@ -2596,7 +2786,88 @@ impl<T: SyncTransport> SyncEngine<T> {
                 self.owners.save(&self.library_root)?;
             }
         }
+        // A notebook another device of this account shared (`notebookShared`) moves to its space
+        // here, before anything of it is installed: from now on only the space's engine may see
+        // it. Local edits made from this moment on wait in the journal for that engine.
+        if self.scope == Scope::Account {
+            let mut assigned = false;
+            for nb in &dirty {
+                if *nb == LIBRARY_STREAM_ID || self.owners.owner(nb).is_some() {
+                    continue;
+                }
+                let Some(space) = self.replica(*nb)?.shared_space() else {
+                    continue;
+                };
+                if crate::vault::Scope::shared(&space).is_err() {
+                    continue;
+                }
+                if let Some(e) = self.owners.shared.get_mut(nb) {
+                    // This device shared the notebook too, at the same time, and the other
+                    // device's space won (the marker with the highest id, on every device). Move
+                    // over: its local edits from now on go to the winner, and its own space's
+                    // edits are moved there before that space is removed here.
+                    if e.role == penroam_sync_protocol::Role::Owner
+                        && e.space_id != space
+                        && e.replaces.is_none()
+                        && e.state != crate::shared::SharedState::AccessRemoved
+                    {
+                        let old = std::mem::replace(&mut e.space_id, space.clone());
+                        // the old space's engine copied the journal up to here; the winner's
+                        // takes over from exactly there, so nothing is copied twice or missed
+                        let old_dir = Scope::Shared(old.clone()).dir(&self.library_root);
+                        e.since_lib_seq = std::fs::read(old_dir.join("state.json"))
+                            .ok()
+                            .and_then(|b| serde_json::from_slice::<SyncState>(&b).ok())
+                            .map_or(self.store.state.ingested_lib_seq, |st| st.ingested_lib_seq);
+                        e.state = crate::shared::SharedState::Joining;
+                        e.replaces = Some(old);
+                        assigned = true;
+                        report.shared_assigned.push(*nb);
+                    }
+                    continue;
+                }
+                self.owners.shared.insert(
+                    *nb,
+                    crate::shared::SharedEntry::new(
+                        &space,
+                        penroam_sync_protocol::Role::Owner,
+                        crate::shared::SharedState::Joining,
+                        self.store.state.ingested_lib_seq,
+                    ),
+                );
+                assigned = true;
+                report.shared_assigned.push(*nb);
+            }
+            if assigned {
+                self.owners.save(&self.library_root)?;
+            }
+        }
+        let designated = match &self.scope {
+            Scope::Shared(id) => self.owners.space(id).map(|(nb, e)| (nb, e.state)),
+            _ => None,
+        };
         for nb in dirty {
+            match (&self.scope, designated) {
+                // the account never installs a shared notebook
+                (Scope::Account, _) if self.owners.shared.contains_key(&nb) => {
+                    self.store.state.dirty.remove(&nb);
+                    continue;
+                }
+                // A space holds exactly one notebook, and it appears only once joining finished
+                // (everything downloaded and checked). Anything else a space delivers stays in
+                // its log and is never installed.
+                (Scope::Shared(_), Some((only, state))) => {
+                    if nb != only {
+                        self.store.state.dirty.remove(&nb);
+                        continue;
+                    }
+                    if state != crate::shared::SharedState::Active {
+                        continue;
+                    }
+                }
+                (Scope::Shared(_), None) => continue,
+                _ => {}
+            }
             if nb == LIBRARY_STREAM_ID {
                 let folders = self.replica(nb)?.folders();
                 lib.install_folders(folders)?;
@@ -2662,6 +2933,11 @@ impl<T: SyncTransport> SyncEngine<T> {
                 }
             }
             let page_ids: Vec<Uuid> = pages.iter().map(|p| p.id).collect();
+            let mut merged = merged;
+            if matches!(self.scope, Scope::Shared(_)) {
+                // the folder a shared notebook is filed in is local to this device
+                merged.folder = lib.notebook(nb).ok().and_then(|n| n.folder);
+            }
             lib.install_merged(merged, pages)?;
             for pid in &page_ids {
                 self.store.state.dirty_pages.remove(&format!("{nb}/{pid}"));
@@ -2750,6 +3026,14 @@ impl<T: SyncTransport> SyncEngine<T> {
                     SyncError::Transport(TransportError::Network(_)) => Phase::Offline,
                     SyncError::Transport(TransportError::Api(b)) => match b.code {
                         ErrorCode::Unauthenticated => Phase::NeedsReauth,
+                        ErrorCode::AccessRevoked => Phase::AccessRemoved,
+                        // In a shared notebook space, `forbidden` doesn't mean this device was
+                        // removed (that is `access_revoked`); it can be a role the server
+                        // lowered, or a session of the wrong kind. Shown as an error with the
+                        // server's message; the app rereads the role from the server's list.
+                        ErrorCode::Forbidden if matches!(self.scope, Scope::Shared(_)) => {
+                            Phase::Error
+                        }
                         ErrorCode::DeviceRevoked | ErrorCode::Forbidden => Phase::Revoked,
                         ErrorCode::QuotaExceeded => Phase::QuotaExceeded,
                         ErrorCode::UpgradeRequired => Phase::NeedsUpgrade,
@@ -2789,6 +3073,147 @@ impl<T: SyncTransport> SyncEngine<T> {
             ..RetryPolicy::default()
         };
         policy.delay_for(&t.as_error_body(), self.attempt.saturating_sub(1), r)
+    }
+
+    // -------------------------------------------------- shared notebooks --
+
+    /// Every logged operation of a notebook with the metadata of its log record, in log order
+    /// (which is causal order). Used to move a notebook's history into a shared notebook space.
+    pub fn logged_ops(&self, nb: Uuid) -> Result<Vec<(OpMeta, LocalOperation)>> {
+        let mut out = Vec::new();
+        for &i in self.store.oplog.indexes_for(&nb) {
+            let meta = self.store.oplog.entry(i).meta.clone();
+            let rec = self.store.oplog.record(i)?;
+            for op in decode_txn(&rec)
+                .map_err(|e| SyncError::Integrity(e.to_string()))?
+                .ops
+            {
+                out.push((meta.clone(), op));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Appends `body` as a local operation of this engine's device under a fixed id, unless the
+    /// log already holds that id. Fixed ids are what make re-publishing an operation into a
+    /// shared notebook space safe to repeat after a crash. Returns whether it was appended. Call
+    /// [`SyncEngine::save_state`] afterwards.
+    pub fn append_fixed(&mut self, id: Uuid, at: i64, body: DocumentOperation) -> Result<bool> {
+        if self.store.oplog.contains(&id) {
+            return Ok(false);
+        }
+        validate_body(&body).map_err(|e| SyncError::Invalid(e.to_string()))?;
+        self.append_local(id, at, body, None)?;
+        Ok(true)
+    }
+
+    /// Makes appended operations and counters durable.
+    pub fn save_state(&mut self) -> Result<()> {
+        self.store.save()?;
+        Ok(())
+    }
+
+    /// For a shared notebook space's engine: never synthesize creations, and copy local journal
+    /// operations only from library sequence `lib_seq` on (everything before went to the
+    /// engine that synced the notebook until then).
+    pub fn start_ingesting_at(&mut self, lib_seq: u64) -> Result<()> {
+        self.store.state.seeded = true;
+        self.store.state.ingested_lib_seq = self.store.state.ingested_lib_seq.max(lib_seq);
+        self.store.save()?;
+        Ok(())
+    }
+
+    /// The notebook and all its pages as merged from this engine's log, or `None` when the log
+    /// has no notebook of that id.
+    pub fn merged(&mut self, nb: Uuid) -> Result<Option<(Notebook, Vec<Page>)>> {
+        let rep = self.replica(nb)?;
+        let Some(notebook) = rep.notebook() else {
+            return Ok(None);
+        };
+        let pages = notebook
+            .all_page_ids()
+            .filter_map(|p| rep.page(p))
+            .collect();
+        Ok(Some((notebook, pages)))
+    }
+
+    /// The shared notebook space a notebook moved to, by this engine's log.
+    pub fn shared_space_of(&mut self, nb: Uuid) -> Result<Option<String>> {
+        Ok(self.replica(nb)?.shared_space())
+    }
+
+    /// Assets the merged notebook references that are neither in the library nor downloaded
+    /// into the blob cache yet. Joining a shared notebook finishes only when this is empty.
+    pub fn missing_assets(&mut self, lib: &Library, nb: Uuid) -> Result<Vec<String>> {
+        let Some(n) = self.replica(nb)?.notebook() else {
+            return Ok(Vec::new());
+        };
+        Ok(n.assets
+            .iter()
+            .filter(|a| !lib.has_asset(nb, &a.sha256) && !self.store.blob_cache(&a.sha256).exists())
+            .map(|a| a.sha256.clone())
+            .collect())
+    }
+
+    /// Whether the last pull reached the end of the server's log.
+    pub fn pull_complete(&self) -> bool {
+        self.pull_done
+    }
+
+    /// This engine's current phase.
+    pub fn phase(&self) -> Phase {
+        self.phase
+    }
+
+    /// Records that this engine stopped because access to its shared notebook was removed.
+    pub fn set_access_removed(&mut self) {
+        self.phase = Phase::AccessRemoved;
+    }
+
+    /// Local operations not acknowledged by the server, with their bodies: what a stopped
+    /// shared notebook engine still holds that nobody else has.
+    pub fn unsent_ops(&self) -> Result<Vec<LocalOperation>> {
+        let mut out = Vec::new();
+        for idx in 0..self.store.oplog.len() {
+            let m = &self.store.oplog.entry(idx).meta;
+            if m.origin != Origin::Local || self.store.state.is_acked(m.seq) {
+                continue;
+            }
+            let rec = self.store.oplog.record(idx)?;
+            out.extend(
+                decode_txn(&rec)
+                    .map_err(|e| SyncError::Integrity(e.to_string()))?
+                    .ops,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Local operations in the log that the server hasn't acknowledged.
+    pub fn unacked(&self) -> usize {
+        self.store
+            .oplog
+            .entries()
+            .iter()
+            .filter(|e| e.meta.origin == Origin::Local && !self.store.state.is_acked(e.meta.seq))
+            .count()
+    }
+
+    /// Library journal operations on `nb` not yet copied into this engine's log.
+    pub fn not_ingested(&self, lib: &Library, nb: Uuid) -> usize {
+        lib.operations_after(self.store.state.ingested_lib_seq)
+            .map(|ops| ops.iter().filter(|o| o.body.notebook_id() == nb).count())
+            .unwrap_or(0)
+    }
+
+    /// Unresolved conflicts of a notebook as of the last merge (no replay).
+    pub fn conflict_count(&self, nb: Uuid) -> usize {
+        self.conflicts.get(&nb).copied().unwrap_or(0)
+    }
+
+    /// The id of the account, vault or shared notebook space this engine syncs.
+    pub fn account_id(&self) -> &str {
+        &self.store.state.account_id
     }
 
     // ----------------------------------------------------------- status --

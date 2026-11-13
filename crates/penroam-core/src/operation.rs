@@ -1,4 +1,4 @@
-//! Sync-ready semantic operations (operation schema version 3).
+//! Sync-ready semantic operations (operation schema version 5).
 //!
 //! Every persisted change to a notebook is a [`LocalOperation`]: a stable
 //! random id (retries reuse it), the device that made it, that device's
@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 /// Newest [`DocumentOperation`] encoding and semantics this build can read.
 /// Independent of the file format and model schema versions.
-pub const OP_SCHEMA_VERSION: u16 = 4;
+pub const OP_SCHEMA_VERSION: u16 = 5;
 
 /// The schema an operation is written with: the oldest that means the same
 /// thing, so that a device on an older version only stops syncing once it
@@ -42,9 +42,14 @@ pub const OP_SCHEMA_VERSION: u16 = 4;
 /// Version 3 is library folders and filing a notebook in one.
 ///
 /// Version 4 is switching a notebook to infinite canvases and back.
+///
+/// Version 5 is moving a notebook into a shared notebook space
+/// ([`DocumentOperation::NotebookShared`]). An older client parks it and asks to be updated,
+/// which keeps it from syncing the notebook's later changes into the wrong place.
 pub fn op_schema_for(body: &DocumentOperation) -> u16 {
     use DocumentOperation::*;
     match body {
+        NotebookShared { .. } => 5,
         NotebookCanvasSet { .. } => 4,
         FolderCreated { .. }
         | FolderRenamed { .. }
@@ -160,6 +165,17 @@ pub enum DocumentOperation {
         notebook_id: Uuid,
         /// Infinite canvases on or off.
         infinite: bool,
+    },
+    /// The notebook now lives in a shared notebook space: from here on it syncs in that space's
+    /// own log, not in the log this operation is written to. Written once, to the sharing
+    /// account's log, by the device that shared the notebook; every device of that account that
+    /// applies it routes the notebook to the space. It changes nothing in the notebook itself.
+    #[serde(rename_all = "camelCase")]
+    NotebookShared {
+        /// Target notebook.
+        notebook_id: Uuid,
+        /// The space's id (an account id: `[A-Za-z0-9_-]`, at most 128 bytes).
+        space_id: String,
     },
     /// Moves the notebook to the trash (tombstone; nothing is erased).
     #[serde(rename_all = "camelCase")]
@@ -338,6 +354,7 @@ impl DocumentOperation {
             | NotebookRenamed { notebook_id, .. }
             | NotebookCoverChanged { notebook_id, .. }
             | NotebookCanvasSet { notebook_id, .. }
+            | NotebookShared { notebook_id, .. }
             | NotebookDeleted { notebook_id }
             | NotebookRestored { notebook_id }
             | NotebookPurged { notebook_id }
@@ -384,6 +401,7 @@ impl DocumentOperation {
             NotebookRenamed { .. } => "notebookRenamed",
             NotebookCoverChanged { .. } => "notebookCoverChanged",
             NotebookCanvasSet { .. } => "notebookCanvasSet",
+            NotebookShared { .. } => "notebookShared",
             NotebookDeleted { .. } => "notebookDeleted",
             NotebookRestored { .. } => "notebookRestored",
             NotebookPurged { .. } => "notebookPurged",
@@ -647,6 +665,13 @@ pub fn validate_body(body: &DocumentOperation) -> Result<(), OpError> {
             }
         }
         PageTemplateSet { template, .. } => v(validate_template(template))?,
+        NotebookShared { space_id, .. } => {
+            if !is_space_id(space_id) {
+                return Err(OpError::Precondition(
+                    "invalid shared notebook space id".into(),
+                ));
+            }
+        }
         ElementsAdded { elements, .. } => {
             for e in elements {
                 v(validate_element(e))?;
@@ -698,7 +723,8 @@ pub fn apply_to_notebook(
     }
     let at = op.at;
     let changed = match &op.body {
-        NotebookCreated { .. } | NotebookPurged { .. } => false,
+        // where the notebook syncs is decided by the sync client, not stored in the notebook
+        NotebookCreated { .. } | NotebookPurged { .. } | NotebookShared { .. } => false,
         NotebookFiled { folder, .. } => {
             // deliberately leaves `updated_at` alone; see the operation's docs
             return Ok(if set(&mut nb.folder, *folder) {
@@ -808,6 +834,15 @@ pub fn apply_to_notebook(
     } else {
         Ok(NotebookEffect::Unchanged)
     }
+}
+
+/// Whether `s` can be a shared notebook space id: the account id charset, so it can also name a
+/// folder on disk.
+pub fn is_space_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn set<T: PartialEq>(slot: &mut T, v: T) -> bool {

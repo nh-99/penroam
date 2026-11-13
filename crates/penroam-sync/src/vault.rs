@@ -6,13 +6,16 @@
 //! engine, so locked content can't stall ordinary sync, and a main-account checkpoint can't
 //! contain vault content.
 //!
-//! * [`Scope`] says which notebooks and which sync folder an engine owns.
-//! * [`NotebookOwners`] records which notebooks belong to a vault. **Invariant:** a notebook must
-//!   be recorded here before it can be seen by the main engine, because the main engine uploads
-//!   every notebook it isn't told to leave alone, under a key the server holds. Assignments are
-//!   written under the library lock, and engines reload the file under that same lock. The file
-//!   sits outside the sync folder so that disconnecting can't turn vault notebooks back into
-//!   ordinary ones. A notebook whose vault has no engine here stays on this device, unsynced.
+//! * [`Scope`] says which notebooks and which sync folder an engine owns: the account, one vault,
+//!   or one shared notebook space ([`crate::shared`]).
+//! * [`NotebookOwners`] records which notebooks belong to a vault, and which to a shared notebook
+//!   space. **Invariant:** a notebook must be recorded here before it can be seen by the main
+//!   engine, because the main engine uploads every notebook it isn't told to leave alone, under a
+//!   key the server holds; and a shared notebook is seen only by its space's engine. Assignments
+//!   are written under the library lock, and engines reload the file under that same lock. The
+//!   file sits outside the sync folder so that disconnecting can't turn vault or shared notebooks
+//!   back into ordinary ones. A notebook whose vault or space has no engine here stays on this
+//!   device, unsynced.
 //! * [`new_lock`] and [`open_lock`] wrap a vault's root secret with a passphrase (Argon2id,
 //!   XChaCha20-Poly1305). A passphrase is the only thing keeping the server out of a stored lock,
 //!   since the server can try guesses offline. Hence [`MIN_PASSPHRASE_CHARS`] and the slow KDF.
@@ -56,6 +59,8 @@ const LOCK_AAD: &[u8] = b"penroam/vault-lock/v1";
 const NAME_AAD: &[u8] = b"penroam/vault-name/v1";
 /// File (in the library root) of [`NotebookOwners`].
 const OWNERS_FILE: &str = "vault-notebooks.json";
+/// See [`NotebookOwners::save_count`].
+static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Failures specific to vaults. Messages are safe to show to the user.
 #[derive(Debug, thiserror::Error)]
@@ -88,6 +93,8 @@ pub enum Scope {
     Account,
     /// One vault, by id: exactly the notebooks assigned to it.
     Vault(String),
+    /// One shared notebook space, by id: exactly the notebook assigned to it.
+    Shared(String),
 }
 
 impl Scope {
@@ -106,28 +113,59 @@ impl Scope {
         }
     }
 
+    /// A shared notebook space's scope. The id comes from the server and becomes a folder name,
+    /// so the same rule as [`Scope::vault`] applies.
+    pub fn shared(id: &str) -> Result<Self, VaultError> {
+        match Self::vault(id)? {
+            Self::Vault(id) => Ok(Self::Shared(id)),
+            _ => unreachable!("Scope::vault returns a vault"),
+        }
+    }
+
     /// This scope's sync folder inside a library.
     pub fn dir(&self, library_root: &Path) -> PathBuf {
         let base = SyncStore::dir_for(library_root);
         match self {
             Self::Account => base,
             Self::Vault(id) => base.join("vaults").join(id),
+            Self::Shared(id) => base.join("shared").join(id),
         }
     }
 
-    /// The name of a secret in this scope, so a vault's keys never collide with the account's.
+    /// The name of a secret in this scope, so a vault's or space's keys never collide with the
+    /// account's or each other's.
     pub fn secret_name(&self, base: &str) -> String {
         match self {
             Self::Account => base.to_string(),
             Self::Vault(id) => format!("vault-{id}-{base}"),
+            Self::Shared(id) => format!("shared-{id}-{base}"),
         }
     }
 
-    /// Whether a notebook owned by `owner` (`None` = no vault) belongs to this scope.
+    /// Whether a notebook owned by vault `owner` (`None` = no vault) belongs to this scope.
+    /// Ignores shared notebooks; engines use [`NotebookOwners::scope_of`].
     pub fn contains(&self, owner: Option<&str>) -> bool {
         match self {
             Self::Account => owner.is_none(),
             Self::Vault(id) => owner == Some(id.as_str()),
+            Self::Shared(_) => false,
+        }
+    }
+
+    /// How the key log of this scope treats key grants: leniently in a shared notebook space,
+    /// where the recovery grant decides every epoch's key (see `keylog::GrantRule`).
+    pub fn grant_rule(&self) -> crate::keylog::GrantRule {
+        match self {
+            Self::Shared(_) => crate::keylog::GrantRule::Recovery,
+            _ => crate::keylog::GrantRule::Strict,
+        }
+    }
+
+    /// The vault or space id, `None` for the account.
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Account => None,
+            Self::Vault(id) | Self::Shared(id) => Some(id),
         }
     }
 }
@@ -146,15 +184,39 @@ pub fn local_vaults(library_root: &Path) -> Vec<String> {
     out
 }
 
-/// Which vault each notebook belongs to, and the names of vaults opened here.
+/// Space ids of the shared notebook spaces with a sync folder in this library.
+pub fn local_spaces(library_root: &Path) -> Vec<String> {
+    let dir = SyncStore::dir_for(library_root).join("shared");
+    let mut out: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join("state.json").exists())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Which vault or shared notebook space each notebook belongs to, and the names of vaults opened
+/// here.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotebookOwners {
-    /// Notebook → vault id. Absent means an ordinary notebook.
+    /// Notebook → vault id. Absent means an ordinary notebook (or a shared one, see `shared`).
     #[serde(default)]
     pub notebooks: BTreeMap<Uuid, String>,
     /// Vault id → name, as decrypted on this device.
     #[serde(default)]
     pub names: BTreeMap<String, String>,
+    /// Notebook → the shared notebook space it syncs in, with this account's role there and how
+    /// far this device is with it. A notebook is never in a vault and a space at once.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub shared: BTreeMap<Uuid, crate::shared::SharedEntry>,
+    /// Notebooks that were shared on this device and were removed from it since. Imports give a
+    /// notebook with one of these ids a new id, so a re-imported copy can't be taken for the
+    /// shared notebook.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub retired: std::collections::BTreeSet<Uuid>,
 }
 
 impl NotebookOwners {
@@ -172,13 +234,60 @@ impl NotebookOwners {
     /// Writes the file atomically. Call with the library lock held.
     pub fn save(&self, library_root: &Path) -> io::Result<()> {
         let bytes = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
-        write_atomic(&library_root.join(OWNERS_FILE), &bytes)
-            .map_err(|e| io::Error::other(e.to_string()))
+        let r = write_atomic(&library_root.join(OWNERS_FILE), &bytes)
+            .map_err(|e| io::Error::other(e.to_string()));
+        SAVES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        r
+    }
+
+    /// Counts [`NotebookOwners::save`] calls in this process, so a cache of the file can tell
+    /// it changed even when its size and modification time look the same.
+    pub fn save_count() -> u64 {
+        SAVES.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The vault a notebook belongs to.
     pub fn owner(&self, notebook: &Uuid) -> Option<&str> {
         self.notebooks.get(notebook).map(String::as_str)
+    }
+
+    /// The scope whose engine syncs `notebook`. A vault assignment wins over a shared one (the
+    /// two are never written together; vault notebooks can't be shared).
+    pub fn scope_of(&self, notebook: &Uuid) -> Scope {
+        if let Some(v) = self.notebooks.get(notebook) {
+            return Scope::Vault(v.clone());
+        }
+        match self.shared.get(notebook) {
+            Some(e) => Scope::Shared(e.space_id.clone()),
+            None => Scope::Account,
+        }
+    }
+
+    /// Ids an import must not reuse: every notebook that is shared here or was (see
+    /// `penroam_storage::Library::set_reserved_ids`).
+    pub fn reserved_import_ids(&self) -> Vec<Uuid> {
+        self.shared
+            .keys()
+            .chain(self.retired.iter())
+            .copied()
+            .collect()
+    }
+
+    /// The shared notebook entry of a notebook.
+    pub fn shared_entry(&self, notebook: &Uuid) -> Option<&crate::shared::SharedEntry> {
+        self.shared.get(notebook)
+    }
+
+    /// The notebook and entry of a shared notebook space, if this device has exactly one for it.
+    /// A space holds one notebook; two entries naming the same space can't be told apart safely,
+    /// so neither is returned (fail closed: nothing of that space installs).
+    pub fn space(&self, space_id: &str) -> Option<(Uuid, &crate::shared::SharedEntry)> {
+        let mut found = self.shared.iter().filter(|(_, e)| e.space_id == space_id);
+        let first = found.next()?;
+        if found.next().is_some() {
+            return None;
+        }
+        Some((*first.0, first.1))
     }
 }
 
@@ -356,6 +465,43 @@ mod tests {
             assert!(Scope::vault(bad).is_err(), "{bad:?}");
         }
         assert!(Scope::vault("v-0123abc").is_ok());
+    }
+
+    #[test]
+    fn spaces_have_their_own_folder_and_secrets() {
+        let s = Scope::shared("sp1").unwrap();
+        let v = Scope::vault("sp1").unwrap();
+        let root = Path::new("/lib");
+        assert_ne!(s.dir(root), v.dir(root));
+        assert_ne!(s.secret_name("k"), v.secret_name("k"));
+        assert_ne!(s.secret_name("k"), Scope::Account.secret_name("k"));
+        assert!(Scope::shared("../x").is_err());
+    }
+
+    #[test]
+    fn a_shared_notebook_is_routed_only_to_its_space() {
+        use crate::shared::{SharedEntry, SharedState};
+        let mut o = NotebookOwners::default();
+        let nb = Uuid::from_u128(1);
+        assert_eq!(o.scope_of(&nb), Scope::Account);
+        o.shared.insert(
+            nb,
+            SharedEntry::new(
+                "sp1",
+                penroam_sync_protocol::Role::Editor,
+                SharedState::Active,
+                0,
+            ),
+        );
+        assert_eq!(o.scope_of(&nb), Scope::Shared("sp1".into()));
+        // older code asking only about vaults still sees no vault
+        assert_eq!(o.owner(&nb), None);
+        // the file is read back the same, and an older file without the map still loads
+        let back: NotebookOwners =
+            serde_json::from_slice(&serde_json::to_vec(&o).unwrap()).unwrap();
+        assert_eq!(back, o);
+        let old: NotebookOwners = serde_json::from_str(r#"{"notebooks":{},"names":{}}"#).unwrap();
+        assert!(old.shared.is_empty());
     }
 
     #[test]

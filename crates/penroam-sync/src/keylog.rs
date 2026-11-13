@@ -315,6 +315,31 @@ impl Membership {
         out
     }
 
+    /// For a shared notebook space, where every member holds the root: each epoch's key is what
+    /// the epoch's **first** recovery grant (the one in the entry that started it) opens to. An
+    /// epoch whose recovery grant doesn't open is void and has no key here. Every member derives
+    /// exactly the same map, whatever a member wrote into the device grants, so a removal entry
+    /// can neither lock members out nor give them different keys.
+    pub fn epoch_keys_by_recovery(
+        &self,
+        dh: &x25519_dalek::StaticSecret,
+    ) -> BTreeMap<u32, EpochKey> {
+        let mut out = BTreeMap::new();
+        for (epoch, gs) in &self.grants {
+            let Some(g) = gs.iter().find(|g| g.to == RECOVERY) else {
+                continue;
+            };
+            if let Some(k) = base64url::decode(&g.wrapped)
+                .ok()
+                .and_then(|w| crypto::unwrap_with(dh, &grant_context(*epoch, RECOVERY), &w).ok())
+                .and_then(|k| <[u8; 32]>::try_from(k.as_slice()).ok())
+            {
+                out.insert(*epoch, EpochKey(k));
+            }
+        }
+        out
+    }
+
     /// Every epoch key, recovered with the recovery secret.
     pub fn epoch_keys_with_recovery(
         &self,
@@ -364,6 +389,32 @@ pub fn verify_log(
     expected_account: Option<&[u8; 32]>,
     pin: Option<&Pin>,
 ) -> Result<Membership, KeyLogError> {
+    verify_log_with(entries, expected_account, pin, GrantRule::Strict)
+}
+
+/// How [`verify_log_with`] treats the key grants of an entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantRule {
+    /// Accounts and vaults: a new epoch must be granted to every remaining device and to the
+    /// recovery key, a new device must get the current epoch, and grants may go only to the
+    /// recipients the entry allows; anything else fails verification.
+    Strict,
+    /// Shared notebook spaces, where every member holds the root and the recovery grant alone
+    /// decides an epoch's key ([`Membership::epoch_keys_by_recovery`]). Grants that are missing,
+    /// misaddressed or don't open make an epoch void or are ignored; they never fail the log, so
+    /// a member can't stop the others by writing a bad entry. Signatures, the hash chain, signer
+    /// authorization and who is a member are checked exactly as in `Strict`.
+    Recovery,
+}
+
+/// [`verify_log`] with an explicit [`GrantRule`].
+pub fn verify_log_with(
+    entries: &[Vec<u8>],
+    expected_account: Option<&[u8; 32]>,
+    pin: Option<&Pin>,
+    rule: GrantRule,
+) -> Result<Membership, KeyLogError> {
+    let strict = rule == GrantRule::Strict;
     let mut m = Membership::default();
     let mut prev = String::new();
     for (i, raw) in entries.iter().enumerate() {
@@ -422,7 +473,14 @@ pub fn verify_log(
                         return Err(KeyLogError::WrongAccount);
                     }
                 }
-                check_grants(i, &grants, 1, &[device.device_id.as_str(), RECOVERY])?;
+                let allowed = [device.device_id.as_str(), RECOVERY];
+                let grants = if strict {
+                    check_grants(i, &grants, 1, &allowed)?;
+                    require_recipients(i, &grants, &[device.device_id.as_str()])?;
+                    grants
+                } else {
+                    keep_allowed(grants, 1, &allowed)
+                };
                 m.current_epoch = 1;
                 m.grants.entry(1).or_default().extend(grants);
                 m.devices.insert(
@@ -442,13 +500,26 @@ pub fn verify_log(
                 }
                 device.sign_pk()?;
                 device.dh_pk()?;
-                for g in &grants {
-                    if g.to != device.device_id || g.epoch == 0 || g.epoch > m.current_epoch {
+                let bad = |g: &KeyGrant| {
+                    g.to != device.device_id || g.epoch == 0 || g.epoch > m.current_epoch
+                };
+                let grants: Vec<KeyGrant> = if strict {
+                    if grants.iter().any(bad) {
                         return Err(KeyLogError::Invalid(
                             i,
                             "grant for another device or unknown epoch",
                         ));
                     }
+                    grants
+                } else {
+                    grants.into_iter().filter(|g| !bad(g)).collect()
+                };
+                // a device added without the current epoch's key couldn't write
+                if strict && !grants.iter().any(|g| g.epoch == m.current_epoch) {
+                    return Err(KeyLogError::Invalid(
+                        i,
+                        "a new device needs the current epoch's key",
+                    ));
                 }
                 for g in grants {
                     m.grants.entry(g.epoch).or_default().push(g);
@@ -485,7 +556,17 @@ pub fn verify_log(
                     .collect();
                 let mut allowed: Vec<&str> = remaining.iter().map(String::as_str).collect();
                 allowed.push(RECOVERY);
-                check_grants(i, &grants, new_epoch, &allowed)?;
+                let grants = if strict {
+                    check_grants(i, &grants, new_epoch, &allowed)?;
+                    // every device that stays must get the new epoch's key, or a removal could
+                    // lock the remaining members out of writing (what this device's own removal
+                    // always grants: `SyncEngine::remove_device`)
+                    let stay: Vec<&str> = remaining.iter().map(String::as_str).collect();
+                    require_recipients(i, &grants, &stay)?;
+                    grants
+                } else {
+                    keep_allowed(grants, new_epoch, &allowed)
+                };
                 m.current_epoch = new_epoch;
                 m.grants.entry(new_epoch).or_default().extend(grants);
             }
@@ -540,6 +621,26 @@ fn check_grants(
         return Err(KeyLogError::Invalid(i, "every epoch must be recoverable"));
     }
     Ok(())
+}
+
+/// The grants for `epoch` addressed to one of `allowed` (the lenient rule's filter).
+fn keep_allowed(grants: Vec<KeyGrant>, epoch: u32, allowed: &[&str]) -> Vec<KeyGrant> {
+    grants
+        .into_iter()
+        .filter(|g| g.epoch == epoch && allowed.contains(&g.to.as_str()))
+        .collect()
+}
+
+/// Every one of `devices` must receive a grant among `grants`.
+fn require_recipients(i: u64, grants: &[KeyGrant], devices: &[&str]) -> Result<(), KeyLogError> {
+    if devices.iter().all(|d| grants.iter().any(|g| g.to == *d)) {
+        Ok(())
+    } else {
+        Err(KeyLogError::Invalid(
+            i,
+            "a new epoch must be granted to every remaining device",
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -623,6 +724,156 @@ mod tests {
             verify_log(&[g.clone(), add.clone(), rm, sneaky], Some(&acct), None).unwrap_err(),
             KeyLogError::BadSignature(3)
         );
+    }
+
+    #[test]
+    fn a_removal_must_grant_the_new_epoch_to_everyone_who_stays() {
+        let root = RootSecret::generate().unwrap();
+        let a = DeviceKeys::generate("dev-a".into()).unwrap();
+        let b = DeviceKeys::generate("dev-b".into()).unwrap();
+        let c = DeviceKeys::generate("dev-c".into()).unwrap();
+        let k1 = EpochKey::generate().unwrap();
+        let acct = root.account_signing_key().verifying_key().to_bytes();
+        let g = genesis(&root, &a, &k1);
+        let mut log = vec![g];
+        for (i, d) in [(1u64, &b), (2, &c)] {
+            let e = make_entry(
+                i,
+                &crypto::sha256_hex(log.last().unwrap()),
+                EntryKind::AddDevice {
+                    device: DeviceCert::of(d, "x"),
+                    grants: vec![grant(1, &k1, &d.device_id, &d.dh_pk()).unwrap()],
+                },
+                ACCOUNT_SIGNER,
+                &root.account_signing_key(),
+            );
+            log.push(e);
+        }
+        let m = verify_log(&log, Some(&acct), None).unwrap();
+        // c removes b and grants the new epoch only to the recovery key: a and c would lose it
+        let k2 = EpochKey::generate().unwrap();
+        let only_recovery = make_entry(
+            3,
+            &crypto::sha256_hex(log.last().unwrap()),
+            EntryKind::RemoveDevice {
+                device_id: "dev-b".into(),
+                new_epoch: 2,
+                grants: vec![grant(2, &k2, RECOVERY, &m.recovery_pk).unwrap()],
+                last_seq: None,
+            },
+            "dev-c",
+            &c.signing,
+        );
+        let mut bad = log.clone();
+        bad.push(only_recovery);
+        assert!(matches!(
+            verify_log(&bad, Some(&acct), None),
+            Err(KeyLogError::Invalid(3, _))
+        ));
+        // granting it to everyone who stays is fine
+        let good = make_entry(
+            3,
+            &crypto::sha256_hex(log.last().unwrap()),
+            EntryKind::RemoveDevice {
+                device_id: "dev-b".into(),
+                new_epoch: 2,
+                grants: vec![
+                    grant(2, &k2, RECOVERY, &m.recovery_pk).unwrap(),
+                    grant(2, &k2, "dev-a", &a.dh_pk()).unwrap(),
+                    grant(2, &k2, "dev-c", &c.dh_pk()).unwrap(),
+                ],
+                last_seq: None,
+            },
+            "dev-c",
+            &c.signing,
+        );
+        log.push(good);
+        assert_eq!(
+            verify_log(&log, Some(&acct), None).unwrap().current_epoch,
+            2
+        );
+        // and a device added without the current epoch's key is refused
+        let d = DeviceKeys::generate("dev-d".into()).unwrap();
+        let keyless = make_entry(
+            4,
+            &crypto::sha256_hex(log.last().unwrap()),
+            EntryKind::AddDevice {
+                device: DeviceCert::of(&d, "x"),
+                grants: vec![grant(1, &k1, "dev-d", &d.dh_pk()).unwrap()],
+            },
+            ACCOUNT_SIGNER,
+            &root.account_signing_key(),
+        );
+        log.push(keyless);
+        assert!(verify_log(&log, Some(&acct), None).is_err());
+    }
+
+    #[test]
+    fn in_a_space_the_recovery_grant_decides_and_bad_grants_only_void_an_epoch() {
+        let root = RootSecret::generate().unwrap();
+        let a = DeviceKeys::generate("dev-a".into()).unwrap();
+        let b = DeviceKeys::generate("dev-b".into()).unwrap();
+        let k1 = EpochKey::generate().unwrap();
+        let acct = root.account_signing_key().verifying_key().to_bytes();
+        let g = genesis(&root, &a, &k1);
+        let add = make_entry(
+            1,
+            &crypto::sha256_hex(&g),
+            EntryKind::AddDevice {
+                device: DeviceCert::of(&b, "x"),
+                grants: vec![grant(1, &k1, "dev-b", &b.dh_pk()).unwrap()],
+            },
+            ACCOUNT_SIGNER,
+            &root.account_signing_key(),
+        );
+        let m = verify_log(&[g.clone(), add.clone()], Some(&acct), None).unwrap();
+        // b removes itself with junk for everyone: strict refuses, the space rule voids epoch 2
+        let junk = |to: &str| KeyGrant {
+            to: to.into(),
+            epoch: 2,
+            wrapped: base64url::encode(&[9u8; 80]),
+        };
+        let rm = make_entry(
+            2,
+            &crypto::sha256_hex(&add),
+            EntryKind::RemoveDevice {
+                device_id: "dev-b".into(),
+                new_epoch: 2,
+                grants: vec![junk("dev-a"), junk(RECOVERY)],
+                last_seq: None,
+            },
+            "dev-b",
+            &b.signing,
+        );
+        let log = vec![g, add, rm];
+        let space = verify_log_with(&log, Some(&acct), None, GrantRule::Recovery).unwrap();
+        assert!(!space.is_active("dev-b"));
+        assert_eq!(space.current_epoch, 2);
+        let keys = space.epoch_keys_by_recovery(&root.recovery_dh());
+        assert_eq!(keys[&1].0, k1.0);
+        assert!(!keys.contains_key(&2), "epoch 2 is void");
+        // the recovery grant wins over a disagreeing device grant
+        let k = EpochKey::generate().unwrap();
+        let other = EpochKey::generate().unwrap();
+        let mut log2 = log[..2].to_vec();
+        log2.push(make_entry(
+            2,
+            &crypto::sha256_hex(&log[1]),
+            EntryKind::RemoveDevice {
+                device_id: "dev-b".into(),
+                new_epoch: 2,
+                grants: vec![
+                    grant(2, &k, RECOVERY, &m.recovery_pk).unwrap(),
+                    grant(2, &other, "dev-a", &a.dh_pk()).unwrap(),
+                ],
+                last_seq: None,
+            },
+            "dev-b",
+            &b.signing,
+        ));
+        let space = verify_log_with(&log2, Some(&acct), None, GrantRule::Recovery).unwrap();
+        assert_eq!(space.epoch_keys_by_recovery(&root.recovery_dh())[&2].0, k.0);
+        assert_eq!(space.epoch_keys_for(&a)[&2].0, other.0);
     }
 
     #[test]

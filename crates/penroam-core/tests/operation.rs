@@ -782,3 +782,73 @@ fn pdf_page_elements_must_name_their_own_asset() {
     img.asset_hash = "b".repeat(64);
     assert!(validate::validate_element(&Element::Image(img)).is_err());
 }
+
+#[test]
+fn sharing_a_notebook_is_schema_5_and_changes_nothing_in_it() {
+    let (mut a, mut b) = (Device::new(1), Device::new(2));
+    let base = setup(&mut a, &mut b);
+    let share = |d: &mut Device, space: &str| {
+        d.op(DocumentOperation::NotebookShared {
+            notebook_id: NB,
+            space_id: space.into(),
+        })
+    };
+    let ao = vec![share(&mut a, "space-a")];
+    assert_eq!(ao[0].schema_version, 5);
+    assert_eq!(ao[0].body.name(), "notebookShared");
+    assert_eq!(ao[0].body.notebook_id(), NB);
+
+    // two devices sharing at once: every replica picks the same space, without a conflict
+    let bo = vec![share(&mut b, "space-b")];
+    let r = converge(&base, &ao, &bo);
+    assert!(r.conflicts().is_empty());
+    assert_eq!(r.shared_space().as_deref(), Some("space-b"));
+
+    // the notebook itself is untouched, including when it was last changed
+    let mut plain = Replica::new(NB);
+    for op in &base {
+        plain.apply(op).unwrap();
+    }
+    assert_eq!(plain.shared_space(), None);
+    assert_eq!(r.notebook(), plain.notebook());
+
+    // the local path ignores it
+    let mut nb = plain.notebook().unwrap();
+    let before = nb.clone();
+    assert_eq!(
+        apply_to_notebook(&mut nb, &ao[0]),
+        Ok(NotebookEffect::Unchanged)
+    );
+    assert_eq!(nb, before);
+}
+
+#[test]
+fn a_shared_space_id_must_be_able_to_name_a_folder() {
+    for bad in ["", "..", "a/b", "a b", "a.b", &"x".repeat(129)] {
+        let body = DocumentOperation::NotebookShared {
+            notebook_id: NB,
+            space_id: bad.to_string(),
+        };
+        assert!(validate_body(&body).is_err(), "{bad:?}");
+    }
+    assert!(validate_body(&DocumentOperation::NotebookShared {
+        notebook_id: NB,
+        space_id: "sp_0123-abc".into(),
+    })
+    .is_ok());
+}
+
+#[test]
+fn a_client_one_schema_behind_refuses_to_apply_a_share() {
+    let mut a = Device::new(1);
+    let mut op = a.op(DocumentOperation::NotebookShared {
+        notebook_id: NB,
+        space_id: "s1".into(),
+    });
+    // what an older build sees: a schema newer than the one it knows
+    op.schema_version = OP_SCHEMA_VERSION + 1;
+    assert!(matches!(
+        check_schema(&op),
+        Err(OpError::UnsupportedSchema { .. })
+    ));
+}

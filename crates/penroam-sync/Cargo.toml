@@ -75,3 +75,7 @@ required-features = ["http"]
 [[test]]
 name = "account"
 required-features = ["http"]
+
+[[test]]
+name = "shared_http"
+required-features = ["http"]

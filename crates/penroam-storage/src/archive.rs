@@ -453,7 +453,7 @@ impl Library {
         }
         // ---- stage
         // ids of purged notebooks still in the journal count as taken
-        let renamed_copy = self.contains_notebook(nb.id);
+        let renamed_copy = self.import_id_taken(nb.id);
         let old_id = nb.id;
         // a preview describes the file, not the copy this import would make
         let original_title = nb.title.clone();

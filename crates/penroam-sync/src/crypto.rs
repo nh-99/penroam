@@ -226,6 +226,12 @@ impl RootSecret {
         hkdf32(&self.0, b"penroam", b"penroam/vault-name/v1")
     }
 
+    /// The key a shared notebook space's sealed title is encrypted under
+    /// ([`crate::shared::seal_meta`]). Only members, who hold the space's root, can derive it.
+    pub fn space_meta_key(&self) -> [u8; KEY_LEN] {
+        hkdf32(&self.0, b"penroam", b"penroam/space-meta/v1")
+    }
+
     /// The key a vault's notebooks are encrypted under on a device while the vault is locked
     /// there ([`crate::locker`]). Never sent anywhere.
     pub fn vault_local_key(&self) -> [u8; KEY_LEN] {
