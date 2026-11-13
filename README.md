@@ -10,7 +10,7 @@ It works fully offline and keeps your notes on your device in an open, documente
 don't need an account, a server or a subscription.
 
 **[⬇ Download Penroam](https://github.com/nh-99/penroam/releases)** for Windows, macOS, Linux and
-Android, or [join the iPhone and iPad beta](#install). Penroam is in **beta**: it works, with known gaps,
+Android, or join the beta for [Android](https://play.google.com/apps/testing/ink.penroam.app) or [iPhone and iPad](#install). Penroam is in **beta**: it works, with known gaps,
 and not every platform has been tried on real hardware yet.
 
 ![A notebook page with handwritten notes, a highlighted formula, a sketched diagram and a typed note](docs/images/editor.png)
@@ -37,7 +37,7 @@ The macOS app is signed and notarized by Apple. The other packages aren't signed
 | Windows (x86-64) | `…_x64-setup.exe` | The installer isn't signed yet, so Windows SmartScreen may stop it: choose **More info → Run anyway**. Not yet tried on real hardware. |
 | macOS (Apple Silicon) | `….dmg` | Open it and drag Penroam to **Applications**. Not yet tried on real hardware. No Intel build. |
 | Linux (x86-64) | `.AppImage` or `.deb` | `chmod +x Penroam*.AppImage` and run it, or `sudo apt install ./Penroam*.deb`. |
-| Android and BOOX (arm64) | `…_android-arm64.apk` | Install the APK directly, or [open an issue](https://github.com/nh-99/penroam/issues/new/choose) to join the closed testing group on Google Play. |
+| Android and BOOX (arm64) | `…_android-arm64.apk` | Install the APK directly, or [join the test on Google Play](https://play.google.com/apps/testing/ink.penroam.app). |
 | iPhone and iPad | TestFlight | Install [TestFlight](https://apps.apple.com/app/testflight/id899247664), then [open an issue](https://github.com/nh-99/penroam/issues/new/choose) to ask for an invitation. |
 
 <details>
