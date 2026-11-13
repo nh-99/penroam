@@ -26,6 +26,11 @@ any format it can't read rather than change it.
 **I want my notes out of Penroam.** Export a notebook as `.penroam`, PDF, Markdown, text, PNG or SVG,
 or back up the whole library to one file. None of this needs an account.
 
+**I can't find Share notebook….** Shared notebooks need a sync server that offers them. Penroam Cloud
+doesn't offer sharing yet; it will be turned on after testing. Until then, **Share notebook…** only
+explains that the server doesn't support it, and the people, comment, activity and notification
+buttons don't appear. The answers below apply once it does.
+
 **I invited someone and they can't see it.** No email is sent. They need to open Penroam, signed in
 with the same verified email address, and accept under **Invitations** in the library. Invitations
 last 14 days; you can cancel and send a new one in the share dialog.
@@ -33,6 +38,25 @@ last 14 days; you can cancel and send a new one in the share dialog.
 **A shared notebook says "Access removed".** The owner removed you. The notebook stays on your
 device: choose **Keep a private copy** or **Remove from this device**. See
 [shared notebooks](manual/shared-notebooks.md#when-your-access-is-removed).
+
+**It says "Live disconnected — changes will sync when online".** The live connection to a shared
+notebook is down, for example because you're offline. Ordinary sync still works and nothing is lost;
+you just won't see other people's changes as they type. It reconnects by itself.
+
+**Someone's text appeared twice, or two texts are one after the other.** Two people rewrote the same
+block, or changed the same emoji, at once. Both versions are kept; delete the part you don't want. See [known issues](known-issues.md).
+
+**I can't comment on a notebook.** Only the owner, people who can edit and people who can comment
+can write comments. Ask the owner to change your role in **Share notebook…**. Anything you wrote while
+offline and can no longer send is kept as a **Draft** on your device.
+
+**A comment says "Not on the page".** What it was attached to was deleted, or the words changed.
+Open the comments, choose it, and use **Locate** or **Re-attach…**. See
+[comments](manual/comments.md#comments-that-lost-their-place).
+
+**I restored an old version and my collaborator's work is still there.** That's by design: a restore
+keeps what was added since, and only changes what you tick. See
+[history and activity](manual/history-and-activity.md#restoring).
 
 **I forgot my vault's passphrase.** Use the vault's recovery key: choose **Unlock** or the key icon
 next to the vault, then **Use the recovery key**, and set a new passphrase. Any device that already

@@ -187,7 +187,7 @@ up 1
 sleep 2000
 move 2300 1650
 sleep 500
-shot history 596 252 1368 1296
+shot history 596 140 1368 1520
 key Escape
 sleep 800
 move 52 48

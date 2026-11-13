@@ -133,8 +133,11 @@ Penroam holds their key so that signing in is enough. For notes no one else shou
 vault, encrypted with a passphrase only you know.
 [Sync and vaults →](docs/manual/sync-and-vaults.md)
 
-You can also share a notebook with other people, to read or to edit together. Shared notebooks
-aren't end-to-end encrypted. [Shared notebooks →](docs/manual/shared-notebooks.md)
+Sync servers that offer it let you also share a notebook with other people, to read or to edit
+together. Penroam Cloud doesn't offer sharing yet; it will be turned on after testing. Shared
+notebooks aren't end-to-end encrypted. You see who else is in the notebook and where, type in the same text
+block at once, leave comments and @mentions, and see who changed what.
+[Shared notebooks →](docs/manual/shared-notebooks.md)
 
 ### Print and export
 
@@ -167,7 +170,7 @@ The **[user manual](docs/manual/README.md)** explains everything:
 * [Importing, exporting and printing](docs/manual/import-export.md)
 * [Saving, backups and version history](docs/manual/backups-and-history.md)
 * [Sync and vaults](docs/manual/sync-and-vaults.md)
-* [Shared notebooks](docs/manual/shared-notebooks.md)
+* [Shared notebooks](docs/manual/shared-notebooks.md), [Comments](docs/manual/comments.md) and [History and activity](docs/manual/history-and-activity.md)
 * [Settings](docs/manual/settings.md)
 * [Keyboard shortcuts](docs/manual/shortcuts.md)
 

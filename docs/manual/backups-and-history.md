@@ -16,9 +16,13 @@ written. **Settings → About** shows what start-up recovery did.
 ![The Version history dialog with a list of versions and a preview of the selected one](../images/history.png)
 
 Click the clock in a notebook's top bar to see this page's earlier versions, grouped by writing
-session. Pick one to preview it, then restore the page, or the whole notebook as it was at that time
-(pages added since move to the trash). Restoring is a new edit, so the version you had stays in the
-list and the change syncs like any other.
+session. Pick one to preview it, then compare it with another, restore the page, or restore the whole notebook
+as it was at that time. Penroam first shows what the restore would change and lets you choose. In
+your own notebook the restore returns it exactly to that version: things added since are removed
+and pages made since move to the trash, unless you untick them. In a shared notebook, what others
+added since stays. Restoring is a new edit, so the version you had stays in the list, the change
+syncs like any other, and you can undo it by restoring again. See
+[History and activity](history-and-activity.md#restoring).
 
 Penroam keeps everything from the last week, then one version a day for a month, then one a week
 for a year.

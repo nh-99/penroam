@@ -51,6 +51,9 @@ notes. If you find one, please report it: see [support](support.md).
 
 ## Shared notebooks
 
+Shared notebooks need a sync server that offers them. Penroam Cloud doesn't offer sharing yet; it
+will be turned on after testing. The items below apply once it does.
+
 * Shared notebooks aren't end-to-end encrypted, and a person you remove keeps whatever their
   devices already downloaded. See [shared notebooks](manual/shared-notebooks.md#privacy).
 * An editor's uploads count against the owner's storage allowance, and removing the editor doesn't
@@ -61,7 +64,16 @@ notes. If you find one, please report it: see [support](support.md).
   updated. If you downgrade a device anyway, it may show a shared notebook as an ordinary one. Don't
   edit it there; update instead.
 * Ownership of a shared notebook can't be transferred.
-* Invitations appear in the app only. No email is sent.
+* Invitations and notifications (mentions and replies) appear in the app only. No email is sent.
+* When two people replace all of a text block's text at the same moment in a shared notebook, both
+  new texts are kept, one after the other; delete the part you don't want.
+* When two people change the same emoji or accented character at the same moment in a shared
+  notebook (for example, each picks a different skin tone), both versions are kept side by side;
+  delete the one you don't want.
+* Every device needs an up-to-date Penroam to edit text in a shared notebook. An older version
+  pauses that notebook and says it needs an update.
+* A deleted comment's text isn't erased: it stays in the notebook's comment history and on the
+  server.
 
 ## Devices
 
