@@ -62,6 +62,11 @@ export const TOURS: Record<TourName, TourStep[]> = {
       body: "Pick a colour and a thickness for the tool you're using. The palette button mixes any colour you like.",
     },
     {
+      target: ['[aria-label="Ruler"]'],
+      title: "Straight lines",
+      body: "The ruler (R) lies over the page for straight lines and angles. Drag it to move it, turn the dial in the middle to rotate it, and start a pen stroke on it to draw along its edge.",
+    },
+    {
       target: ['[aria-label="Text"][role="radio"]', '[aria-label="Text"]'],
       title: "Type next to your ink",
       body: "With the text tool, click anywhere to type. Text understands Markdown, LaTeX formulas like $E = mc^2$, and tables that work as spreadsheets.",
