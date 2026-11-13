@@ -81,12 +81,8 @@ export const useSync = defineStore("sync", () => {
         if (s?.phase === "quotaExceeded" && status.value?.phase !== "quotaExceeded") void refreshAccount();
         status.value = s;
         configured.value = s !== null;
-        if (s === null) {
-          devices.value = [];
-          erased.value = [];
-          downloading.value = [];
-          vaults.value = { supported: false, vaults: [], notebooks: {} };
-        } else if (s.phase !== "syncing") void refreshCloudNotebooks();
+        if (s === null) forgetSetup();
+        else if (s.phase !== "syncing") void refreshCloudNotebooks();
       }),
     );
     unlisten.push(await onSyncChanged((c) => changeListeners.forEach((l) => l(c))));
@@ -285,7 +281,14 @@ export const useSync = defineStore("sync", () => {
   /** Connects this device to the signed-in account. Pass a code when `needsRecoveryCode` is set. */
   async function connect(serverUrl: string, account: string, recoveryCode?: string) {
     const r = await run(() => syncApi.connect(serverUrl, account, recoveryCode));
-    if (!r) return;
+    if (!r) {
+      // the sign-in may have ended since the server was checked: show the sign-in button again
+      if (server.value?.url === serverUrl && server.value.signIn) {
+        const info = await syncApi.serverInfo(serverUrl).catch(() => null);
+        if (info && server.value?.url === serverUrl) server.value = { ...info, url: serverUrl };
+      }
+      return;
+    }
     needsRecoveryCode.value = r.needsRecoveryCode;
     if (r.needsRecoveryCode) return;
     configured.value = true;
@@ -365,18 +368,28 @@ export const useSync = defineStore("sync", () => {
   }
   const syncNow = () => run(() => syncApi.syncNow());
   const pause = (p: boolean) => run(() => syncApi.pause(p));
+  /** Sync ended on this device: drop everything about the old setup. That includes the setup
+   * form's server, whose sign-in ended with the sync: keeping it would show "Signed in" with a
+   * Connect that can only fail, and no way to sign in to another account. */
+  function forgetSetup() {
+    configured.value = false;
+    status.value = null;
+    devices.value = [];
+    erased.value = [];
+    downloading.value = [];
+    server.value = null;
+    account.value = null;
+    upgradeOpen.value = false;
+    needsRecoveryCode.value = false;
+    vaults.value = { supported: false, vaults: [], notebooks: {} };
+  }
+
   const disconnect = async () => {
     const ok = await run(() => syncApi.disconnect());
-    if (ok !== null) {
-      configured.value = false;
-      status.value = null;
-      devices.value = [];
-      server.value = null;
-      account.value = null;
-      upgradeOpen.value = false;
-      needsRecoveryCode.value = false;
-      vaults.value = { supported: false, vaults: [], notebooks: {} };
-    }
+    // A failed call can still have ended sync (the backend stops syncing and signs out before
+    // removing files), so ask rather than assume.
+    const ended = ok !== null || (await syncApi.info().catch(() => null))?.configured === false;
+    if (ended) forgetSetup();
   };
   const diagnostics = () => run(() => syncApi.diagnostics());
 

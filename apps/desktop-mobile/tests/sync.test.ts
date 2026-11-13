@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { codeGroups, describeStatus, formatAgo, statusIcon, tapCounter, type SyncStatus } from "../src/platform/sync";
+import { codeGroups, describeStatus, FIRST_SYNC_TEXT, formatAgo, isFirstSync, statusIcon, tapCounter, type SyncStatus } from "../src/platform/sync";
 import { conflictTitle, conflictValuePreview, resolvable } from "../src/platform/conflicts";
 
 const api = vi.hoisted(() => ({
@@ -37,7 +37,7 @@ const base: SyncStatus = {
   quarantined: 0,
   conflicts: 0,
   upToDate: true,
-  lastSuccessMs: null,
+  lastSuccessMs: 1_000,
   lastError: null,
   deviceId: "d",
   accountId: "a",
@@ -56,6 +56,21 @@ describe("sync status wording", () => {
     expect(statusIcon({ ...base, conflicts: 1 })).toBe("alert");
     expect(statusIcon({ ...base, phase: "offline", upToDate: false })).toBe("off");
     expect(statusIcon(null)).toBe("off");
+  });
+
+  it("shows a running sync, and says so when it is the first one", () => {
+    expect(statusIcon({ ...base, phase: "syncing", upToDate: false })).toBe("syncing");
+    expect(describeStatus({ ...base, phase: "syncing", upToDate: false }).text).toBe("Syncing…");
+    // never synced on this device: the first sync can take minutes
+    const first = { ...base, lastSuccessMs: null, upToDate: false };
+    expect(isFirstSync({ ...first, phase: "syncing" })).toBe(true);
+    expect(isFirstSync(first)).toBe(true); // set up, about to start
+    expect(describeStatus({ ...first, phase: "syncing" }).text).toBe(FIRST_SYNC_TEXT);
+    expect(statusIcon({ ...first, queued: 4 })).toBe("syncing");
+    // a problem is not a first sync: its own status says what is wrong
+    expect(isFirstSync({ ...first, phase: "offline" })).toBe(false);
+    expect(isFirstSync({ ...first, phase: "error" })).toBe(false);
+    expect(isFirstSync(base)).toBe(false);
   });
 
   it("gives actionable text for every problem state", () => {
@@ -249,6 +264,35 @@ describe("sync store", () => {
     s.changeServer();
     expect(s.server).toBeNull();
     expect(s.error).toBeNull();
+  });
+
+  it("offers sign-in again after disconnecting, even when the disconnect reported an error", async () => {
+    const { useSync } = await import("../src/stores/sync");
+    api.info.mockResolvedValue({ available: true, configured: false, status: null });
+    api.serverInfo.mockResolvedValue({ signIn: true, signedInAccount: null });
+    api.signIn.mockResolvedValue("a1");
+    api.connect.mockResolvedValue({ needsRecoveryCode: false });
+    api.vaults.mockResolvedValue({ supported: true, vaults: [], notebooks: {} });
+    const s = useSync();
+    await s.init();
+    await s.checkServer("https://sync.penroam.ink");
+    api.info.mockResolvedValue({ available: true, configured: true, status: null });
+    await s.signIn("https://sync.penroam.ink");
+    expect(s.server?.signedInAccount).toBe("a1");
+    // sync ended and signed out, but a locked file made the call fail
+    api.disconnect.mockRejectedValue(new Error("The process cannot access the file"));
+    api.info.mockResolvedValue({ available: true, configured: false, status: null });
+    await s.disconnect();
+    expect(s.configured).toBe(false);
+    expect(s.server).toBeNull();
+    // a sign-in that ended after the server was checked: Connect fails, the button comes back
+    api.serverInfo.mockResolvedValue({ signIn: true, signedInAccount: "a1" });
+    await s.checkServer("https://sync.penroam.ink");
+    api.serverInfo.mockResolvedValue({ signIn: true, signedInAccount: null });
+    api.connect.mockRejectedValue(new Error("sign in to this server first"));
+    await s.connect("https://sync.penroam.ink", "");
+    expect(s.server?.signedInAccount).toBeNull();
+    expect(s.error).toMatch(/sign in/);
   });
 
   it("says how to recover from an ended sign-in", () => {

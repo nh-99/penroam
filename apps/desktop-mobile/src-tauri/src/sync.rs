@@ -202,7 +202,6 @@ enum Cmd {
     NotebookAt(Uuid, i64, Reply<Option<(Notebook, Vec<Page>)>>),
     SyncNow,
     Pause(bool),
-    Status(Reply<SyncStatus>),
     Devices(Reply<Vec<DeviceView>>),
     Remove(String, Reply<()>),
     /// Device id and new label.
@@ -262,11 +261,14 @@ enum Cmd {
     Disconnect(Reply<()>),
 }
 
-/// The sync slot in [`AppState`].
-/// The sync slot in [`AppState`]: the worker's command channel, if running.
+/// The sync slot in [`AppState`]: the worker's command channel, if running, and the last
+/// status it published.
 #[derive(Default)]
 pub struct SyncSlot {
     tx: Mutex<Option<Sender<Cmd>>>,
+    /// The last status sent to the UI. [`sync_info`] answers from here rather than asking the
+    /// worker, which can't answer while a reconcile runs (a first sync can take minutes).
+    status: Mutex<Option<SyncStatus>>,
 }
 
 impl SyncSlot {
@@ -293,10 +295,28 @@ impl SyncSlot {
     }
 
     fn set(&self, tx: Option<Sender<Cmd>>) {
+        if tx.is_none() {
+            if let Ok(mut g) = self.status.lock() {
+                *g = None;
+            }
+        }
         if let Ok(mut g) = self.tx.lock() {
             *g = tx;
         }
     }
+
+    /// The last status the worker published, if it is running.
+    fn last_status(&self) -> Option<SyncStatus> {
+        self.status.lock().ok().and_then(|g| g.clone())
+    }
+}
+
+/// Remembers a status for [`sync_info`] and sends it to the UI as `sync://status`.
+fn publish_status(app: &AppHandle, s: &SyncStatus) {
+    if let Ok(mut g) = app.state::<AppState>().sync.status.lock() {
+        *g = Some(s.clone());
+    }
+    let _ = app.emit("sync://status", s);
 }
 
 fn err(m: impl Into<String>) -> CmdError {
@@ -1805,7 +1825,7 @@ fn emit_status(app: &AppHandle, e: &Engine) {
         .lock()
         .map(|l| l.last_seq())
         .unwrap_or(0);
-    let _ = app.emit("sync://status", e.status(last));
+    publish_status(app, &e.status(last));
 }
 
 /// The worker loop (see the module docs). Reconcile errors are not fatal:
@@ -1816,11 +1836,9 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
     crate::history::install(std::sync::Arc::new(crate::history::AttributedHistory(
         std::sync::Arc::new(WorkerHistory(app.clone())),
     )));
-    // a catch-up from a checkpoint can take a while: show it while it runs
+    // syncing and catching up from a checkpoint can take a while: show them while they run
     let hook_app = app.clone();
-    engine.set_phase_hook(Box::new(move |s| {
-        let _ = hook_app.emit("sync://status", s);
-    }));
+    engine.set_phase_hook(Box::new(move |s| publish_status(&hook_app, s)));
     let mut slots = open_vault_slots(&app);
     // shared notebook engines are opened by the first pass, with sessions from the main one
     let mut spaces: SpaceSet<HttpTransport> = SpaceSet::new();
@@ -1961,16 +1979,6 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 if !p {
                     due = Some(Instant::now());
                 }
-                continue;
-            }
-            Ok(Cmd::Status(r)) => {
-                let last = app
-                    .state::<AppState>()
-                    .lib
-                    .lock()
-                    .map(|l| l.last_seq())
-                    .unwrap_or(0);
-                let _ = r.send(Ok(engine.status(last)));
                 continue;
             }
             Ok(Cmd::Devices(r)) => {
@@ -2622,6 +2630,8 @@ fn engine_for<'a>(
 fn start(app: &AppHandle, engine: Engine) {
     let (tx, rx) = mpsc::channel();
     app.state::<AppState>().sync.set(Some(tx));
+    // known before the first reconcile starts, so the UI can say a first sync is coming
+    emit_status(app, &engine);
     let h = app.clone();
     std::thread::Builder::new()
         .name("penroam-sync".into())
@@ -2668,16 +2678,16 @@ pub struct SyncInfo {
     dev_build: bool,
 }
 
-/// Whether sync is configured, and its status.
+/// Whether sync is configured, and its last published status. Never waits for the worker: this
+/// runs on the main thread, and the worker is busy for as long as a reconcile runs.
 #[tauri::command]
-pub fn sync_info(app: AppHandle, state: State<'_, AppState>) -> Result<SyncInfo, CmdError> {
-    let configured = state.sync.tx.lock().map(|g| g.is_some()).unwrap_or(false);
+pub fn sync_info(state: State<'_, AppState>) -> Result<SyncInfo, CmdError> {
+    let configured = state.sync.running();
     let status = if configured {
-        ask(&state.sync, Cmd::Status).ok()
+        state.sync.last_status()
     } else {
         None
     };
-    let _ = app;
     Ok(SyncInfo {
         available: true,
         configured,
@@ -3262,17 +3272,37 @@ pub fn sync_diagnostics(state: State<'_, AppState>) -> Result<String, CmdError> 
     ask(&state.sync, Cmd::Diagnostics)
 }
 
+/// Removes the sync folder. On Windows a file that another process has just opened (the search
+/// indexer, a virus scan, a live channel still shutting down) can't be deleted for a moment, so
+/// a failure is retried briefly before it is reported.
+fn remove_sync_dir(dir: &Path) -> std::io::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match std::fs::remove_dir_all(dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) if attempt < 5 => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(200 * attempt));
+            }
+            r => return r,
+        }
+    }
+}
+
 /// Forgets the sync setup on this device (keys and sync metadata). Notes stay.
-/// Falls back to removing the files directly when the worker is not running.
+/// Falls back to removing the files directly when the worker is not running, or
+/// when it stopped syncing but could not remove every file.
 #[tauri::command(async)]
 pub fn sync_disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(), CmdError> {
     match ask(&state.sync, Cmd::Disconnect) {
         Ok(()) => Ok(()),
         Err(e) => {
-            // no worker (it never started or stopped): remove the setup directly.
+            // No worker (it never started or stopped), or the worker ended sync and its
+            // sessions but a file was locked: remove what is left directly. The folder may
+            // already be missing `state.json`, so test the folder itself.
             // Only sync metadata and keys are removed; notes stay in the library.
             let root = library_root(&app);
-            if !SyncStore::exists(&root) {
+            if !SyncStore::dir_for(&root).exists() {
                 return Err(e);
             }
             if let Ok(store) = secrets(&app, &root) {
@@ -3287,7 +3317,7 @@ pub fn sync_disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<(),
                     .unwrap_or_default();
                 forget_sessions(store.as_ref(), &url);
             }
-            std::fs::remove_dir_all(SyncStore::dir_for(&root)).map_err(|e| err(e.to_string()))?;
+            remove_sync_dir(&SyncStore::dir_for(&root)).map_err(|e| err(e.to_string()))?;
             state.sync.set(None);
             let _ = app.emit("sync://status", serde_json::Value::Null);
             Ok(())

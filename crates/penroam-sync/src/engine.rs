@@ -492,8 +492,9 @@ impl<T: SyncTransport> SyncEngine<T> {
     }
 
     /// Calls `hook` with the status when the phase changes in the middle of a reconcile, so a
-    /// UI can show it while the reconcile still runs (today: [`Phase::NeedsCatchUp`] while
-    /// recovering from a checkpoint). Its `queued` leaves out journal changes not copied into
+    /// UI can show it while the reconcile still runs: [`Phase::Syncing`] when the exchange with
+    /// the server starts (a device's first sync can download a whole library), and
+    /// [`Phase::NeedsCatchUp`] while recovering from a checkpoint. Its `queued` leaves out journal changes not copied into
     /// the sync log yet. The status at the end of a reconcile is read with
     /// [`SyncEngine::status`] as before.
     pub fn set_phase_hook(&mut self, hook: PhaseHook) {
@@ -2538,7 +2539,8 @@ impl<T: SyncTransport> SyncEngine<T> {
             self.phase = Phase::Paused;
             return Ok(());
         }
-        self.phase = Phase::Syncing;
+        // announced, not just set: the exchange is the part that can take minutes
+        self.set_phase_now(Phase::Syncing);
         let meta = self.transport.meta()?;
         if let Err(e) = negotiate(ProtocolRange::CLIENT, &meta) {
             self.phase = Phase::NeedsUpgrade;

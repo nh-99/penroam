@@ -318,6 +318,9 @@ export async function onVaultsChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("sync://vaults", () => cb());
 }
 
+/** The status line during a device's first sync ([`isFirstSync`]). */
+export const FIRST_SYNC_TEXT = "First sync · bringing your notebooks to this device; this can take a few minutes";
+
 /** What the status line says, per phase (actionable, never claims more than is true). */
 export function describeStatus(s: SyncStatus | null): { tone: "ok" | "busy" | "muted" | "warn" | "danger"; text: string } {
   if (!s) return { tone: "muted", text: "Sync is not set up" };
@@ -347,8 +350,9 @@ export function describeStatus(s: SyncStatus | null): { tone: "ok" | "busy" | "m
     case "error":
       return { tone: "danger", text: `Sync error${s.lastError ? `: ${s.lastError}` : ""}` };
     case "syncing":
-      return { tone: "busy", text: "Syncing…" };
+      return { tone: "busy", text: isFirstSync(s) ? FIRST_SYNC_TEXT : "Syncing…" };
     case "idle":
+      if (isFirstSync(s)) return { tone: "busy", text: FIRST_SYNC_TEXT };
       if (s.queued > 0) return { tone: "busy", text: `${s.queued} change(s) queued for upload` };
       if (s.upToDate) return { tone: "ok", text: "Up to date" };
       if (s.pendingRemote > 0) return { tone: "warn", text: `${s.pendingRemote} received change(s) waiting to be applied` };
@@ -356,11 +360,22 @@ export function describeStatus(s: SyncStatus | null): { tone: "ok" | "busy" | "m
   }
 }
 
+/**
+ * This device has never finished a sync, and one is running or about to: the first sync can
+ * download a whole library, so the app says so instead of looking stuck. Problems (offline,
+ * errors) are not a first sync; their own status says what is wrong.
+ */
+export function isFirstSync(s: SyncStatus | null): boolean {
+  return !!s && s.lastSuccessMs == null && (s.phase === "syncing" || (s.phase === "idle" && !s.upToDate));
+}
+
 /** Header icon choice. Green only when everything is really up to date. */
-export function statusIcon(s: SyncStatus | null): "check" | "upload" | "off" | "alert" | "busy" {
+export function statusIcon(s: SyncStatus | null): "check" | "upload" | "off" | "alert" | "syncing" | "busy" {
   if (!s) return "off";
   if (s.conflicts > 0 || ["revoked", "accessRemoved", "needsUpgrade", "quotaExceeded", "rebaseRequired", "integrityAlert", "error", "needsReauth"].includes(s.phase)) return "alert";
   if (s.phase === "offline" || s.phase === "paused") return "off";
+  // talking to the server right now (the engine announces it when the exchange starts)
+  if (s.phase === "syncing" || s.phase === "needsCatchUp" || isFirstSync(s)) return "syncing";
   if (s.queued > 0) return "upload";
   if (s.upToDate) return "check";
   return "busy";

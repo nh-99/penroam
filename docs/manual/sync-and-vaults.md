@@ -10,6 +10,11 @@ several devices.
 Sync works through Penroam Cloud. Open **Settings → Sync** and sign in with your web browser. That's
 all: do the same on each new device and your notebooks arrive. Folders sync too.
 
+The first sync on a device can take a few minutes, because it brings over your whole library. While
+it runs, a **Syncing for the first time** message stays above your notebooks until they're all
+here; you can keep working meanwhile. The sync icon at the top of an open notebook, and the status
+in **Settings → Sync**, spin whenever Penroam is talking to the server.
+
 Each device names itself after your computer or tablet, and you can rename or remove devices in
 **Settings → Sync**. Sync can be paused or disconnected at any time, and your notes stay on the
 device either way.

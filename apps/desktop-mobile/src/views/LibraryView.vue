@@ -23,6 +23,7 @@ import PromptDialog from "../components/PromptDialog.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import SettingsDialog from "../components/SettingsDialog.vue";
 import CloudBanner from "../components/CloudBanner.vue";
+import FirstSyncBanner from "../components/FirstSyncBanner.vue";
 import SearchPanel from "../components/SearchPanel.vue";
 import { useSearch } from "../stores/search";
 import { useSync } from "../stores/sync";
@@ -194,6 +195,7 @@ function recolor(nb: NotebookSummary) {
         <h1 class="mr-auto text-lg font-semibold">Trash</h1>
       </template>
     </header>
+    <FirstSyncBanner v-if="!showTrash" />
     <CloudBanner v-if="!showTrash" />
 
     <main class="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
