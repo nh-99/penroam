@@ -1,12 +1,12 @@
 {
   "protocol": {
     "major": 1,
-    "minor": 7
+    "minor": 10
   },
   "envelope_version": 1,
   "op_schema": {
     "min": 1,
-    "max": 5
+    "max": 6
   },
   "formats": {
     "file_format": 1,

@@ -1129,6 +1129,28 @@ fn invitation_answers_do_not_reveal_whether_an_account_exists() {
 }
 
 #[test]
+fn bidi_controls_in_emails_are_refused() {
+    let w = World::new();
+    let s = &*w.s;
+    for c in ['\u{202E}', '\u{2067}', '\u{200F}', '\u{061C}'] {
+        // An invitation to such an address is refused, and nothing is stored.
+        let email = format!("eve{c}@example.org");
+        deny(s, ErrorCode::ValidationFailed, || {
+            s.shared_invite(&w.owner, &w.space, &invite(&email, Role::Viewer, "bidi"))
+        });
+        // A verified email can't carry one either, so member lists never show one.
+        let before = s.state_fingerprint();
+        assert_eq!(
+            s.set_verified_email(&w.outsider, Some(&format!("gro.elpmaxe@{c}eve"))),
+            Err(penroam_sync_protocol::SharingError::Email)
+        );
+        assert_eq!(s.state_fingerprint(), before);
+    }
+    let members = s.shared_members(&w.owner, &w.space).unwrap().members;
+    assert!(members.iter().all(|m| m.validate().is_ok()));
+}
+
+#[test]
 fn invitations_expire_on_the_test_clock() {
     let w = World::new();
     let s = &*w.s;

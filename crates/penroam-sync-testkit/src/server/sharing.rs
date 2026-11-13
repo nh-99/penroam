@@ -62,6 +62,26 @@ pub(super) struct Space {
 }
 
 impl Space {
+    /// Account erasure: `old` becomes the tombstone `new`, removed. Returns whether `old` was a
+    /// member.
+    pub(super) fn erase_member(&mut self, old: &AccountId, new: &AccountId) -> bool {
+        let Some(m) = self.member_mut(old) else {
+            return false;
+        };
+        m.account = new.clone();
+        if m.state == MembershipState::Active {
+            m.state = MembershipState::Revoked;
+            m.version += 1;
+        }
+        true
+    }
+
+    /// Whether `account` is an active member.
+    pub(super) fn is_active(&self, account: &AccountId) -> bool {
+        self.member(account)
+            .is_some_and(|m| m.state == MembershipState::Active)
+    }
+
     fn member(&self, account: &AccountId) -> Option<&Member> {
         self.members.iter().find(|m| &m.account == account)
     }
@@ -137,6 +157,11 @@ pub(super) struct Invitation {
 }
 
 impl Invitation {
+    /// The space it admits to.
+    pub(super) fn space(&self) -> &AccountId {
+        &self.space
+    }
+
     fn record(&self) -> InvitationRecord {
         InvitationRecord {
             invitation_id: self.id.clone(),
@@ -314,7 +339,7 @@ fn sharing_err(e: SharingError, err: ErrFn<'_>) -> ErrorBody {
     err(e.error_code(), &e.to_string())
 }
 
-fn now_ms(st: &State) -> u64 {
+pub(super) fn now_ms(st: &State) -> u64 {
     st.clock_ms.unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -340,7 +365,7 @@ impl InMemoryServer {
             .chain(root.owned_spaces.iter())
             .filter(|id| *id != account)
             .filter_map(|id| accounts.get(id))
-            .map(|a| a.op_bytes + a.blob_bytes)
+            .map(Account::stored_bytes)
             .sum();
         (root.quota_bytes, elsewhere)
     }
@@ -764,7 +789,7 @@ impl InMemoryServer {
             let m = space_mut(st, space).member_mut(member).expect("checked");
             m.role = req.role;
             m.version += 1;
-            Ok(MemberRecord {
+            let record = MemberRecord {
                 account_id: m.account.clone(),
                 role: m.role,
                 state: m.state,
@@ -772,7 +797,9 @@ impl InMemoryServer {
                 is_you: false,
                 version: m.version,
                 since_ms: m.since_ms,
-            })
+            };
+            super::live::member_changed(st, space, member, req.role, MembershipState::Active);
+            Ok(record)
         })
     }
 
@@ -816,11 +843,13 @@ impl InMemoryServer {
                 .expect("checked");
             m.state = MembershipState::Revoked;
             m.version += 1;
+            let role = m.role;
             for d in a.devices.values_mut() {
                 if d.registered_by.as_ref() == Some(member) {
                     d.revoked = true;
                 }
             }
+            super::live::member_changed(st, space, member, role, MembershipState::Revoked);
             Ok(())
         })
     }
@@ -929,6 +958,7 @@ impl InMemoryServer {
                 }),
             }
             let record = s.record(&space, s.member(caller).expect("just added"));
+            super::live::member_changed(st, &space, caller, record.role, MembershipState::Active);
             let stored = &mut st.invitations[i];
             stored.state = InvitationState::Accepted;
             stored.accepted_by = Some(caller.clone());

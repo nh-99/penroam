@@ -137,6 +137,19 @@ opaque_id!(
     /// Server-assigned id of a shared-notebook invitation (`sharing.v1`, protocol 1.7).
     InvitationId
 );
+opaque_id!(
+    /// Server-assigned id of one live connection (`live.v1`, protocol 1.8).
+    LiveSessionId
+);
+opaque_id!(
+    /// Client-chosen routing id of a comment thread, visible to the server (`comments.v1`,
+    /// protocol 1.9). Random; never derived from the comment's content.
+    ThreadId
+);
+opaque_id!(
+    /// Server-assigned id of a notification (`comments.v1`, protocol 1.9).
+    NotificationId
+);
 
 #[cfg(test)]
 mod tests {

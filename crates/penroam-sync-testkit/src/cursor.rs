@@ -14,6 +14,10 @@ use penroam_sync_protocol::{AccountId, Cursor};
 const CURSOR_FORMAT: u8 = 1;
 /// Stream id of the account op log.
 pub const STREAM_OPS: u8 = 1;
+/// Stream id of a space's comment stream (`comments.v1`).
+pub const STREAM_COMMENTS: u8 = 2;
+/// Stream id of an account's notification list (`comments.v1`).
+pub const STREAM_NOTIFICATIONS: u8 = 3;
 const TAG_LEN: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

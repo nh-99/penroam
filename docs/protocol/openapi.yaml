@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: Penroam Sync Protocol
-  version: "1.7"
+  version: "1.10"
   description: |
-    HTTP mapping of the Penroam sync protocol (major 1, minor 7). The normative text is
+    HTTP mapping of the Penroam sync protocol (major 1, minor 10). The normative text is
     sync-protocol-v1.md in this directory; the Rust types are in the penroam-sync-protocol crate.
     This file is hand-written. A test in crates/penroam-sync-protocol checks that it lists
     every route the crate defines.
@@ -342,13 +342,62 @@ components:
         refresh_token: { type: string }
     Role:
       type: string
-      enum: [owner, editor, viewer]
+      enum: [owner, editor, viewer, commenter]
+      description: commenter from protocol 1.9; clients read unknown roles as read-only
     MembershipState:
       type: string
       enum: [active, revoked]
     InvitationState:
       type: string
       enum: [pending, accepted, declined, cancelled, expired]
+    NotificationRecord:
+      type: object
+      required: [notification_id, space_id, thread_id, comment_op_id, kind, actor, created_at_ms, read]
+      properties:
+        notification_id: { $ref: "#/components/schemas/Id" }
+        space_id: { $ref: "#/components/schemas/Id" }
+        thread_id: { $ref: "#/components/schemas/Id" }
+        comment_op_id: { $ref: "#/components/schemas/Id" }
+        kind: { type: string, enum: [mention, reply] }
+        actor: { $ref: "#/components/schemas/Id" }
+        created_at_ms: { type: integer }
+        read: { type: boolean }
+    NotificationPrefs:
+      type: object
+      properties:
+        muted_spaces:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/Id" }
+        muted_threads:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            required: [space_id, thread_id]
+            properties:
+              space_id: { $ref: "#/components/schemas/Id" }
+              thread_id: { $ref: "#/components/schemas/Id" }
+    AttributionPage:
+      type: object
+      required: [items, next_from_seq, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [server_seq, op_id, account_id, device_id, accepted_at_ms]
+            properties:
+              server_seq: { type: integer }
+              op_id: { $ref: "#/components/schemas/Id" }
+              account_id:
+                $ref: "#/components/schemas/Id"
+              device_id: { $ref: "#/components/schemas/Id" }
+              accepted_at_ms: { type: integer }
+        next_from_seq: { type: integer, description: One past the last operation scanned }
+        has_more:
+          type: boolean
+          description: limit bounds the operations scanned and operations whose author the server can't establish have no entry, so a page may be empty while this is true
     SealedMeta:
       type: string
       maxLength: 4096
@@ -921,7 +970,7 @@ paths:
     parameters:
       - { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
     get:
-      summary: Members, and for the owner the space's invitations; active members (sharing.v1)
+      summary: Members, and for the owner the space's invitations; every active member whatever the role, including viewers and commenters (sharing.v1)
       responses:
         "200":
           description: Members and invitations
@@ -1047,6 +1096,169 @@ paths:
             schema: { type: object }
       responses:
         "204": { description: Declined }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/comments/batch:
+    post:
+      summary: Push to the space's comment stream; owner, editor and commenter (comments.v1)
+      description: |
+        PRSB frame (application/vnd.penroam.batch.v1) whose item headers are CommentPushItem JSON
+        objects {envelope, thread_id, kind, mentions?}; envelope is the signed EnvelopeHeader, kind
+        is "comment" (a new comment; creates reply notifications) or "update" (edit, delete,
+        resolve, reopen, re-anchor; notifies only mentions), read as "comment" when absent; mentions at
+        most 20 distinct active members. Per-item acks as for /v1/ops/batch.
+      requestBody:
+        required: true
+        content:
+          application/vnd.penroam.batch.v1:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: One ack per item
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PushOpsResponse" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/comments:
+    get:
+      summary: Page through the space's comment stream; every active member (comments.v1)
+      parameters:
+        - { name: cursor, in: query, schema: { $ref: "#/components/schemas/Cursor" } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: A PRSB frame of PulledComment {server_seq, header, thread_id, member} items, or with Accept application/json the control document {items, next_cursor, has_more}
+          content:
+            application/vnd.penroam.batch.v1:
+              schema: { type: string, format: binary }
+            application/json:
+              schema: { type: object }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/comments/acks:
+    post:
+      summary: Acknowledge the applied comment-stream cursor (comments.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AckRequest" }
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/notifications:
+    get:
+      summary: The caller's notifications, oldest first, from spaces they're still in (comments.v1)
+      parameters:
+        - { name: cursor, in: query, schema: { $ref: "#/components/schemas/Cursor" } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200":
+          description: A page of notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications, next_cursor, has_more, unread]
+                properties:
+                  notifications:
+                    type: array
+                    items: { $ref: "#/components/schemas/NotificationRecord" }
+                  next_cursor: { $ref: "#/components/schemas/Cursor" }
+                  has_more: { type: boolean }
+                  unread: { type: integer }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/notifications/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    patch:
+      summary: Mark a notification read or unread (comments.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [read]
+              properties:
+                read: { type: boolean }
+      responses:
+        "200":
+          description: The updated notification
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationRecord" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/notification-prefs:
+    get:
+      summary: The caller's notification mutes (comments.v1)
+      responses:
+        "200":
+          description: Mutes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPrefs" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      summary: Replace the caller's notification mutes (comments.v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationPrefs" }
+      responses:
+        "204": { description: Replaced }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/attribution:
+    get:
+      summary: Who pushed each document operation; any active member on a space; erased accounts appear as erased-<32 hex> (history.v1)
+      parameters:
+        - { name: from_seq, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000 } }
+      responses:
+        "200":
+          description: Attribution from from_seq on
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttributionPage" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/comments/attribution:
+    get:
+      summary: Who pushed each comment of a space's comment stream (history.v1)
+      parameters:
+        - { name: from_seq, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000 } }
+      responses:
+        "200":
+          description: Attribution from from_seq on
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttributionPage" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/checkpoints/previous:
+    get:
+      summary: The checkpoint before the latest, for recovering from a corrupt latest one; 404 if none (history.v1)
+      responses:
+        "200":
+          description: The previous checkpoint
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckpointRecord" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/live:
+    get:
+      summary: Live channel of one shared notebook's space over WebSocket (live.v1)
+      description: |
+        WebSocket upgrade (Upgrade: websocket, Sec-WebSocket-Version: 13) authenticated with a
+        device session on the space in the Authorization header; never a query-string token. The
+        server checks the token, the membership and the device before upgrading, and an Origin
+        header, when present, against an allow-list. After the upgrade, frames are JSON text
+        tagged by "type" (hello, welcome, committed, awareness, membership, bye, ping, pong; see
+        §12g of sync-protocol-v1.md). The channel never writes notebook data.
+      parameters:
+        - { name: Upgrade, in: header, required: true, schema: { type: string, enum: [websocket] } }
+        - { name: Sec-WebSocket-Version, in: header, required: true, schema: { type: string, enum: ["13"] } }
+        - { name: Sec-WebSocket-Key, in: header, required: true, schema: { type: string } }
+      responses:
+        "101": { description: Switched to the WebSocket protocol }
         default: { $ref: "#/components/responses/Error" }
   /v1/account/store-purchase:
     post:

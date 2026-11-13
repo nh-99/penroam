@@ -15,9 +15,9 @@ Each number is independent. None is derived from another.
 
 | Constant | Value | Describes |
 |---|---|---|
-| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 7 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
+| `PROTOCOL_MAJOR` / `PROTOCOL_MINOR` | 1 / 10 | HTTP sync protocol. A different major is never compatible. A minor adds features, and each new feature is gated by a capability. |
 | `ENVELOPE_VERSION` | 1 | Opaque remote container: envelope header, canonical bytes, framing |
-| `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 5 (1) | Encrypted semantic operation payload |
+| `OP_SCHEMA_VERSION` (min supported `OP_SCHEMA_MIN_SUPPORTED`) | 6 (1) | Encrypted semantic operation payload |
 | `FILE_FORMAT_VERSION` | 1 | Local `.prp` page file |
 | `JOURNAL_FORMAT_VERSION` | 1 | Local operation journal |
 | `ARCHIVE_FORMAT_VERSION` | 2 | `.penroam` archive |
@@ -27,8 +27,8 @@ Each number is independent. None is derived from another.
 The local-format numbers are copied into the protocol crate on purpose, because it must not depend on storage. They are advertised in `contract-manifest.json`:
 
 ```json
-{ "protocol": {"major": 1, "minor": 7}, "envelope_version": 1,
-  "op_schema": {"min": 1, "max": 5},
+{ "protocol": {"major": 1, "minor": 10}, "envelope_version": 1,
+  "op_schema": {"min": 1, "max": 6},
   "formats": {"file_format": 1, "journal_format": 1, "archive_format": 2, "notebook_schema": 2, "page_schema": 1},
   "git_sha": null }
 ```
@@ -44,8 +44,8 @@ The local-format numbers are copied into the protocol crate on purpose, because 
   * `MalformedRange`: an advertised range has min > max.
 
   Every `Incompatible` maps to `upgrade_required`. The client stops syncing, keeps its outbox and local data, and shows an actionable state. It never "tries anyway".
-* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b), `models.v1` (1.4, §12c), `store-purchases.v1` (1.5, §12d), `account-key.v1` and `vaults.v1` (1.6, §12e), `sharing.v1` (1.7, §12f). Clients ignore unknown capabilities.
-* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind. 1.3 adds `account.v1` (§12b) and the error code `reauth_required`; older clients never call the new routes and read the new code as `unknown`. 1.4 adds `models.v1` (§12c) and nothing else. 1.7 adds `sharing.v1` (§12f) and the error codes `access_revoked`, `invitation_expired` and `invalid_role`; older clients never call the new routes and read the new codes as `unknown`.
+* Minor features are **never assumed from the version number**. Use them only if `meta.has_capability(..)` is true. Current capability strings: `ops.batch.v1`, `ops.pull.v1`, `acks.v1`, `usage.v1` (1.0), `keylog.v1`, `blobs.v1`, `checkpoints.v1` (1.0, §12), `auth.v1` (1.1, §12a; redirect options 1.2), `account.v1` (1.3, §12b), `models.v1` (1.4, §12c), `store-purchases.v1` (1.5, §12d), `account-key.v1` and `vaults.v1` (1.6, §12e), `sharing.v1` (1.7, §12f), `live.v1` (1.8, §12g), `comments.v1` (1.9, §12h), `history.v1` (1.10, §12i). Clients ignore unknown capabilities.
+* Minor history: 1.0 is the original HTTP mapping; 1.1 adds `auth.v1` and nothing else. A 1.0 client works unchanged against a 1.1 server that also accepts its tokens. 1.2 adds two optional `AuthConfig` fields, the `loopback-ports` redirect kind and the mobile redirect (§12a). A 1.1 client works against a 1.2 server whose `redirect` is `loopback`; it refuses `loopback-ports` as an unknown kind. 1.3 adds `account.v1` (§12b) and the error code `reauth_required`; older clients never call the new routes and read the new code as `unknown`. 1.4 adds `models.v1` (§12c) and nothing else. 1.7 adds `sharing.v1` (§12f) and the error codes `access_revoked`, `invitation_expired` and `invalid_role`; older clients never call the new routes and read the new codes as `unknown`. 1.8 adds `live.v1` (§12g), a WebSocket that carries hints and awareness but never notebook data; clients without it sync exactly as before. 1.9 adds `comments.v1` (§12h), the `commenter` role and the live frames `comment_committed` and `notification`. 1.10 adds `history.v1` (§12i): attribution and the previous checkpoint.
 * Clients must call `Limits::validate()` on advertised limits. They refuse values that are 0 or above the hard maxima.
 * Op schema: servers relay payloads whose `op_schema_version` is newer than they know, because the payload is opaque to them. A client that cannot apply a newer schema calls `EnvelopeHeader::check_op_schema_supported()`. On failure it pauses with `upgrade_required` and keeps the ciphertext. It never drops the operation.
 * Unknown `ErrorCode` strings deserialize to `unknown`, which is treated as not retryable.
@@ -308,6 +308,11 @@ This prevents retry storms. HTTP success means the server accepted the request. 
 * error bodies
 * the shared-notebook documents of §12f (`sharing-*.json`) and the `access_revoked`,
   `invitation_expired` and `invalid_role` error bodies
+* every live frame of §12g (`live-*.json`, one compact JSON frame per file, including one `bye` per
+  code) and the awareness associated data (`live-awareness.aad.hex`)
+* the comment documents of §12h (`comment-*.json`, a comment push batch `comment-push-batch.bin`,
+  `notification-*.json`)
+* an attribution page of §12i (`attribution-page.json`, with an erased account)
 
 ```sh
 cargo run -p penroam-sync-testkit --bin penroam-sync-fixtures -- crates/penroam-sync-protocol/fixtures/v1          # write
@@ -651,7 +656,7 @@ doesn't lock *them* out. Removal also **cannot erase copies their devices alread
 | `POST /v1/shared-notebooks/{id}/session` | account or device | `{}` | `SessionTokens` (account session on the space, acting as the caller) | active member |
 | `GET /v1/shared-notebooks/{id}/key` | account or device | — | `AccountKeyDocument`; 404 until stored | active member |
 | `PUT /v1/shared-notebooks/{id}/key` | account or device | `AccountKeyDocument` | 204; 409 `conflict` if one is stored | owner |
-| `GET /v1/shared-notebooks/{id}/members` | account or device | — | `MemberList { members, invitations }` | active member; `invitations` only for the owner |
+| `GET /v1/shared-notebooks/{id}/members` | account or device | — | `MemberList { members, invitations }` | every active member, whatever their role (viewers and commenters too); `invitations` only for the owner |
 | `POST /v1/shared-notebooks/{id}/invitations` | account or device | `CreateInvitationRequest { email, role, idempotency_key }` | `InvitationRecord` | owner |
 | `PATCH /v1/shared-notebooks/{id}/members/{account_id}` | account or device | `ChangeRoleRequest { role, version }` | `MemberRecord` | owner |
 | `DELETE /v1/shared-notebooks/{id}/members/{account_id}` | account or device | — | 204 | owner (not themselves); a member removing themselves (leaving) |
@@ -666,7 +671,9 @@ These tokens are the caller's own; a vault or space session gets 403 `forbidden`
   created_at_ms }`; `MemberRecord { account_id, role, state, display, is_you, version, since_ms }`;
   `InvitationRecord { invitation_id, email, role, state, expires_at_ms, version }`;
   `IncomingInvitation { invitation_id, space_id, role, invited_by, expires_at_ms }`. Roles are
-  `"owner"`, `"editor"` and `"viewer"`; membership states `"active"` and `"revoked"`; invitation
+  `"owner"`, `"editor"`, `"viewer"` and, from protocol 1.9, `"commenter"` (§12h); a client reads a
+  role it doesn't know as `"unknown"` and treats it as read-only (clients before 1.9 can't read
+  `"commenter"` at all); membership states `"active"` and `"revoked"`; invitation
   states `"pending"`, `"accepted"`, `"declined"`, `"cancelled"` and `"expired"`. Times are Unix
   milliseconds.
 * **Listing.** `GET /v1/shared-notebooks` returns owned spaces, active memberships and revoked
@@ -681,7 +688,10 @@ These tokens are the caller's own; a vault or space session gets 403 `forbidden`
   that space (and to an invitee, the owner's). An incoming invitation carries no title or content.
 * **Invitations.** The server matches them against the invitee's verified sign-in email after
   `normalize_email`: trim surrounding whitespace, then lowercase the whole address with Unicode
-  simple lowercasing. No normalization form is applied, so clients send NFC. Creating one answers
+  simple lowercasing. No normalization form is applied, so clients send NFC. Addresses with
+  whitespace, control characters or bidirectional formatting characters (U+202A–U+202E,
+  U+2066–U+2069, U+200E, U+200F, U+061C) are refused (`validation_failed`), as verified emails and
+  in `display` and `invited_by`, so a member's name can't be made to read as someone else's. Creating one answers
   with the same status and shape whether or not the address belongs to an account. The same
   `idempotency_key` returns the same invitation; the same key with another email or role, a second
   pending invitation to one address, or inviting a current member is 409 `conflict`. `owner` is
@@ -759,6 +769,203 @@ space acts as), `/_test/clock` and `/_test/advance-clock` move the clock invitat
 on, `/_test/reauth-window {"ms"}` turns on the re-authentication check (a `/_test/session` with
 `"email"` counts as a fresh verification), and `/_test/device-cap {"n"}` sets the per-member device
 cap. Fixtures: `sharing-*.json`.
+
+## 12g. Live co-editing channel (`live.v1`, protocol 1.8)
+
+A WebSocket per shared notebook that makes collaborators' edits appear promptly and shows who is
+where. Types are in `penroam_sync_protocol::live`. **The socket never writes.** Durable truth stays
+the operation log of §8 and its `server_seq`; the channel only tells clients when to pull, relays
+encrypted awareness, and reports membership changes. Clients always do a normal HTTP catch-up when
+they connect, when they reconnect and on every hint, so a lost, late or duplicated frame costs
+latency, never data. Accounts and vaults have no live channel.
+
+**Connecting.** `GET /v1/live` with the WebSocket upgrade headers and `Authorization: Bearer` of a
+**device session on the space** (never a token in the query string). The server checks, before
+upgrading, that the token is valid (401 `unauthenticated`), that it's a device session on a space
+(403 `forbidden` otherwise, including account sessions), that the caller is a member (404
+`not_found`) whose membership and device are active (403 `access_revoked`, 403 `device_revoked`),
+that the device was registered by that member (403), and that the device has fewer than the allowed
+live sessions (429 `rate_limited`). When a browser sends an `Origin` header it must be on the
+server's allow-list (403 otherwise); native clients send none.
+
+**Frames** are JSON text frames tagged by `"type"`, at most `max_frame_bytes` (default 16 KiB;
+clients accept 4 KiB to 64 KiB). Binary frames are refused.
+
+| Frame | Direction | Fields |
+|---|---|---|
+| `hello` | C → S, first | `protocol` (at least 1.8, same major), `device_id` (the session's device), `last_server_seq`, `presence` |
+| `welcome` | S → C | `session_id`, `server_seq` (the space's latest), `heartbeat_ms` (5 s to 30 s), `max_frame_bytes`, `role` |
+| `committed` | S → C | `server_seq`: operations up to here are committed; pull |
+| `awareness` | C → S, S → C | `payload`, `ttl_ms` (1 s to 60 s); from the server also `session_id`, `member`, `device_id` |
+| `membership` | S → C | `account_id`, `role`, `state` |
+| `bye` | S → C, last | `code`, `retry_after_ms?` |
+| `comment_committed` | S → C (1.9) | `server_seq` of the comment stream (§12h) |
+| `notification` | S → C (1.9) | `notification_id`, `space_id` (§12h) |
+| `ping` / `pong` | both | none |
+
+* **Hello.** An older protocol gets `bye upgrade_required`; a `device_id` other than the session's
+  gets `bye unauthenticated`; any frame before `hello`, or a second `hello`, gets `bye
+  invalid_frame`.
+* **Hints.** After the server commits operations to the space's log it sends `committed` with the
+  latest `server_seq` to the space's sessions. Hints are coalesced (a slow reader holds at most one)
+  and may be dropped, delayed or duplicated; they never carry operations. A server with several
+  instances may pass them on through any broadcast mechanism; correctness never depends on
+  delivery.
+* **Awareness.** `payload` is unpadded base64url of `nonce ‖ ciphertext ‖ tag`, sealed as in §13
+  with the key `HKDF(space_root, info = "penroam/awareness/v1")` and associated data
+  `awareness_aad(space_id, sender_device_id)`: `"penroam/awareness/v1\0"`, then each id as a u32
+  little-endian length and its bytes. The plaintext is at most 2 KiB of JSON `{page_id, kind:
+  "here"|"caret"|"selection"|"viewport", rect?, caret?, block_id?, color_hint?}` in page
+  coordinates, so `payload` is at most 2784 characters. The server never opens it. It relays each
+  awareness frame to the space's **other** sessions only, after replacing `session_id`, `member`
+  and `device_id` with the sender's verified values (whatever the sender claimed), and lowers
+  `ttl_ms` to at most twice its heartbeat. Receivers open the payload with the relayed `device_id`
+  and show it until `ttl_ms` passes. A session whose hello said `presence: false` has its awareness
+  dropped; it still receives hints and others' awareness. Viewers may share presence.
+* **Heartbeat.** Clients send `ping` every `heartbeat_ms`; the server answers `pong`. The server
+  re-checks membership on every client frame, at least every heartbeat, and immediately when it
+  changes. A session silent for two heartbeats ends with `bye idle_timeout`.
+* **Membership.** A role change or removal is sent to every session of the space as `membership`.
+  A removed member's sessions get only that frame (anything queued for them is withheld) and then
+  `bye access_revoked`; a revoked device's sessions get `bye access_revoked`. The client then
+  switches the notebook to read-only access removal (§12f).
+* **Limits.** Servers rate-limit awareness per session (recommended 30 frames/s, burst 60) and per
+  space. Excess frames are dropped; sustained excess ends the session with `bye rate_limited`. Each
+  session has a bounded outgoing queue: awareness to a full queue is dropped, and too many drops,
+  or a hint that can't be queued, end it with `bye slow_consumer`. A frame over `max_frame_bytes`,
+  malformed, binary or out of range ends it with `bye invalid_frame`.
+* **Bye codes.** `access_revoked`, `slow_consumer`, `rate_limited`, `server_restart` (graceful
+  shutdown, with `retry_after_ms`), `unauthenticated`, `upgrade_required`, `invalid_frame`,
+  `idle_timeout`. Unknown codes read as `unknown`. Clients reconnect with full jitter (and not
+  before `retry_after_ms`), except after `access_revoked`, `upgrade_required` and
+  `unauthenticated` (refresh the session first).
+
+The development test server implements the hub in-process (`InMemoryServer::live_*`) and over
+WebSocket in its HTTP front end, with fault knobs to drop, duplicate and hold hints. Fixtures:
+`live-*.json`.
+
+## 12h. Comments and mentions (`comments.v1`, protocol 1.9)
+
+Comments on a shared notebook live in the space's **comment stream**, a second durable stream next
+to its operation log. Types are in `penroam_sync_protocol::comments`. The stream follows every rule
+of §4 to §15a (envelope, signatures, PRSB framing, key log and epochs, idempotency by op id, gap-free
+`server_seq`) with its own `server_seq`, cursors and acks; a cursor of one stream is
+`invalid_cursor` on the other. Comments never enter the document's operation log, history or
+checkpoints. **The server never sees comment text.**
+
+| Route | Token | Request | Response | Who |
+|---|---|---|---|---|
+| `POST /v1/comments/batch` | device on a space | PRSB frame of `CommentPushItem` headers | `PushOpsResponse` | owner, editor, commenter |
+| `GET /v1/comments?cursor=&limit=` | device on a space | — | PRSB frame of `PulledComment`, or `PullCommentsResponse` with `Accept: application/json` | every active member |
+| `POST /v1/comments/acks` | device on a space | `AckRequest` (a comment cursor) | 204 | every active member |
+| `GET /v1/notifications?cursor=&limit=` | account or device | — | `NotificationPage` | the caller |
+| `PATCH /v1/notifications/{id}` | account or device | `UpdateNotificationRequest { read }` | `NotificationRecord` | the caller |
+| `GET`, `PUT /v1/notification-prefs` | account or device | `NotificationPrefs` | `NotificationPrefs`, 204 | the caller |
+
+The comment routes need a device session on a space (ordinary accounts get 403 `forbidden`); the
+notification routes need the caller's own account (a vault or space session gets 403). A removed
+member gets `access_revoked` and a non-member `not_found` on the comment routes, as on every space
+route (§12f).
+
+* **Roles.** `commenter` (protocol 1.9) reads the notebook and writes comments, nothing else: push,
+  blob upload, checkpoints, the sealed title and member management (inviting, role changes,
+  removal) answer 403 `forbidden`. Like every active member, a commenter may read the member list
+  (`GET /v1/shared-notebooks/{id}/members`), which mention suggestions need. Owner, editor and
+  commenter write the comment stream; a viewer reads it and gets 403 on push. The owner
+  may grant `commenter` by invitation or role change. Clients before 1.9 can't read the role, and
+  servers show it as `viewer` to live sessions whose hello is older than 1.9.
+* **Push items.** Each PRSB item's JSON header is `CommentPushItem { envelope, thread_id, kind,
+  mentions? }`: the signed `EnvelopeHeader`, plus a server-visible side-car. `thread_id` is the
+  thread's random routing id. `kind` is `"comment"` for a new comment (a thread's first comment or
+  a reply) and `"update"` for anything else on a thread (an edit, a deletion, resolving, reopening,
+  moving the anchor); clients must send it, and a server reads an item without it as `"comment"`.
+  `mentions` lists at most 20 distinct account ids. Unknown side-car fields are
+  refused. The side-car is not signed and clients never rely on it; the authoritative thread and
+  mentions are inside the sealed comment. Each item is checked like a document push (header, the
+  envelope's device is the session's, ciphertext, idempotency, sequence reuse, quota), and is
+  rejected with `validation_failed` when a mentioned account isn't an active member of the space,
+  or there are more than 20 or repeats. Comment bytes count towards the owner's allowance.
+* **Pulled items.** `PulledComment { server_seq, header, thread_id, member }`, where `member` is the
+  account whose session pushed it. Clients still verify the signing device against the key log and
+  that the device belongs to that member.
+* **Payloads (client rules).** Comment payloads are sealed with `HKDF(epoch, salt = alias, info =
+  "penroam/comment/v1")` instead of the notebook payload key, and decode only as comment operations
+  (their own magic). A client rejects (quarantines, and reports as a security event) a comment-stream
+  envelope that doesn't decode as a comment, and a document-stream envelope that does. Since the
+  server lets commenters write only the comment stream, this is what stops a commenter from
+  smuggling document edits. Bodies are plain text of at most 8 KiB, rendered escaped.
+* **Notifications.** After a comment commits, the server creates rows per recipient, carrying ids
+  only: `NotificationRecord { notification_id, space_id, thread_id, comment_op_id, kind, actor,
+  created_at_ms, read }`. `kind` is `"mention"` for each mentioned account, of an item of either
+  kind, and `"reply"` (for items of kind `"comment"` only) for each member who earlier pushed an
+  item of kind `"comment"` in the same thread and isn't mentioned by this one. Updates neither create
+  replies nor make their sender a participant, so resolving or editing a thread notifies only whom
+  it mentions; a mention added by an edit notifies under the thread's real id, so thread mutes
+  apply. The sender
+  is never notified, nor anyone who isn't an active member or has muted the space or thread. At most
+  one row exists per (recipient, comment op id, kind), so retries never notify twice; a push whose
+  response was lost still notifies. Unknown kinds read as `"unknown"`. There's no email.
+* **Listing.** `GET /v1/notifications` pages oldest first with an opaque cursor (at most 200 per
+  page) and reports `unread` across all visible notifications. It shows only notifications from
+  spaces the caller is still an active member of, so removal hides them at once.
+  `PATCH /v1/notifications/{id}` marks one read or unread; anyone else's is `not_found`.
+* **Mutes.** `NotificationPrefs { muted_spaces, muted_threads: [{space_id, thread_id}] }`, at most
+  500 entries in each list and no repeats (`validation_failed`). `PUT` replaces the whole document.
+  Mutes stop new notifications only.
+* **Live.** Sessions whose hello said 1.9 or later get `comment_committed { server_seq }`
+  (coalesced, like `committed`) after comments commit, and `notification { notification_id,
+  space_id }` on every live session of the recipient. Both are hints: clients pull
+  `/v1/comments` or `/v1/notifications`.
+
+The development test server implements all of this in its extended mode. Fixtures: `comment-*`,
+`notification-*`, `live-comment-committed.json` and `live-notification.json`.
+
+## 12i. Attribution and checkpoint fallback (`history.v1`, protocol 1.10)
+
+Types are in `penroam_sync_protocol::history`.
+
+| Route | Token | Request | Response |
+|---|---|---|---|
+| `GET /v1/attribution?from_seq=&limit=` | device (account, vault or space) | — | `AttributionPage` |
+| `GET /v1/comments/attribution?from_seq=&limit=` | device on a space | — | `AttributionPage` |
+| `GET /v1/checkpoints/previous` | device | — | `CheckpointRecord`, or 404 `not_found` |
+
+On a space these follow the membership rules of §12f: any active member may read them, whatever
+their role; a removed member gets `access_revoked` and anyone else `not_found`.
+
+* **Attribution.** `AttributionPage { items: [AttributionEntry { server_seq, op_id, account_id,
+  device_id, accepted_at_ms }], next_from_seq, has_more }` lists, for each operation of the stream
+  from `from_seq` on (1-based and inclusive; 0 counts as 1), the account whose session pushed it and
+  when the server accepted it. `limit` defaults to 200 and is capped at 1000. In a space,
+  `account_id` is the member who registered the pushing device; on an ordinary account or a vault
+  it's the account. `accepted_at_ms` is 0 if the server didn't record it. Operations the server no
+  longer holds have no entry, and neither has an operation whose author the server can't
+  establish. `limit` bounds the operations scanned, so a page may be empty while `has_more` is
+  true; `next_from_seq` is one past the last operation scanned. Clients keep paging while
+  `has_more` is true and `next_from_seq` advances, and stop if it doesn't. This is metadata the server already has; there's no extra plaintext.
+* **Client rules.** Attribution is the server's word, not proof. A client keys it by op id and
+  shows an author only when the envelope's verified signing device equals `device_id`; otherwise it
+  labels the operation unverified. Operations without an entry (for example history from before the
+  notebook was shared) have no author. An operation's own time far older than `accepted_at_ms` means
+  it was made offline.
+* **Erased accounts.** When an account is erased, its id is replaced in attribution, member lists
+  and comment authorship by a tombstone: `erased-` followed by 32 lowercase hex digits
+  (`is_erased_account`). The tombstone is stable for that account and can't be turned back into
+  the original id. Servers never give ordinary accounts ids with that prefix. An erased owner's
+  spaces are erased with the account.
+* **Two checkpoints.** A server keeps the two newest checkpoints of the document stream: a new
+  checkpoint covering more operations pushes the latest down to `previous`, and one covering the
+  same position replaces the latest only. It compacts at most up to the older one. A client whose
+  latest checkpoint fails verification (signature, blob hash or decryption) fetches
+  `/v1/checkpoints/previous`, imports it as in §15a, and pulls the tail from its `covers_cursor`. If
+  that fails too, it pulls the full log, which works while nothing has been compacted.
+* **Rollback.** A client remembers the highest `server_seq` and checkpoint position it has applied.
+  It refuses a checkpoint older than one it has already applied and a log whose head moved
+  backwards.
+
+The development test server records attribution for both streams, keeps two checkpoints, and has
+`erase_account` (also `/_test/erase-account`) and retained compaction
+(`compact_to_retained_checkpoints`, `/_test/compact-retained`). Fixtures: `attribution-page.json`.
 
 ## 13. Payloads, encryption and signatures (client rules)
 
@@ -852,7 +1059,8 @@ A checkpoint lets a device that fell behind recover after the server compacted h
   signature, same integer/string encoding as §5). The server keeps the latest record per
   account, checks that the blob exists with that hash and length, that the cursor matches
   `covers_server_seq`, and that records never move backwards. It should compact only up to the
-  latest checkpoint.
+  latest checkpoint; with `history.v1` it keeps the previous one too and compacts only up to that
+  (§12i).
 * **Recovery:** on `cursor_expired`/`checkpoint_required` the client fetches the latest record,
   requires its signer to be a *current* member, verifies the signature, the blob hash and the
   AEAD, then imports each operation it lacks in order. Each must continue its device's sequence

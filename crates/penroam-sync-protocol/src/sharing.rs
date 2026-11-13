@@ -58,8 +58,16 @@ pub enum Role {
     /// sealed title are the owner's alone: an editor could leave other members' operations out of
     /// a checkpoint, or point the sealed notebook id elsewhere.
     Editor,
-    /// Reads the notebook only. Push, blob upload and checkpoint upload answer `forbidden`.
+    /// Reads the notebook only. Push, blob upload and checkpoint upload answer `forbidden`. Reads
+    /// comments but can't write them.
     Viewer,
+    /// Reads the notebook and writes comments (protocol 1.9, `comments.v1`), nothing else: the
+    /// document stream, blobs, checkpoints, the sealed title and members answer `forbidden`.
+    Commenter,
+    /// A role this client doesn't know (from a newer server). Treat it as read-only; it is never
+    /// granted or sent.
+    #[serde(other)]
+    Unknown,
 }
 
 impl Role {
@@ -69,6 +77,8 @@ impl Role {
             Self::Owner => "owner",
             Self::Editor => "editor",
             Self::Viewer => "viewer",
+            Self::Commenter => "commenter",
+            Self::Unknown => "unknown",
         }
     }
 
@@ -78,10 +88,15 @@ impl Role {
         matches!(self, Self::Owner | Self::Editor)
     }
 
-    /// Whether this role can be granted through an invitation or a role change. Only `editor` and
-    /// `viewer` can; asking for `owner` is `invalid_role`.
+    /// Whether this role may write the comment stream (owner, editor, commenter).
+    pub fn may_comment(self) -> bool {
+        matches!(self, Self::Owner | Self::Editor | Self::Commenter)
+    }
+
+    /// Whether this role can be granted through an invitation or a role change: `editor`,
+    /// `commenter` and `viewer`. Asking for `owner` (or `unknown`) is `invalid_role`.
     pub fn is_grantable(self) -> bool {
-        matches!(self, Self::Editor | Self::Viewer)
+        matches!(self, Self::Editor | Self::Commenter | Self::Viewer)
     }
 }
 
@@ -133,7 +148,8 @@ pub enum SharingError {
     /// The role cannot be granted (`owner`).
     #[error("the owner role cannot be granted")]
     Role,
-    /// A display string is longer than [`MAX_DISPLAY_BYTES`] or contains control characters.
+    /// A display string is longer than [`MAX_DISPLAY_BYTES`] or contains control or bidirectional
+    /// formatting characters.
     #[error("display string too long or not printable")]
     Display,
 }
@@ -160,14 +176,18 @@ impl SharingError {
 ///
 /// The result must be at most [`MAX_EMAIL_BYTES`] bytes, contain exactly one `@` with a non-empty
 /// part on each side, a domain containing a `.` that neither starts nor ends it, and no
-/// whitespace or control characters. This is a sanity check, not RFC 5322 validation: quoted local
+/// whitespace, control characters or bidirectional formatting characters ([`is_bidi_control`]:
+/// an override in a verified email would make a member's name read differently from what it is).
+/// This is a sanity check, not RFC 5322 validation: quoted local
 /// parts are refused.
 pub fn normalize_email(raw: &str) -> Result<String, SharingError> {
     let e = raw.trim().to_lowercase();
     if e.is_empty() || e.len() > MAX_EMAIL_BYTES {
         return Err(SharingError::Email);
     }
-    if e.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if e.chars()
+        .any(|c| c.is_whitespace() || c.is_control() || is_bidi_control(c))
+    {
         return Err(SharingError::Email);
     }
     let mut parts = e.split('@');
@@ -203,8 +223,18 @@ pub fn validate_idempotency_key(s: &str) -> Result<(), SharingError> {
     Ok(())
 }
 
+/// Whether `c` is a bidirectional formatting character: the embeddings and overrides
+/// U+202A–U+202E, the isolates U+2066–U+2069, the marks U+200E and U+200F, and the Arabic letter
+/// mark U+061C. They change how surrounding text is displayed without being visible themselves.
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}'
+    )
+}
+
 fn validate_display(s: &str) -> Result<(), SharingError> {
-    if s.len() > MAX_DISPLAY_BYTES || s.chars().any(char::is_control) {
+    if s.len() > MAX_DISPLAY_BYTES || s.chars().any(|c| c.is_control() || is_bidi_control(c)) {
         return Err(SharingError::Display);
     }
     Ok(())
@@ -435,8 +465,16 @@ mod tests {
             assert_eq!(serde_json::from_str::<Role>(s).unwrap(), r);
             assert_eq!(format!("\"{r}\""), s);
         }
-        assert!(serde_json::from_str::<Role>("\"Owner\"").is_err());
-        assert!(serde_json::from_str::<Role>("\"admin\"").is_err());
+        assert_eq!(
+            serde_json::from_str::<Role>("\"commenter\"").unwrap(),
+            Role::Commenter
+        );
+        // Unknown roles from a newer server read as `unknown`, which can do nothing.
+        let unknown = serde_json::from_str::<Role>("\"admin\"").unwrap();
+        assert_eq!(unknown, Role::Unknown);
+        assert!(!unknown.may_write() && !unknown.may_comment() && !unknown.is_grantable());
+        assert!(Role::Commenter.may_comment() && !Role::Commenter.may_write());
+        assert!(Role::Commenter.is_grantable() && !Role::Viewer.may_comment());
         assert!(Role::Editor.may_write() && Role::Owner.may_write() && !Role::Viewer.may_write());
         assert!(!Role::Owner.is_grantable());
     }
@@ -485,6 +523,46 @@ mod tests {
         }
         let long = format!("{}@example.org", "a".repeat(MAX_EMAIL_BYTES));
         assert_eq!(normalize_email(&long), Err(SharingError::Email));
+    }
+
+    #[test]
+    fn bidi_controls_are_refused_in_emails_and_display_strings() {
+        let bidi = [
+            '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}',
+            '\u{2068}', '\u{2069}', '\u{200E}', '\u{200F}', '\u{061C}',
+        ];
+        for c in bidi {
+            assert!(is_bidi_control(c), "{c:?}");
+            for email in [
+                format!("ada{c}@example.org"),
+                format!("{c}ada@example.org"),
+                format!("ada@exa{c}mple.org"),
+            ] {
+                assert_eq!(
+                    normalize_email(&email),
+                    Err(SharingError::Email),
+                    "{email:?}"
+                );
+            }
+            let m = MemberRecord {
+                account_id: "a".parse().unwrap(),
+                role: Role::Viewer,
+                state: MembershipState::Active,
+                display: format!("gro.elpmaxe@{c}ada"),
+                is_you: false,
+                version: 1,
+                since_ms: 0,
+            };
+            assert_eq!(m.validate(), Err(SharingError::Display));
+        }
+        // Neighbouring characters are fine: letters of right-to-left scripts and the zero-width
+        // joiner are not formatting overrides.
+        for c in [
+            '\u{200D}', '\u{2065}', '\u{2070}', '\u{202F}', '\u{05D0}', '\u{0627}',
+        ] {
+            assert!(!is_bidi_control(c), "{c:?}");
+        }
+        assert!(normalize_email("\u{05D0}\u{05D1}@example.org").is_ok());
     }
 
     #[test]

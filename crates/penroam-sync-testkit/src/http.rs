@@ -37,6 +37,16 @@
 //! | `GET /v1/invitations` | account | — | `IncomingInvitationList` |
 //! | `POST /v1/invitations/{inv}/accept`, `…/decline` | account | — | `SharedNotebookRecord`, 204 |
 //! | `DELETE /v1/invitations/{inv}` | account | — | 204 |
+//! | `POST /v1/comments/batch` | device on a space | PRSB frame of `CommentPushItem` | `PushOpsResponse` |
+//! | `GET /v1/comments?cursor=&limit=` | device on a space | — | PRSB frame of `PulledComment` (or JSON `PullCommentsResponse` with `Accept: application/json`) |
+//! | `POST /v1/comments/acks` | device on a space | `AckRequest` | 204 |
+//! | `GET /v1/notifications?cursor=&limit=` | account | — | `NotificationPage` |
+//! | `PATCH /v1/notifications/{id}` | account | `UpdateNotificationRequest` | `NotificationRecord` |
+//! | `GET`, `PUT /v1/notification-prefs` | account | `NotificationPrefs` | `NotificationPrefs`, 204 |
+//! | `GET /v1/attribution?from_seq=&limit=` | device | — | `AttributionPage` |
+//! | `GET /v1/comments/attribution?from_seq=&limit=` | device on a space | — | `AttributionPage` |
+//! | `GET /v1/checkpoints/previous` | device | — | `CheckpointRecord`, or 404 |
+//! | `GET /v1/live` (WebSocket upgrade) | device on a space | live frames | `101`, then live frames (see `live_ws`) |
 //!
 //! The sharing routes need a token of the caller's own account (a vault or space session gets
 //! 403 `forbidden`). Sync routes used with a space session apply the member's role.
@@ -60,7 +70,8 @@
 //! `/_test/compact {"account"}` (expire cursors before the latest checkpoint),
 //! `/_test/quota {"account", "quota_bytes": n|null}`,
 //! `/_test/clock {"now_ms": n|null}` (pin or release the clock used for invitation expiry),
-//! `/_test/advance-clock {"ms"}`, `/_test/reauth-window {"ms": n|null}` (accepting and declining
+//! `/_test/advance-clock {"ms"}`, `/_test/erase-account {"account"}`,
+//! `/_test/compact-retained {"account"}` (expire cursors before the older kept checkpoint), `/_test/reauth-window {"ms": n|null}` (accepting and declining
 //! invitations need an email verified by a `/_test/session` with `email` within that long; listing
 //! answers an empty list flagged `reauth_required`), `/_test/device-cap {"n"}` (live devices per member in a space).
 
@@ -73,8 +84,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use penroam_sync_protocol::routes::{
-    HEADER_CONTENT_SHA256, HEADER_HAS_MORE, HEADER_NEXT_CURSOR, HEADER_REQUEST_ID, MEDIA_BATCH,
-    MEDIA_JSON, MEDIA_OCTETS,
+    self, HEADER_CONTENT_SHA256, HEADER_HAS_MORE, HEADER_NEXT_CURSOR, HEADER_REQUEST_ID,
+    MEDIA_BATCH, MEDIA_JSON, MEDIA_OCTETS,
 };
 use penroam_sync_protocol::{
     AccountId, AccountKeyDocument, AckRequest, BlobId, ChangeRoleRequest, CheckpointRecord,
@@ -86,6 +97,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::{Caller, InMemoryServer, RequestError};
+
+mod live_ws;
 
 const WORKERS: usize = 8;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -183,6 +196,8 @@ struct Request {
     query: HashMap<String, String>,
     headers: HashMap<String, String>,
     body: Vec<u8>,
+    /// Bytes read past the request (a WebSocket client may send its first frame right away).
+    rest: Vec<u8>,
 }
 
 enum Outcome {
@@ -262,7 +277,7 @@ fn parse_query(q: &str) -> HashMap<String, String> {
 /// Body size limit for a route, decided before the body is read.
 fn body_limit(ctx: &Ctx, method: &str, path: &str) -> u64 {
     let limits = ctx.server.limits();
-    if method == "POST" && path == "/v1/ops/batch" {
+    if method == "POST" && (path == "/v1/ops/batch" || path == "/v1/comments/batch") {
         limits.max_batch_bytes
     } else if method == "PUT" && path.starts_with("/v1/blobs/") {
         limits.max_blob_bytes
@@ -273,12 +288,21 @@ fn body_limit(ctx: &Ctx, method: &str, path: &str) -> u64 {
 
 /// Serves one connection: read one request, route it, apply any injected
 /// delay, then write the response (or close silently for a dropped one).
-fn handle(ctx: &Ctx, stream: TcpStream, peer: SocketAddr) {
+fn handle(ctx: &Arc<Ctx>, stream: TcpStream, peer: SocketAddr) {
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
     let n = ctx.counter.fetch_add(1, Ordering::SeqCst) + 1;
     let request_id = format!("http-{n}");
     let (outcome, control) = match read_request(ctx, &stream, &request_id) {
+        Ok(req) if req.method == "GET" && req.path == routes::LIVE => {
+            match live_ws::upgrade(ctx, &stream, &req, &request_id) {
+                Ok(principal) => {
+                    live_ws::spawn(ctx.clone(), stream, req.rest, principal);
+                    return;
+                }
+                Err(resp) => (Outcome::Respond(*resp), false),
+            }
+        }
         Ok(req) => {
             let control = req.path.starts_with("/_test/");
             (route(ctx, req, peer, &request_id), control)
@@ -412,12 +436,14 @@ fn read_request(ctx: &Ctx, stream: &TcpStream, rid: &str) -> Result<Request, Box
     reader
         .read_exact(&mut body)
         .map_err(|_| http_err(ErrorCode::MalformedRequest, "truncated body", rid))?;
+    let rest = reader.buffer().to_vec();
     Ok(Request {
         method: method.to_string(),
         path,
         query,
         headers,
         body,
+        rest,
     })
 }
 
@@ -580,6 +606,24 @@ fn route_inner(
                 let r: Quota = parse_json(req, rid)?;
                 s.set_quota(&r.account, r.quota_bytes);
             }
+            "erase-account" => {
+                #[derive(serde::Deserialize)]
+                struct Erase {
+                    account: AccountId,
+                }
+                let r: Erase = parse_json(req, rid)?;
+                if let Err(RequestError::Api(b)) = s.erase_account(&r.account) {
+                    return Err(Box::new(Response::error(b)));
+                }
+            }
+            "compact-retained" => {
+                #[derive(serde::Deserialize)]
+                struct Compact {
+                    account: AccountId,
+                }
+                let r: Compact = parse_json(req, rid)?;
+                s.compact_to_retained_checkpoints(&r.account);
+            }
             "clock" => {
                 #[derive(serde::Deserialize)]
                 struct Clock {
@@ -724,6 +768,72 @@ fn route_inner(
             let r: AckRequest = parse_json(req, rid)?;
             api(s.ack(caller, &d, &r), |_| Response::empty())
         }
+        ("POST", "/v1/comments/batch") => {
+            let d = need_device()?;
+            api(s.comment_push(caller, &d, &req.body), |v| {
+                Response::json(200, &v)
+            })
+        }
+        ("GET", "/v1/comments") => {
+            let d = need_device()?;
+            let (cursor, limit) = cursor_and_limit(req, rid)?;
+            let json = req
+                .headers
+                .get("accept")
+                .is_some_and(|a| a.contains(MEDIA_JSON) && !a.contains(MEDIA_BATCH));
+            api(
+                s.comment_pull(caller, &d, &PullOpsRequest { cursor, limit }),
+                |page| {
+                    if json {
+                        Response::json(200, &page.response)
+                    } else {
+                        Response {
+                            status: 200,
+                            content_type: MEDIA_BATCH,
+                            headers: vec![
+                                (
+                                    HEADER_NEXT_CURSOR.into(),
+                                    page.response.next_cursor.as_str().to_string(),
+                                ),
+                                (HEADER_HAS_MORE.into(), page.response.has_more.to_string()),
+                            ],
+                            body: page.frame,
+                        }
+                    }
+                },
+            )
+        }
+        ("POST", "/v1/comments/acks") => {
+            let d = need_device()?;
+            let r: AckRequest = parse_json(req, rid)?;
+            api(s.comment_ack(caller, &d, &r), |_| Response::empty())
+        }
+        ("GET", "/v1/notifications") => {
+            let (cursor, limit) = cursor_and_limit(req, rid)?;
+            api(
+                s.notifications_list(&account, cursor.as_ref(), limit),
+                |v| Response::json(200, &v),
+            )
+        }
+        ("PATCH", _) if p.starts_with("/v1/notifications/") => {
+            let id: penroam_sync_protocol::NotificationId = p["/v1/notifications/".len()..]
+                .parse()
+                .map_err(|_| http_err(ErrorCode::NotFound, "unknown notification", rid))?;
+            let r: penroam_sync_protocol::comments::UpdateNotificationRequest =
+                parse_json(req, rid)?;
+            api(s.notification_update(&account, &id, &r), |v| {
+                Response::json(200, &v)
+            })
+        }
+        ("GET", "/v1/notification-prefs") => api(s.notification_prefs_get(&account), |v| {
+            Response::json(200, &v)
+        }),
+        ("PUT", "/v1/notification-prefs") => {
+            let r: penroam_sync_protocol::comments::NotificationPrefs = parse_json(req, rid)?;
+            api(s.notification_prefs_put(&account, &r), |_| {
+                Response::empty()
+            })
+        }
         ("GET", "/v1/usage") => api(s.usage(caller), |v| Response::json(200, &v)),
         ("GET", "/v1/account") => api(s.account_state(caller), |v| Response::json(200, &v)),
         // The test server offers no account actions (`actions` is always empty).
@@ -749,6 +859,35 @@ fn route_inner(
             let d = need_device()?;
             let r: CheckpointRecord = parse_json(req, rid)?;
             api(s.checkpoint_put(caller, &d, &r), |_| Response::empty())
+        }
+        ("GET", "/v1/attribution") | ("GET", "/v1/comments/attribution") => {
+            let d = need_device()?;
+            let num = |k: &str, default: u64| -> Result<u64, Box<Response>> {
+                match req.query.get(k) {
+                    Some(v) => v
+                        .parse()
+                        .map_err(|_| http_err(ErrorCode::MalformedRequest, "bad number", rid)),
+                    None => Ok(default),
+                }
+            };
+            let from = num("from_seq", 1)?;
+            let limit = num(
+                "limit",
+                penroam_sync_protocol::history::ATTRIBUTION_PAGE_DEFAULT.into(),
+            )?
+            .min(u32::MAX.into()) as u32;
+            let r = if p == "/v1/attribution" {
+                s.attribution(caller, &d, from, limit)
+            } else {
+                s.comment_attribution(caller, &d, from, limit)
+            };
+            api(r, |v| Response::json(200, &v))
+        }
+        ("GET", "/v1/checkpoints/previous") => {
+            let d = need_device()?;
+            api(s.checkpoint_previous(caller, &d), |v| {
+                Response::json(200, &v)
+            })
         }
         ("GET", "/v1/checkpoints/latest") => {
             let d = need_device()?;
@@ -878,6 +1017,24 @@ fn route_inner(
         _ => return Err(http_err(ErrorCode::NotFound, "unknown route", rid)),
     };
     Ok(out)
+}
+
+/// The `cursor` (optional, opaque) and `limit` (default 100) query parameters.
+fn cursor_and_limit(req: &Request, rid: &str) -> Result<(Option<Cursor>, u32), Box<Response>> {
+    let cursor = match req.query.get("cursor").filter(|c| !c.is_empty()) {
+        Some(c) => Some(
+            Cursor::new(c.clone())
+                .map_err(|_| http_err(ErrorCode::InvalidCursor, "malformed cursor", rid))?,
+        ),
+        None => None,
+    };
+    let limit = match req.query.get("limit") {
+        Some(l) => l
+            .parse()
+            .map_err(|_| http_err(ErrorCode::MalformedRequest, "bad limit", rid))?,
+        None => 100,
+    };
+    Ok((cursor, limit))
 }
 
 /// `/v1/shared-notebooks/{id}/{sub}` as the caller's own account.

@@ -106,6 +106,43 @@ pub const INVITATION_ACCEPT: &str = "/v1/invitations/{inv}/accept";
 /// `POST` decline an invitation (invitee); 204. Capability `sharing.v1`.
 pub const INVITATION_DECLINE: &str = "/v1/invitations/{inv}/decline";
 
+/// `GET` with `Upgrade: websocket`: the live channel of one sharing space ([`crate::live`]).
+/// Needs a **device session on the space** in `Authorization`; never a token in the query string.
+/// Capability `live.v1` (protocol 1.8).
+pub const LIVE: &str = "/v1/live";
+
+/// `POST` a PRSB batch of [`crate::comments::CommentPushItem`]s to the space's comment stream;
+/// returns [`crate::PushOpsResponse`]. Device session on a space; owner, editor and commenter.
+/// Capability `comments.v1` (protocol 1.9).
+pub const COMMENTS_BATCH: &str = "/v1/comments/batch";
+/// `GET ?cursor=&limit=` the comment stream ([`crate::comments::PullCommentsResponse`], PRSB
+/// frame of [`crate::comments::PulledComment`]). Device session on a space; every active member.
+/// Capability `comments.v1`.
+pub const COMMENTS: &str = "/v1/comments";
+/// `POST` the device's applied comment-stream cursor ([`crate::AckRequest`]). Capability
+/// `comments.v1`.
+pub const COMMENT_ACKS: &str = "/v1/comments/acks";
+/// `GET ?cursor=&limit=` the caller's notifications ([`crate::comments::NotificationPage`]).
+/// Caller's own account or device session. Capability `comments.v1`.
+pub const NOTIFICATIONS: &str = "/v1/notifications";
+/// `PATCH` mark one notification read or unread
+/// ([`crate::comments::UpdateNotificationRequest`]). Capability `comments.v1`.
+pub const NOTIFICATION: &str = "/v1/notifications/{id}";
+/// `GET` / `PUT` the caller's mutes ([`crate::comments::NotificationPrefs`]). Capability
+/// `comments.v1`.
+pub const NOTIFICATION_PREFS: &str = "/v1/notification-prefs";
+
+/// `GET ?from_seq=&limit=` who pushed each operation of the document stream
+/// ([`crate::history::AttributionPage`]). Device session (account, vault or space; any role).
+/// Capability `history.v1` (protocol 1.10).
+pub const ATTRIBUTION: &str = "/v1/attribution";
+/// `GET ?from_seq=&limit=` the same for a space's comment stream. Device session on a space.
+/// Capability `history.v1`.
+pub const COMMENT_ATTRIBUTION: &str = "/v1/comments/attribution";
+/// `GET` the checkpoint before the latest ([`crate::dto::CheckpointRecord`]; 404 `not_found` if
+/// there is none), for recovering when the latest is corrupt. Capability `history.v1`.
+pub const CHECKPOINT_PREVIOUS: &str = "/v1/checkpoints/previous";
+
 /// `GET` the signed handwriting model catalog ([`crate::models::SignedCatalog`]).
 /// Unauthenticated. 404 `not_found` until one is published. Capability `models.v1` (protocol
 /// 1.4).
@@ -131,7 +168,7 @@ pub const HEADER_HAS_MORE: &str = "Penroam-Has-More";
 pub const HEADER_PROTOCOL: &str = "Penroam-Protocol";
 
 /// Every route, for documentation/compat tests.
-pub const ALL: [&str; 37] = [
+pub const ALL: [&str; 47] = [
     META,
     DEVICES,
     DEVICE,
@@ -169,6 +206,16 @@ pub const ALL: [&str; 37] = [
     INVITATION,
     INVITATION_ACCEPT,
     INVITATION_DECLINE,
+    LIVE,
+    COMMENTS_BATCH,
+    COMMENTS,
+    COMMENT_ACKS,
+    NOTIFICATIONS,
+    NOTIFICATION,
+    NOTIFICATION_PREFS,
+    ATTRIBUTION,
+    COMMENT_ATTRIBUTION,
+    CHECKPOINT_PREVIOUS,
 ];
 
 #[cfg(test)]

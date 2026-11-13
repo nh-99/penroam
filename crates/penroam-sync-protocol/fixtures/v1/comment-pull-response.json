@@ -1,0 +1,24 @@
+{
+  "items": [
+    {
+      "server_seq": 1,
+      "header": {
+        "envelope_version": 1,
+        "op_id": "0190c6f2-7b1a-7cc0-9d1e-0000000000c1",
+        "device_id": "dev-a-3b1f",
+        "device_seq": 1,
+        "notebook_id": "nb-7f3c2a9e",
+        "depends_on": [],
+        "key_epoch": 1,
+        "op_schema_version": 1,
+        "ciphertext_sha256": "6773eb8675258b2ddc46b7329e656e81b5ade3b8d4f3036b462a3fbc5e9790c1",
+        "ciphertext_length": 160,
+        "signature": "paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpQ"
+      },
+      "thread_id": "t-3e9a1c5b7d2f4086a1b3c5d7e9f0a2b4",
+      "member": "acct-fixture-0001"
+    }
+  ],
+  "next_cursor": "AQEAARFhY2N0LWZpeHR1cmUtMDAwMQIAAAAAAAAAsBrpwKXH-qK0hUNVANkyJA",
+  "has_more": false
+}

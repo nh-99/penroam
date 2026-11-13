@@ -104,6 +104,26 @@ fn every_fixture_is_checked() {
         "error.access-revoked.json",
         "error.invitation-expired.json",
         "error.invalid-role.json",
+        "live-hello.json",
+        "live-awareness.client.json",
+        "live-ping.client.json",
+        "live-pong.client.json",
+        "live-welcome.json",
+        "live-committed.json",
+        "live-awareness.relayed.json",
+        "live-membership.json",
+        "live-ping.server.json",
+        "live-pong.server.json",
+        "live-awareness.aad.hex",
+        "live-comment-committed.json",
+        "live-notification.json",
+        "comment-push-item.json",
+        "comment-push-batch.bin",
+        "comment-pull-response.json",
+        "notification-page.json",
+        "notification-update-request.json",
+        "notification-prefs.json",
+        "attribution-page.json",
     ]
     .into_iter()
     .map(String::from)
@@ -111,7 +131,7 @@ fn every_fixture_is_checked() {
     let mut on_disk = BTreeSet::new();
     for e in std::fs::read_dir(dir()).unwrap() {
         let name = e.unwrap().file_name().into_string().unwrap();
-        if name.starts_with("envelope-header.invalid.") {
+        if name.starts_with("envelope-header.invalid.") || name.starts_with("live-bye.") {
             checked.insert(name.clone());
         }
         on_disk.insert(name);
@@ -349,6 +369,112 @@ fn sharing_documents() {
         let b: ErrorBody = roundtrip(name);
         assert_eq!(b.code, code);
     }
+}
+
+/// Live frames travel as compact JSON text; each fixture is one frame plus a newline and must
+/// parse with the limits a peer applies and re-serialize to the same text.
+#[test]
+fn live_frames() {
+    use penroam_sync_protocol::live::{
+        awareness_aad, ByeCode, ClientFrame, ServerFrame, DEFAULT_MAX_FRAME_BYTES,
+    };
+    let text = |name: &str| {
+        let t = String::from_utf8(read(name)).unwrap();
+        t.strip_suffix('\n').unwrap().to_string()
+    };
+    for name in [
+        "live-hello.json",
+        "live-awareness.client.json",
+        "live-ping.client.json",
+        "live-pong.client.json",
+    ] {
+        let t = text(name);
+        let f = ClientFrame::parse(&t, DEFAULT_MAX_FRAME_BYTES)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(f.to_text(), t, "{name}");
+    }
+    // A client hello is never a valid server frame.
+    assert!(ServerFrame::parse(&text("live-hello.json"), DEFAULT_MAX_FRAME_BYTES).is_err());
+    let mut byes = Vec::new();
+    for e in std::fs::read_dir(dir()).unwrap() {
+        let name = e.unwrap().file_name().into_string().unwrap();
+        if name.starts_with("live-bye.") {
+            byes.push(name);
+        }
+    }
+    assert_eq!(byes.len(), ByeCode::ALL.len());
+    for name in [
+        "live-welcome.json",
+        "live-committed.json",
+        "live-awareness.relayed.json",
+        "live-membership.json",
+        "live-comment-committed.json",
+        "live-notification.json",
+        "live-ping.server.json",
+        "live-pong.server.json",
+    ]
+    .into_iter()
+    .map(String::from)
+    .chain(byes)
+    {
+        let t = text(&name);
+        let f = ServerFrame::parse(&t, DEFAULT_MAX_FRAME_BYTES)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(f.to_text(), t, "{name}");
+        if let ServerFrame::Bye(b) = &f {
+            assert_ne!(b.code, ByeCode::Unknown, "{name}");
+        }
+    }
+    let ServerFrame::Awareness(a) = ServerFrame::parse(
+        &text("live-awareness.relayed.json"),
+        DEFAULT_MAX_FRAME_BYTES,
+    )
+    .unwrap() else {
+        panic!("not awareness");
+    };
+    let list: penroam_sync_protocol::SharedNotebookList = roundtrip("sharing-list.json");
+    let aad = String::from_utf8(read("live-awareness.aad.hex")).unwrap();
+    assert_eq!(
+        aad.trim_end(),
+        hex::encode(&awareness_aad(
+            &list.spaces[0].space_id,
+            a.device_id.as_ref().unwrap()
+        ))
+    );
+}
+
+#[test]
+fn comment_documents() {
+    use penroam_sync_protocol::comments::{
+        CommentPushItem, NotificationKind, NotificationPage, NotificationPrefs,
+        PullCommentsResponse, UpdateNotificationRequest,
+    };
+    let l = Limits::DEFAULT;
+    let item: CommentPushItem = roundtrip("comment-push-item.json");
+    item.validate(&l).unwrap();
+    assert_eq!(item.mentions.len(), 1);
+    let bytes = read("comment-push-batch.bin");
+    let typed: Vec<(CommentPushItem, Vec<u8>)> = decode_json_batch(&bytes, &l).unwrap();
+    assert_eq!(encode_json_batch(&typed, &l).unwrap(), bytes);
+    assert_eq!(typed[0].0, item);
+    verify_ciphertext(&typed[0].0.envelope, &typed[0].1).unwrap();
+    let pulled: PullCommentsResponse = roundtrip("comment-pull-response.json");
+    assert_eq!(pulled.items[0].header, item.envelope);
+    let page: NotificationPage = roundtrip("notification-page.json");
+    assert_eq!(page.notifications[0].kind, NotificationKind::Mention);
+    assert_eq!(page.notifications[0].comment_op_id, item.envelope.op_id);
+    let _: UpdateNotificationRequest = roundtrip("notification-update-request.json");
+    let prefs: NotificationPrefs = roundtrip("notification-prefs.json");
+    prefs.validate().unwrap();
+}
+
+#[test]
+fn attribution_documents() {
+    use penroam_sync_protocol::history::{is_erased_account, AttributionPage};
+    let page: AttributionPage = roundtrip("attribution-page.json");
+    assert!(!is_erased_account(&page.items[0].account_id));
+    assert!(is_erased_account(&page.items[1].account_id));
+    assert_eq!(page.next_from_seq, page.items[1].server_seq + 1);
 }
 
 /// `docs/protocol/openapi.yaml` is hand-written; it must name every route.

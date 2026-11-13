@@ -174,6 +174,14 @@ fn sharing_end_to_end_over_http() {
     let carol =
         c.session(serde_json::json!({"account": "acct-carol", "email": "carol@example.org"}));
     let eve = c.session(serde_json::json!({"account": "acct-eve", "email": "eve@example.org"}));
+    // A right-to-left override in the test sign-in's email is refused.
+    let r = c.json(
+        "POST",
+        "/_test/session",
+        None,
+        serde_json::json!({"account": "acct-x", "email": "ada\u{202E}@example.org"}),
+    );
+    assert_eq!(r.code(), ErrorCode::ValidationFailed);
     // A malformed email in the test sign-in is refused.
     let r = c.json(
         "POST",

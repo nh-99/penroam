@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "server_seq": 1,
+      "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000001",
+      "account_id": "acct-fixture-editor",
+      "device_id": "dev-a-3b1f",
+      "accepted_at_ms": 1794000120000
+    },
+    {
+      "server_seq": 2,
+      "op_id": "0190c6f2-7b1a-7cc0-9d1e-000000000002",
+      "account_id": "erased-6f1c0b9e2d4a8f7e3b5c1d9a0e2f4b6c",
+      "device_id": "dev-b-c94e",
+      "accepted_at_ms": 1794000180000
+    }
+  ],
+  "next_from_seq": 3,
+  "has_more": true
+}

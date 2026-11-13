@@ -13,7 +13,14 @@
 //! `access_revoked` for removed members, and the route then applies role rules. See
 //! `docs/protocol/sync-protocol-v1.md` §10 and §12f.
 
+mod comments;
+mod history;
+mod live;
 mod sharing;
+
+pub use comments::CommentPage;
+
+pub use live::{LiveConfig, LivePresence, LiveRefused};
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::Write;
@@ -89,6 +96,13 @@ struct StoredOp {
     header: EnvelopeHeader,
     #[serde(with = "b64")]
     ciphertext: Vec<u8>,
+    /// Attribution (`history.v1`): the account whose session pushed it (the member, in a space).
+    /// `None` for ops stored before attribution existed (then the account itself is reported).
+    #[serde(default)]
+    account: Option<AccountId>,
+    /// When it was accepted (test clock, Unix ms); 0 when not recorded.
+    #[serde(default)]
+    accepted_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +136,10 @@ struct RequestCtx {
     /// owner's quota, so pushes and blob uploads check the whole group. `None` outside a request
     /// (then the account's own quota applies).
     quota: Option<(Option<u64>, u64)>,
+    /// The account attributed with writes in this request (the member in a space, else the
+    /// account), and the time; set by `request()`.
+    author: Option<AccountId>,
+    now_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +173,10 @@ struct Account {
     /// Latest checkpoint record (content is an opaque blob).
     #[serde(default)]
     checkpoint: Option<CheckpointRecord>,
+    /// The checkpoint before it (`history.v1`): servers keep two, so a client can fall back when
+    /// the latest is corrupt.
+    #[serde(default)]
+    previous_checkpoint: Option<CheckpointRecord>,
     /// Stored root secret (`account-key.v1`). Vault accounts never have one.
     #[serde(default)]
     root_key: Option<String>,
@@ -173,6 +195,9 @@ struct Account {
     /// `POST /v1/shared-notebooks` idempotency keys of this account → the space created.
     #[serde(default)]
     space_creates: BTreeMap<String, AccountId>,
+    /// The comment stream (`comments.v1`); empty outside sharing spaces.
+    #[serde(default)]
+    comments: comments::CommentStream,
     #[serde(skip)]
     ctx: RequestCtx,
 }
@@ -190,6 +215,12 @@ impl Account {
                 op.header.op_id.clone(),
             );
         }
+        self.comments.rebuild_indexes();
+    }
+
+    /// Bytes this account stores: operations, blobs and comments.
+    fn stored_bytes(&self) -> u64 {
+        self.op_bytes + self.blob_bytes + self.comments.bytes
     }
 
     /// The caller's role, or `None` outside a sharing space.
@@ -205,7 +236,7 @@ impl Account {
     /// Whether storing `len` more bytes would exceed the quota (the owner's, for a space).
     fn over_quota_with(&self, len: u64) -> bool {
         let (quota, elsewhere) = self.ctx.quota.unwrap_or((self.quota_bytes, 0));
-        quota.is_some_and(|q| elsewhere + self.op_bytes + self.blob_bytes + len > q)
+        quota.is_some_and(|q| elsewhere + self.stored_bytes() + len > q)
     }
 }
 
@@ -264,6 +295,10 @@ struct Persisted {
     emails: BTreeMap<AccountId, String>,
     #[serde(default)]
     email_verified_at: BTreeMap<AccountId, u64>,
+    #[serde(default)]
+    notifications: Vec<comments::Notification>,
+    #[serde(default)]
+    notification_prefs: BTreeMap<AccountId, penroam_sync_protocol::comments::NotificationPrefs>,
 }
 
 const STATE_FORMAT: &str = "penroam-sync-testserver";
@@ -281,6 +316,12 @@ struct State {
     reauth_window_ms: Option<u64>,
     /// Most live devices one member may register in one space.
     member_device_cap: usize,
+    /// Notifications of every account, oldest first (`comments.v1`).
+    notifications: Vec<comments::Notification>,
+    /// Notification mutes per account.
+    notification_prefs: BTreeMap<AccountId, penroam_sync_protocol::comments::NotificationPrefs>,
+    /// Live channel sessions and knobs (never persisted).
+    live: live::LiveState,
     /// Test clock override in Unix milliseconds (never persisted).
     clock_ms: Option<u64>,
     faults: Faults,
@@ -375,6 +416,8 @@ impl InMemoryServer {
             st.invitations = p.invitations;
             st.emails = p.emails;
             st.email_verified_at = p.email_verified_at;
+            st.notifications = p.notifications;
+            st.notification_prefs = p.notification_prefs;
             drop(st);
         } else {
             server.save(&server.lock())?;
@@ -428,6 +471,9 @@ impl InMemoryServer {
             invitations: &'a [sharing::Invitation],
             emails: &'a BTreeMap<AccountId, String>,
             email_verified_at: &'a BTreeMap<AccountId, u64>,
+            notifications: &'a [comments::Notification],
+            notification_prefs:
+                &'a BTreeMap<AccountId, penroam_sync_protocol::comments::NotificationPrefs>,
         }
         serde_json::to_vec(&View {
             format: STATE_FORMAT,
@@ -438,6 +484,8 @@ impl InMemoryServer {
             invitations: &state.invitations,
             emails: &state.emails,
             email_verified_at: &state.email_verified_at,
+            notifications: &state.notifications,
+            notification_prefs: &state.notification_prefs,
         })
         .map_err(std::io::Error::other)
     }
@@ -460,6 +508,9 @@ impl InMemoryServer {
                 email_verified_at: BTreeMap::new(),
                 reauth_window_ms: None,
                 member_device_cap: sharing::DEFAULT_MEMBER_DEVICE_CAP,
+                live: live::LiveState::default(),
+                notifications: Vec::new(),
+                notification_prefs: BTreeMap::new(),
                 clock_ms: None,
                 faults: Faults::default(),
                 request_counter: 0,
@@ -515,6 +566,8 @@ impl InMemoryServer {
         {
             d.revoked = true;
             self.save_admin(&s);
+            drop(s);
+            self.live_device_revoked(account, device);
         }
     }
 
@@ -536,6 +589,28 @@ impl InMemoryServer {
             s.accounts
                 .get(account)
                 .and_then(|a| a.checkpoint.as_ref().map(|c| c.covers_server_seq))
+                .unwrap_or(0)
+        };
+        if floor > 0 {
+            self.expire_cursors_before(account, floor);
+        }
+        floor
+    }
+
+    /// Simulates compaction the way `history.v1` servers retain history: only up to the **older**
+    /// of the two kept checkpoints (the latest if there is only one), so the previous checkpoint
+    /// plus its tail stays usable. Returns the new floor (0 = no checkpoint).
+    pub fn compact_to_retained_checkpoints(&self, account: &AccountId) -> u64 {
+        let floor = {
+            let s = self.lock();
+            s.accounts
+                .get(account)
+                .and_then(|a| {
+                    a.previous_checkpoint
+                        .as_ref()
+                        .or(a.checkpoint.as_ref())
+                        .map(|c| c.covers_server_seq)
+                })
                 .unwrap_or(0)
         };
         if floor > 0 {
@@ -630,6 +705,9 @@ impl InMemoryServer {
                     c.push(capabilities::ACCOUNT_KEY_V1.into());
                     c.push(capabilities::VAULTS_V1.into());
                     c.push(capabilities::SHARING_V1.into());
+                    c.push(capabilities::LIVE_V1.into());
+                    c.push(capabilities::COMMENTS_V1.into());
+                    c.push(capabilities::HISTORY_V1.into());
                 }
                 c
             },
@@ -689,11 +767,14 @@ impl InMemoryServer {
             None => (None, None),
         };
         let quota = Self::quota_group(&s.accounts, account);
+        let now_ms = sharing::now_ms(s);
         let acct = s.accounts.get_mut(account).expect("looked up above");
         acct.ctx = RequestCtx {
             role,
+            author: Some(member.clone().unwrap_or_else(|| account.clone())),
             member,
             quota: Some(quota),
+            now_ms,
         };
         if let Some(device) = device {
             match acct.devices.get(device) {
@@ -738,7 +819,7 @@ impl InMemoryServer {
     ) -> Result<PushOpsResponse, RequestError> {
         let caller = caller.into();
         let limits = self.limits;
-        self.request(caller, Some(device), true, |acct, err| {
+        let result = self.request(caller, Some(device), true, |acct, err| {
             if !acct.may_write() {
                 return Err(err(
                     ErrorCode::Forbidden,
@@ -761,7 +842,10 @@ impl InMemoryServer {
                 })
                 .collect();
             Ok(PushOpsResponse { acks })
-        })
+        });
+        // After the commit (even if the response is lost): tell live sessions to pull.
+        self.live_notify_commit(caller.account);
+        result
     }
 
     /// **Test only.** Stores envelopes the way a misbehaving server would:
@@ -854,7 +938,12 @@ impl InMemoryServer {
         acct.by_op.insert(header.op_id.clone(), seq);
         acct.by_device_seq.insert(key, header.op_id.clone());
         acct.op_bytes += len;
-        acct.log.push(StoredOp { header, ciphertext });
+        acct.log.push(StoredOp {
+            header,
+            ciphertext,
+            account: acct.ctx.author.clone(),
+            accepted_at_ms: acct.ctx.now_ms,
+        });
         Ok(AckResult::Accepted { server_seq: seq })
     }
 
@@ -1010,7 +1099,7 @@ impl InMemoryServer {
         self.request(caller, None, false, |acct, _| {
             // Spaces count towards their owner's allowance, so report the whole group.
             let (quota, elsewhere) = acct.ctx.quota.unwrap_or((acct.quota_bytes, 0));
-            let used = elsewhere + acct.op_bytes + acct.blob_bytes;
+            let used = elsewhere + acct.stored_bytes();
             let over = quota.is_some_and(|q| used >= q);
             Ok(AccountState {
                 account_id: account.clone(),
@@ -1157,7 +1246,7 @@ impl InMemoryServer {
         target: &DeviceId,
     ) -> Result<(), RequestError> {
         let caller = caller.into();
-        self.request(caller, Some(caller_device), true, |acct, err| {
+        let result = self.request(caller, Some(caller_device), true, |acct, err| {
             let member = acct.ctx.member.clone();
             let owner = acct.role().is_none_or(|r| r == Role::Owner);
             let d = acct
@@ -1173,7 +1262,11 @@ impl InMemoryServer {
             }
             d.revoked = true;
             Ok(())
-        })
+        });
+        if result.is_ok() {
+            self.live_device_revoked(caller.account, target);
+        }
+        result
     }
 
     /// `GET /v1/keylog?from=N` (at most [`KEYLOG_PAGE_MAX`] entries).
@@ -1262,6 +1355,13 @@ impl InMemoryServer {
                 .is_some_and(|c| c.covers_server_seq > rec.covers_server_seq)
             {
                 return Err(err(ErrorCode::Conflict, "a newer checkpoint exists".into()));
+            }
+            // Keep the two newest: a checkpoint covering more pushes the latest down; one
+            // covering the same position replaces the latest only.
+            if let Some(old) = acct.checkpoint.take() {
+                if old.covers_server_seq < rec.covers_server_seq {
+                    acct.previous_checkpoint = Some(old);
+                }
             }
             acct.checkpoint = Some(rec.clone());
             Ok(())

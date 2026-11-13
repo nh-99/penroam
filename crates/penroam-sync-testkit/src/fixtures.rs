@@ -780,6 +780,227 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
         );
     }
 
+    // Live channel frames (live.v1, protocol 1.8). The awareness payload is pseudo-ciphertext the
+    // size of a small sealed caret, not real sealed bytes.
+    use penroam_sync_protocol::live::{
+        awareness_aad, Awareness, Bye, ByeCode, ClientFrame, Committed, Hello, Membership,
+        ServerFrame, Welcome, DEFAULT_HEARTBEAT_MS, DEFAULT_MAX_FRAME_BYTES,
+    };
+    use penroam_sync_protocol::ProtocolVersion;
+    let live_device: DeviceId = id("0190c6f2-7b1a-7cc0-9d1e-0000000000d1");
+    let live_session: penroam_sync_protocol::LiveSessionId =
+        id("ls-5c2a8e1f9b3d4a6c8e0f2a4b6c8d0e1f");
+    let sealed_caret = base64url::encode(&fake_ciphertext("awareness-caret", 40 + 96));
+    let frame = |s: String| {
+        // Frames travel as compact JSON; fixtures pin that exact text, plus a trailing newline.
+        s + "\n"
+    };
+    json(
+        "live-hello.json",
+        frame(
+            ClientFrame::Hello(Hello {
+                protocol: ProtocolVersion::new(1, 8),
+                device_id: live_device.clone(),
+                last_server_seq: 41,
+                presence: true,
+            })
+            .to_text(),
+        ),
+    );
+    json(
+        "live-awareness.client.json",
+        frame(
+            ClientFrame::Awareness(Awareness {
+                session_id: None,
+                member: None,
+                device_id: None,
+                payload: sealed_caret.clone(),
+                ttl_ms: 15_000,
+            })
+            .to_text(),
+        ),
+    );
+    json("live-ping.client.json", frame(ClientFrame::Ping.to_text()));
+    json("live-pong.client.json", frame(ClientFrame::Pong.to_text()));
+    json(
+        "live-welcome.json",
+        frame(
+            ServerFrame::Welcome(Welcome {
+                session_id: live_session.clone(),
+                server_seq: 42,
+                heartbeat_ms: DEFAULT_HEARTBEAT_MS,
+                max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+                role: Role::Editor,
+            })
+            .to_text(),
+        ),
+    );
+    json(
+        "live-committed.json",
+        frame(ServerFrame::Committed(Committed { server_seq: 43 }).to_text()),
+    );
+    json(
+        "live-awareness.relayed.json",
+        frame(
+            ServerFrame::Awareness(Awareness {
+                session_id: Some(live_session.clone()),
+                member: Some(editor.clone()),
+                device_id: Some(live_device.clone()),
+                payload: sealed_caret,
+                ttl_ms: 15_000,
+            })
+            .to_text(),
+        ),
+    );
+    json(
+        "live-membership.json",
+        frame(
+            ServerFrame::Membership(Membership {
+                account_id: viewer.clone(),
+                role: Role::Viewer,
+                state: MembershipState::Revoked,
+            })
+            .to_text(),
+        ),
+    );
+    for code in ByeCode::ALL {
+        let retry = matches!(code, ByeCode::RateLimited | ByeCode::ServerRestart).then_some(2_000);
+        let name = serde_json::to_value(code).expect("codes serialize");
+        json(
+            &format!(
+                "live-bye.{}.json",
+                name.as_str().expect("a string").replace('_', "-")
+            ),
+            frame(
+                ServerFrame::Bye(Bye {
+                    code,
+                    retry_after_ms: retry,
+                })
+                .to_text(),
+            ),
+        );
+    }
+    json("live-ping.server.json", frame(ServerFrame::Ping.to_text()));
+    json("live-pong.server.json", frame(ServerFrame::Pong.to_text()));
+    json(
+        "live-awareness.aad.hex",
+        hex::encode(&awareness_aad(&space, &live_device)) + "\n",
+    );
+
+    // Comments and notifications (comments.v1, protocol 1.9).
+    use penroam_sync_protocol::comments::{
+        CommentPushItem, CommentPushKind, MutedThread, NotificationKind, NotificationPage,
+        NotificationPrefs, NotificationRecord, PullCommentsResponse, PulledComment,
+        UpdateNotificationRequest,
+    };
+    use penroam_sync_protocol::live::{CommentCommitted, NotificationHint};
+    let thread: penroam_sync_protocol::ThreadId = id("t-3e9a1c5b7d2f4086a1b3c5d7e9f0a2b4");
+    let comment_ct = fake_ciphertext("comment-1", 40 + 120);
+    let comment_header = header_for(
+        "0190c6f2-7b1a-7cc0-9d1e-0000000000c1",
+        DEV_A,
+        1,
+        &[],
+        &comment_ct,
+    );
+    let comment_item = CommentPushItem {
+        envelope: comment_header.clone(),
+        thread_id: thread.clone(),
+        kind: CommentPushKind::Comment,
+        mentions: vec![editor.clone()],
+    };
+    json("comment-push-item.json", to_fixture_json(&comment_item));
+    raw.push((
+        "comment-push-batch.bin",
+        encode_json_batch(&[(comment_item, comment_ct)], &limits).expect("fixture batch fits"),
+    ));
+    json(
+        "comment-pull-response.json",
+        to_fixture_json(&PullCommentsResponse {
+            items: vec![PulledComment {
+                server_seq: 1,
+                header: comment_header.clone(),
+                thread_id: thread.clone(),
+                member: account.clone(),
+            }],
+            next_cursor: page1.response.next_cursor.clone(),
+            has_more: false,
+        }),
+    );
+    let note: penroam_sync_protocol::NotificationId = id("n-8b4d2f6a0c1e4a3b9d5f7a1c3e5b7d9f");
+    json(
+        "notification-page.json",
+        to_fixture_json(&NotificationPage {
+            notifications: vec![NotificationRecord {
+                notification_id: note.clone(),
+                space_id: space.clone(),
+                thread_id: thread.clone(),
+                comment_op_id: comment_header.op_id.clone(),
+                kind: NotificationKind::Mention,
+                actor: account.clone(),
+                created_at_ms: T0 + 90_000,
+                read: false,
+            }],
+            next_cursor: page2.response.next_cursor.clone(),
+            has_more: false,
+            unread: 1,
+        }),
+    );
+    json(
+        "notification-update-request.json",
+        to_fixture_json(&UpdateNotificationRequest { read: true }),
+    );
+    json(
+        "notification-prefs.json",
+        to_fixture_json(&NotificationPrefs {
+            muted_spaces: vec![other_space.clone()],
+            muted_threads: vec![MutedThread {
+                space_id: space.clone(),
+                thread_id: thread.clone(),
+            }],
+        }),
+    );
+    json(
+        "live-comment-committed.json",
+        frame(ServerFrame::CommentCommitted(CommentCommitted { server_seq: 7 }).to_text()),
+    );
+    json(
+        "live-notification.json",
+        frame(
+            ServerFrame::Notification(NotificationHint {
+                notification_id: note,
+                space_id: space.clone(),
+            })
+            .to_text(),
+        ),
+    );
+
+    // Attribution (history.v1, protocol 1.10): a member's op, then one by an erased account.
+    use penroam_sync_protocol::history::{AttributionEntry, AttributionPage};
+    json(
+        "attribution-page.json",
+        to_fixture_json(&AttributionPage {
+            items: vec![
+                AttributionEntry {
+                    server_seq: 1,
+                    op_id: id(OP_A),
+                    account_id: editor.clone(),
+                    device_id: id(DEV_A),
+                    accepted_at_ms: T0 + 120_000,
+                },
+                AttributionEntry {
+                    server_seq: 2,
+                    op_id: id(OP_B),
+                    account_id: id("erased-6f1c0b9e2d4a8f7e3b5c1d9a0e2f4b6c"),
+                    device_id: id(DEV_B),
+                    accepted_at_ms: T0 + 180_000,
+                },
+            ],
+            next_from_seq: 3,
+            has_more: true,
+        }),
+    );
+
     raw.push(("pull-batch.page1.bin", page1.frame));
     raw.push(("pull-batch.page2.bin", page2.frame));
     for (name, bytes) in raw {

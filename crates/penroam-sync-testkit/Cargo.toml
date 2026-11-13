@@ -15,6 +15,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
 uuid.workspace = true
+# WebSocket for the live channel of the HTTP test server. Pinned exactly; the client crate uses
+# the same version. No TLS: the test server is loopback-only.
+tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 
 [dev-dependencies]
 tempfile.workspace = true

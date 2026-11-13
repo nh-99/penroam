@@ -1,0 +1,17 @@
+{
+  "notifications": [
+    {
+      "notification_id": "n-8b4d2f6a0c1e4a3b9d5f7a1c3e5b7d9f",
+      "space_id": "s-4b1d9c7e2a6f4e0b8c3d5a7f9e1b2c4d",
+      "thread_id": "t-3e9a1c5b7d2f4086a1b3c5d7e9f0a2b4",
+      "comment_op_id": "0190c6f2-7b1a-7cc0-9d1e-0000000000c1",
+      "kind": "mention",
+      "actor": "acct-fixture-0001",
+      "created_at_ms": 1794000090000,
+      "read": false
+    }
+  ],
+  "next_cursor": "AQEAARFhY2N0LWZpeHR1cmUtMDAwMQMAAAAAAAAAP5LkiWx7p9CpMJcxD4vj9w",
+  "has_more": false,
+  "unread": 1
+}

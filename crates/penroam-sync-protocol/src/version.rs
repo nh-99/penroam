@@ -14,12 +14,12 @@ use crate::error::ErrorCode;
 pub const PROTOCOL_MAJOR: u16 = 1;
 /// Sync protocol minor version. Minors within a major are additive; new
 /// behaviour is gated by capabilities, never assumed from the minor number.
-pub const PROTOCOL_MINOR: u16 = 7;
+pub const PROTOCOL_MINOR: u16 = 10;
 /// Version of the opaque remote container (the envelope header + framing).
 pub const ENVELOPE_VERSION: u16 = 1;
 
 /// Current semantic operation payload schema (inside the ciphertext).
-pub const OP_SCHEMA_VERSION: u16 = 5;
+pub const OP_SCHEMA_VERSION: u16 = 6;
 /// Oldest semantic operation payload schema this client can still apply.
 pub const OP_SCHEMA_MIN_SUPPORTED: u16 = 1;
 
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn newer_server_minor_negotiates_down_to_client_max() {
         assert_eq!(
-            negotiate(ProtocolRange::CLIENT, &meta((1, 0), (1, 8))),
+            negotiate(ProtocolRange::CLIENT, &meta((1, 0), (1, 11))),
             Ok(ProtocolVersion::CURRENT)
         );
     }
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn server_requires_newer_minor() {
-        let err = negotiate(ProtocolRange::CLIENT, &meta((1, 8), (1, 9))).unwrap_err();
+        let err = negotiate(ProtocolRange::CLIENT, &meta((1, 11), (1, 12))).unwrap_err();
         assert!(matches!(err, Incompatible::ClientTooOld { .. }));
     }
 

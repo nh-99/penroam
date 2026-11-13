@@ -18,6 +18,9 @@
 //! * account plan, storage allowance and billing-link DTOs ([`account`]),
 //! * the stored account key and passphrase-locked vaults ([`vault`]),
 //! * shared notebooks: sharing spaces, members, roles and invitations ([`sharing`]),
+//! * the live co-editing channel's frames and limits ([`live`]),
+//! * comment streams, mentions, notifications and their preferences ([`comments`]),
+//! * server attribution and checkpoint fallback ([`history`]),
 //! * the signed handwriting model catalog ([`models`]),
 //! * keeping credentials out of logs: HTTP-library log targets to cap and a
 //!   line scrubber ([`redact`]),
@@ -36,14 +39,17 @@ pub mod account;
 pub mod auth;
 pub mod base64url;
 pub mod canonical;
+pub mod comments;
 pub mod contract;
 pub mod dto;
 pub mod envelope;
 pub mod error;
 pub mod framing;
 pub mod hex;
+pub mod history;
 pub mod ids;
 pub mod limits;
+pub mod live;
 pub mod models;
 pub mod redact;
 pub mod routes;
@@ -70,7 +76,10 @@ pub use dto::{
 pub use envelope::{verify_ciphertext, EnvelopeError, EnvelopeHeader, IntegrityError, OpRef};
 pub use error::{ErrorBody, ErrorCode, RetryPolicy};
 pub use framing::{FrameError, FrameItem};
-pub use ids::{AccountId, BlobId, DeviceId, IdError, InvitationId, NotebookRoutingId, OpId};
+pub use ids::{
+    AccountId, BlobId, DeviceId, IdError, InvitationId, LiveSessionId, NotebookRoutingId,
+    NotificationId, OpId, ThreadId,
+};
 pub use limits::Limits;
 pub use sharing::{
     ChangeRoleRequest, CreateInvitationRequest, CreateSpaceRequest, IncomingInvitation,

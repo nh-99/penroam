@@ -50,6 +50,15 @@ pub mod capabilities {
     /// Shared notebooks: sharing spaces, members, roles and invitations ([`crate::sharing`],
     /// protocol 1.7).
     pub const SHARING_V1: &str = "sharing.v1";
+    /// Live co-editing channel for shared notebooks: commit hints, encrypted awareness and
+    /// membership control over `GET /v1/live` ([`crate::live`], protocol 1.8).
+    pub const LIVE_V1: &str = "live.v1";
+    /// Comment streams, notifications and notification preferences for shared notebooks
+    /// ([`crate::comments`], protocol 1.9).
+    pub const COMMENTS_V1: &str = "comments.v1";
+    /// Server attribution of both streams and the previous-checkpoint fallback
+    /// ([`crate::history`], protocol 1.10).
+    pub const HISTORY_V1: &str = "history.v1";
 }
 
 /// `GET /v1/meta` response.
