@@ -17,6 +17,9 @@ version = 2
 yanked = "deny"
 # Unmaintained notices with no fixed release. Each entry says why it is accepted.
 ignore = [
+  # smallstr 0.3 (inline strings inside yrs, the text CRDT of shared notebooks). Unmaintained, no
+  # known defect; clears when yrs drops it.
+  { id = "RUSTSEC-2026-0215", reason = "small inline-string helper used inside yrs; no fixed release" },
   # glib-macros 0.18 (gtk-rs, through Tauri and our touchpad pinch code). Build-time only, and it
   # goes away when Tauri moves to a newer gtk-rs.
   { id = "RUSTSEC-2024-0370", reason = "build-time macro helper pulled in by Tauri's gtk-rs" },
