@@ -53,8 +53,7 @@ ones it belongs to.
 
 ### Presence, comments and history in shared notebooks
 
-Shared notebooks need a sync server that offers them. Penroam Cloud doesn't offer sharing yet; it
-will be turned on after testing. This describes what happens once a server does.
+This applies on Penroam Cloud and on any other sync server that offers shared notebooks.
 
 * **Presence** (which page you're on, where your cursor is, what part of the page you're looking at)
   is sent while you're online in a shared notebook, encrypted in transit, but the service holds the

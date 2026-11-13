@@ -2,10 +2,9 @@
 
 [Manual](README.md) › Comments and mentions
 
-> **Availability.** Shared notebooks need a sync server that offers them. Penroam Cloud doesn't
-> offer sharing yet; it will be turned on after testing. Until then, **Share notebook…** only
-> explains that the server doesn't support it, and the buttons for people, comments, activity and
-> notifications don't appear.
+> **Availability.** Shared notebooks need a sync server that offers them. Penroam Cloud does; on a
+> server that doesn't, **Share notebook…** only explains that, and the buttons for people,
+> comments, activity and notifications don't appear.
 
 In a [shared notebook](shared-notebooks.md) you can leave comments on the page, reply to each other
 and mention people. Comments are a separate layer: they don't change the notebook's pages, and

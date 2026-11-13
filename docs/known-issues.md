@@ -51,9 +51,6 @@ notes. If you find one, please report it: see [support](support.md).
 
 ## Shared notebooks
 
-Shared notebooks need a sync server that offers them. Penroam Cloud doesn't offer sharing yet; it
-will be turned on after testing. The items below apply once it does.
-
 * Shared notebooks aren't end-to-end encrypted, and a person you remove keeps whatever their
   devices already downloaded. See [shared notebooks](manual/shared-notebooks.md#privacy).
 * An editor's uploads count against the owner's storage allowance, and removing the editor doesn't

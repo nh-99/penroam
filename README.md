@@ -133,9 +133,8 @@ Penroam holds their key so that signing in is enough. For notes no one else shou
 vault, encrypted with a passphrase only you know.
 [Sync and vaults →](docs/manual/sync-and-vaults.md)
 
-Sync servers that offer it let you also share a notebook with other people, to read or to edit
-together. Penroam Cloud doesn't offer sharing yet; it will be turned on after testing. Shared
-notebooks aren't end-to-end encrypted. You see who else is in the notebook and where, type in the same text
+Penroam Cloud (and other sync servers that offer it) also lets you share a notebook with other
+people, to read or to edit together. Shared notebooks aren't end-to-end encrypted. You see who else is in the notebook and where, type in the same text
 block at once, leave comments and @mentions, and see who changed what.
 [Shared notebooks →](docs/manual/shared-notebooks.md)
 

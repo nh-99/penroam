@@ -2,10 +2,9 @@
 
 [Manual](README.md) › Shared notebooks
 
-> **Availability.** Shared notebooks need a sync server that offers them. Penroam Cloud doesn't
-> offer sharing yet; it will be turned on after testing. Until then, **Share notebook…** only
-> explains that the server doesn't support it, and the buttons for people, comments, activity and
-> notifications don't appear.
+> **Availability.** Shared notebooks need a sync server that offers them. Penroam Cloud does; on a
+> server that doesn't, **Share notebook…** only explains that, and the buttons for people,
+> comments, activity and notifications don't appear.
 
 You can share a notebook with other people, so that they can read it or write in it too. Sharing
 needs [sync](sync-and-vaults.md#sync): you and the people you invite sign in to Penroam Cloud, and
