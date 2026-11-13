@@ -1312,3 +1312,205 @@ fn a_whole_notebook_can_be_rebuilt_from_the_log_at_a_past_time() {
     assert_eq!(now.title, "Before");
     assert!(now.trashed_pages.iter().any(|t| t.id == extra.id));
 }
+
+#[test]
+fn keeping_both_versions_of_a_conflict_adds_a_copy_and_ends_the_conflict() {
+    let s = server();
+    let acct = account(&s, "acct-keep-both");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Notes", PageDefaults::default(), None)
+        .unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![text(42, "original")]);
+    a.sync().unwrap();
+    let mut b = Client::joined(&s, &acct, "b");
+    b.sync().unwrap();
+    for (c, body) in [(&mut a, "edited on A"), (&mut b, "edited on B")] {
+        edit(
+            &mut c.lib,
+            nb.id,
+            p.id,
+            OpKind::ReplaceElements {
+                elements: vec![text(42, body)],
+            },
+        );
+    }
+    settle(&mut [&mut a, &mut b]);
+    let (target, alt) = {
+        let c = &b.engine.conflicts(nb.id).unwrap()[0];
+        (c.target.clone(), c.alternates[0].op_id)
+    };
+    // a page or notebook conflict has nothing to copy
+    assert!(b
+        .engine
+        .keep_both(&mut b.lib, nb.id, &ConflictTarget::NotebookTitle, alt)
+        .is_err());
+    let copy = b.engine.keep_both(&mut b.lib, nb.id, &target, alt).unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert!(a.engine.conflicts(nb.id).unwrap().is_empty());
+    assert!(b.engine.conflicts(nb.id).unwrap().is_empty());
+    let texts: Vec<String> = a
+        .lib
+        .load_page(nb.id, p.id)
+        .unwrap()
+        .elements
+        .iter()
+        .filter_map(|e| match e {
+            Element::Text(t) => Some(t.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(texts.iter().any(|t| t == "edited on A"));
+    assert!(texts.iter().any(|t| t == "edited on B"));
+    assert!(a
+        .lib
+        .load_page(nb.id, p.id)
+        .unwrap()
+        .elements
+        .iter()
+        .any(|e| e.id() == copy));
+}
+
+/// A notebook on `a`, a second device `b` that goes away, and two checkpoints published by `a`
+/// while it is gone, with history compacted the way servers keep it (up to the older one).
+fn away_device_with_two_checkpoints(
+    s: &Arc<InMemoryServer>,
+    name: &str,
+) -> (Client, Client, Uuid, Uuid) {
+    let acct = account(s, name);
+    let (mut a, _) = Client::first(s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Old", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::joined(s, &acct, "b");
+    b.sync().unwrap();
+    b.offline(true);
+    add(&mut b.lib, nb.id, p.id, vec![stroke(77, 7.0, "#b91c1c")]);
+    for round in 0..2 {
+        for i in 0..3 {
+            add(
+                &mut a.lib,
+                nb.id,
+                p.id,
+                vec![stroke(round * 10 + i, 1.0, "#111111")],
+            );
+        }
+        a.sync().unwrap();
+        a.engine.create_checkpoint().unwrap().expect("published");
+    }
+    assert!(s.compact_to_retained_checkpoints(&acct) > 0);
+    b.offline(false);
+    (a, b, nb.id, p.id)
+}
+
+#[test]
+fn a_damaged_latest_checkpoint_falls_back_to_the_previous_one() {
+    let s = server();
+    let (mut a, mut b, nb, _) = away_device_with_two_checkpoints(&s, "acct-prev-cp");
+    let phases = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = phases.clone();
+    b.engine
+        .set_phase_hook(Box::new(move |st| seen.lock().unwrap().push(st.phase)));
+    b.engine.transport_mut().corrupt_checkpoints = true;
+    b.sync().unwrap();
+    assert!(
+        phases.lock().unwrap().contains(&Phase::NeedsCatchUp),
+        "the catch-up is shown while it runs"
+    );
+    assert_eq!(b.status().phase, Phase::Idle, "{:?}", b.status());
+    a.sync().unwrap();
+    assert_eq!(view(&mut a.lib), view(&mut b.lib));
+    assert_eq!(
+        ink_count(&mut a.lib, nb),
+        7,
+        "B's unsent stroke arrived too"
+    );
+    assert!(b
+        .engine
+        .events
+        .iter()
+        .any(|e| e.contains("trying the previous one")));
+}
+
+#[test]
+fn an_older_checkpoint_than_one_already_applied_is_refused() {
+    let s = server();
+    let (_a, mut b, nb, _) = away_device_with_two_checkpoints(&s, "acct-rollback-cp");
+    // as if B had recovered from a newer checkpoint before: the server now offers older ones
+    b.engine.store.state.applied_checkpoint_seq = 10_000;
+    b.engine.store.save().unwrap();
+    assert!(b.sync().is_err());
+    assert_eq!(b.status().phase, Phase::IntegrityAlert, "{:?}", b.status());
+    assert_eq!(
+        ink_count(&mut b.lib, nb),
+        1,
+        "nothing imported; own stroke kept"
+    );
+}
+
+#[test]
+fn a_log_that_moves_backwards_is_refused() {
+    let s = server();
+    let acct = account(&s, "acct-rollback-log");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Log", PageDefaults::default(), None)
+        .unwrap();
+    a.sync().unwrap();
+    let mut b = Client::joined(&s, &acct, "b");
+    b.sync().unwrap();
+    assert!(b.engine.store.state.cursor_seq > 0);
+    // B saw further than the server now claims
+    b.engine.store.state.cursor_seq += 1_000;
+    b.engine.store.save().unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(1, 1.0, "#111111")]);
+    a.sync().unwrap();
+    assert!(b.sync().is_err());
+    assert_eq!(b.status().phase, Phase::IntegrityAlert);
+    assert_eq!(ink_count(&mut b.lib, nb.id), 0);
+}
+
+#[test]
+fn keeping_the_shown_version_of_a_conflict_ends_it_everywhere() {
+    let s = server();
+    let acct = account(&s, "acct-keep-shown");
+    let (mut a, _) = Client::first(&s, &acct, "a");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Notes", PageDefaults::default(), None)
+        .unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![text(42, "original")]);
+    a.sync().unwrap();
+    let mut b = Client::joined(&s, &acct, "b");
+    b.sync().unwrap();
+    for (c, body) in [(&mut a, "edited on A"), (&mut b, "edited on B")] {
+        edit(
+            &mut c.lib,
+            nb.id,
+            p.id,
+            OpKind::ReplaceElements {
+                elements: vec![text(42, body)],
+            },
+        );
+    }
+    settle(&mut [&mut a, &mut b]);
+    let shown = view(&mut a.lib);
+    let (target, winner) = {
+        let c = &b.engine.conflicts(nb.id).unwrap()[0];
+        (c.target.clone(), c.winner)
+    };
+    b.engine
+        .resolve_conflict(&mut b.lib, nb.id, &target, winner)
+        .unwrap();
+    settle(&mut [&mut a, &mut b]);
+    assert!(a.engine.conflicts(nb.id).unwrap().is_empty());
+    assert!(b.engine.conflicts(nb.id).unwrap().is_empty());
+    assert_eq!(view(&mut a.lib), shown, "the shown version stayed");
+    assert_eq!(view(&mut b.lib), shown);
+}

@@ -98,6 +98,15 @@ pub struct SyncState {
     /// created now would cover).
     #[serde(default)]
     pub last_server_seq: u64,
+    /// Account sequence the saved `cursor` stands at (the last pulled envelope, or what the
+    /// checkpoint recovered from covers). A pull that returns an envelope at or below it means
+    /// the server's log moved backwards, which is refused.
+    #[serde(default)]
+    pub cursor_seq: u64,
+    /// The highest `covers_server_seq` of a checkpoint this device recovered from. An older
+    /// checkpoint is refused (a server rolling the stream back).
+    #[serde(default)]
+    pub applied_checkpoint_seq: u64,
     /// Operation-log length when this device last published a checkpoint.
     #[serde(default)]
     pub checkpointed_len: u64,
@@ -133,6 +142,8 @@ impl SyncState {
             dirty: BTreeSet::new(),
             uploaded_blobs: BTreeSet::new(),
             last_server_seq: 0,
+            cursor_seq: 0,
+            applied_checkpoint_seq: 0,
             checkpointed_len: 0,
             paused: false,
             last_success_ms: None,

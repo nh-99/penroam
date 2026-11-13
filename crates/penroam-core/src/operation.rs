@@ -1,4 +1,4 @@
-//! Sync-ready semantic operations (operation schema version 5).
+//! Sync-ready semantic operations (operation schema version 6).
 //!
 //! Every persisted change to a notebook is a [`LocalOperation`]: a stable
 //! random id (retries reuse it), the device that made it, that device's
@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 /// Newest [`DocumentOperation`] encoding and semantics this build can read.
 /// Independent of the file format and model schema versions.
-pub const OP_SCHEMA_VERSION: u16 = 5;
+pub const OP_SCHEMA_VERSION: u16 = 6;
 
 /// The schema an operation is written with: the oldest that means the same
 /// thing, so that a device on an older version only stops syncing once it
@@ -46,9 +46,13 @@ pub const OP_SCHEMA_VERSION: u16 = 5;
 /// Version 5 is moving a notebook into a shared notebook space
 /// ([`DocumentOperation::NotebookShared`]). An older client parks it and asks to be updated,
 /// which keeps it from syncing the notebook's later changes into the wrong place.
+///
+/// Version 6 is a concurrent edit of a text block's text ([`DocumentOperation::TextEdited`]),
+/// written only in shared notebooks.
 pub fn op_schema_for(body: &DocumentOperation) -> u16 {
     use DocumentOperation::*;
     match body {
+        TextEdited { .. } => 6,
         NotebookShared { .. } => 5,
         NotebookCanvasSet { .. } => 4,
         FolderCreated { .. }
@@ -176,6 +180,22 @@ pub enum DocumentOperation {
         notebook_id: Uuid,
         /// The space's id (an account id: `[A-Za-z0-9_-]`, at most 128 bytes).
         space_id: String,
+    },
+    /// Edits a text block's text as a sequence CRDT update ([`crate::textcrdt`]), so that several
+    /// people typing in the same block at once all keep their text. Written only in shared
+    /// notebooks, by the sync client, from an ordinary whole-element replace.
+    #[serde(rename_all = "camelCase")]
+    TextEdited {
+        /// Target notebook.
+        notebook_id: Uuid,
+        /// Target page.
+        page_id: Uuid,
+        /// The text block.
+        element_id: Uuid,
+        /// The content write whose text this update edits (the CRDT's genesis).
+        base: Uuid,
+        /// The Yrs v1 update, unpadded base64url.
+        update: String,
     },
     /// Moves the notebook to the trash (tombstone; nothing is erased).
     #[serde(rename_all = "camelCase")]
@@ -366,6 +386,7 @@ impl DocumentOperation {
             | ElementsAdded { notebook_id, .. }
             | ElementsRemoved { notebook_id, .. }
             | ElementsReplaced { notebook_id, .. }
+            | TextEdited { notebook_id, .. }
             | AssetReferenced { notebook_id, .. } => *notebook_id,
         }
     }
@@ -388,7 +409,8 @@ impl DocumentOperation {
             PageTemplateSet { page_id, .. }
             | ElementsAdded { page_id, .. }
             | ElementsRemoved { page_id, .. }
-            | ElementsReplaced { page_id, .. } => Some(*page_id),
+            | ElementsReplaced { page_id, .. }
+            | TextEdited { page_id, .. } => Some(*page_id),
             _ => None,
         }
     }
@@ -414,6 +436,7 @@ impl DocumentOperation {
             ElementsRemoved { .. } => "elementsRemoved",
             ElementsReplaced { .. } => "elementsReplaced",
             AssetReferenced { .. } => "assetReferenced",
+            TextEdited { .. } => "textEdited",
             NotebookFiled { .. } => "notebookFiled",
             FolderCreated { .. } => "folderCreated",
             FolderRenamed { .. } => "folderRenamed",
@@ -575,7 +598,10 @@ pub fn apply_to_page(page: &mut Page, bodies: &[&DocumentOperation]) -> Result<(
             }
             Ok(ops::PageOperation {
                 op_id: Uuid::nil(),
-                kind: b.as_page_op_kind().expect("content op"),
+                // a text update is merged by the replica only, never applied to a page directly
+                kind: b.as_page_op_kind().ok_or_else(|| {
+                    OpError::Precondition(format!("{} is applied by the merge model", b.name()))
+                })?,
             })
         })
         .collect::<Result<_, _>>()?;
@@ -665,6 +691,13 @@ pub fn validate_body(body: &DocumentOperation) -> Result<(), OpError> {
             }
         }
         PageTemplateSet { template, .. } => v(validate_template(template))?,
+        TextEdited { update, .. } => {
+            if update.len() > MAX_TEXT_UPDATE_CHARS
+                || crate::textcrdt::b64::decode(update).is_none()
+            {
+                return Err(OpError::Precondition("invalid text update".into()));
+            }
+        }
         NotebookShared { space_id, .. } => {
             if !is_space_id(space_id) {
                 return Err(OpError::Precondition(
@@ -821,7 +854,8 @@ pub fn apply_to_notebook(
         PageTemplateSet { .. }
         | ElementsAdded { .. }
         | ElementsRemoved { .. }
-        | ElementsReplaced { .. } => {
+        | ElementsReplaced { .. }
+        | TextEdited { .. } => {
             return Err(OpError::Precondition(
                 "page content operations are applied to pages".into(),
             ))
@@ -835,6 +869,9 @@ pub fn apply_to_notebook(
         Ok(NotebookEffect::Unchanged)
     }
 }
+
+/// Largest [`DocumentOperation::TextEdited`] update, in base64url characters (≈ 768 KiB).
+pub const MAX_TEXT_UPDATE_CHARS: usize = 1 << 20;
 
 /// Whether `s` can be a shared notebook space id: the account id charset, so it can also name a
 /// folder on disk.

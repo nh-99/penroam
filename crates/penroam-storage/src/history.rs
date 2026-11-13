@@ -641,6 +641,21 @@ impl Library {
         self.apply_page_operations(nb_id, page_id, &batch)
     }
 
+    /// A notebook's title and live page order as this device recorded them at time `at`, without
+    /// changing anything. Before the first recorded change, the current title and order are all
+    /// there is to go on, so those are returned.
+    pub fn notebook_structure_at(&self, nb_id: Uuid, at: Timestamp) -> Result<(String, Vec<Uuid>)> {
+        let nb = self.notebook(nb_id)?;
+        Ok(read_structure(&self.nb_dir(nb_id))
+            .into_iter()
+            .take_while(|s| s.at <= at)
+            .last()
+            .map_or_else(
+                || (nb.title.clone(), nb.page_order.clone()),
+                |s| (s.title, s.page_order),
+            ))
+    }
+
     /// Brings a whole notebook back to how it was at time `at`: page content,
     /// page order and title. Every change is an ordinary operation. Pages made
     /// since go to the trash rather than being deleted.
@@ -649,18 +664,12 @@ impl Library {
         nb_id: Uuid,
         at: Timestamp,
     ) -> Result<NotebookRestore> {
-        let nb_dir = self.nb_dir(nb_id);
-        let nb = self.notebook(nb_id)?.clone();
-        // before the first recorded change, the order is all there is to go on
-        let structure = read_structure(&nb_dir)
-            .into_iter()
-            .take_while(|s| s.at <= at)
-            .last()
-            .unwrap_or_else(|| Structure {
-                at,
-                title: nb.title.clone(),
-                page_order: nb.page_order.clone(),
-            });
+        let (title, page_order) = self.notebook_structure_at(nb_id, at)?;
+        let structure = Structure {
+            at,
+            title,
+            page_order,
+        };
         let mut targets = HashMap::new();
         for page in &structure.page_order {
             let version = self

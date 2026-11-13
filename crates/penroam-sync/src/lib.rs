@@ -16,6 +16,7 @@
 //! * [`models`]: the signed handwriting model catalog and model downloads.
 //! * [`vault`]: passphrase-locked vaults, and which notebooks belong to them.
 //! * [`locker`]: vaults locked on this device, encrypted at rest.
+//! * [`live`]: the live channel of a shared notebook (commit hints, presence).
 //! * [`shared`]: shared notebooks: sharing an existing notebook, joining a shared one, roles
 //!   and access loss.
 //! * `auth` (feature `http`): OpenID Connect sign-in with PKCE in the system
@@ -39,10 +40,13 @@
 #![warn(missing_docs)]
 
 #[cfg(feature = "http")]
+pub mod attribution;
 pub mod auth;
+pub mod comments;
 pub mod crypto;
 pub mod engine;
 pub mod keylog;
+pub mod live;
 pub mod locker;
 pub mod models;
 pub mod secrets;

@@ -209,6 +209,44 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   app's worker reconciles spaces after the main engine and the vaults, rereads the
   lists of shared notebooks and invitations each pass, and emits `sync://shared` when what the
   library shows changed. Security: [`../security/threat-model.md`](../security/threat-model.md).
+* **Typing together in a shared notebook.** Inside a space, a text block's text is also a sequence
+  CRDT (`penroam_core::textcrdt`, Yrs pinned at 0.28.1, v1 updates, UTF-16 offsets). The editor and
+  the library still write whole-element replaces; the space's engine turns a text change into a
+  `textEdited` operation (operation schema 6, space logs only) by diffing the text as this device
+  last showed it against the new text, and applying that on a copy of the CRDT at that state, so
+  text that arrived in the meantime is never deleted by it. Every content write of a block (its
+  creation, or an older client's whole-text write) starts a CRDT deterministically from that write
+  (client id derived from its operation id), so all replicas build the same items; the block shows
+  the CRDT of its content winner, and text edited on another start is kept as a conflict
+  alternate, as is typing into a block someone deleted. Golden vectors in
+  `crates/penroam-core/tests/vectors/text-crdt.json` pin the encoding. Ink, pages and other element
+  fields merge as before; resolving a field-group conflict changes only that group.
+* **Live channel.** For each active shared notebook the app opens `GET /v1/live` (`live.v1`,
+  `penroam_sync::live`) with the space's device session. It never writes: a `committed` hint or a
+  (re)connect only makes the worker sync that space at once over HTTP, so a lost hint costs a
+  delay, never data; while a channel is up, local edits sync after 150 ms instead of 1.5 s.
+  Awareness (which page, caret, selection) is sealed under a key derived from the space root and
+  relayed by the server without reading it; the editor receives `live://presence` and
+  `live://status`. A `bye access_revoked`, or a `membership` frame saying this account was removed,
+  stops the space at once (read-only); other membership changes make it sync. A
+  `comment_committed` hint pulls the space's comment stream, and a `notification` hint makes the
+  app reload its notifications.
+* **Comments.** Each space has a comment stream next to its document stream
+  (`penroam_sync::comments`, `comments.v1`), synced right after the document stream in every pass
+  with the same device session and keys; a comment failure never fails the document sync. The app
+  routes the `comments_*` and `notifications_*` commands through the worker
+  (`src-tauri/src/comments.rs`). Anchors are placed on the notebook as it is on the device; a text
+  anchor holds Yrs sticky positions, so it follows typing by others and becomes orphaned (never
+  moved) when its text is gone. Names come only from the space's member list.
+* **Who wrote what.** With `history.v1` the worker fetches, after each space's sync, which account
+  and device pushed each operation and comment (`penroam_sync::attribution`, stored per space
+  under its sync folder), and the account's own attribution after the main reconcile. An author is
+  shown only when the device the server names is the one that signed the operation. When someone
+  active at the last fetch no longer is, everything is fetched again, so an erased account's
+  tombstone replaces its id. The history commands (`src-tauri/src/history.rs`) read the logged
+  operations, attribution and member list through the worker; they label versions, activity,
+  restore items and conflict versions. "Keep both as copies" ends an element conflict by writing
+  the shown version again and adding the other as a new element.
 * **Sync engine.** `penroam-sync` keeps its own state under
   `<library>/sync/`: an append-only operation log of every synced operation (local and remote),
   parked and quarantined envelopes, and the verified key log pin. One reconcile has three phases
@@ -224,6 +262,13 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
      (`Replica::apply_delivered`) and install the result with `Library::install_merged`, which
      writes snapshots and records how far the install covered the journal so replay never
      re-applies an edit the merged snapshot already contains.
+
+  When the server has compacted the history a device still needs (`cursor_expired`), the engine
+  recovers from the latest checkpoint, shown as *needs catch-up* while it runs; unsent changes are
+  kept and uploaded afterwards. A damaged or untrusted latest checkpoint falls back to the previous
+  one, which servers keep together with the history after it. The engine pins how far it has seen
+  the log: it refuses a checkpoint older than one it already recovered from, and a pull that
+  returns an operation at or before its cursor (the log moved backwards).
 
   In the app a worker thread runs reconciles (debounced after local edits, every minute when
   idle, exponential backoff with jitter after failures) and emits `sync://status` and

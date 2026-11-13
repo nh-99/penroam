@@ -232,6 +232,16 @@ impl RootSecret {
         hkdf32(&self.0, b"penroam", b"penroam/space-meta/v1")
     }
 
+    /// The key a shared notebook space's awareness frames (who is where in the notebook) are
+    /// sealed under ([`crate::live`]). Members only; the server relays them without reading them.
+    pub fn awareness_key(&self) -> [u8; KEY_LEN] {
+        hkdf32(
+            &self.0,
+            b"penroam",
+            penroam_sync_protocol::live::AWARENESS_KEY_INFO.as_bytes(),
+        )
+    }
+
     /// The key a vault's notebooks are encrypted under on a device while the vault is locked
     /// there ([`crate::locker`]). Never sent anywhere.
     pub fn vault_local_key(&self) -> [u8; KEY_LEN] {

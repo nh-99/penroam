@@ -11,7 +11,7 @@ repository.workspace = true
 [features]
 default = ["http"]
 # HTTP transport (ureq). Off for builds that only use the in-process transport.
-http = ["dep:ureq"]
+http = ["dep:ureq", "dep:tungstenite", "dep:rustls", "dep:webpki-roots"]
 # In-process transport over the public test server (tests, tools).
 testkit = ["dep:penroam-sync-testkit"]
 # Device keys in the platform keychain/keystore (see secrets::keychain).
@@ -45,6 +45,11 @@ zeroize = { version = "1.8", features = ["derive"] }
 unicode-normalization = "0.1"
 keyring-core = { version = "1", optional = true }
 ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "json"] }
+# The live channel's WebSocket (live.rs), over the same rustls (ring) as ureq. Pinned exactly, as the
+# test server's.
+tungstenite = { version = "=0.30.0", optional = true, default-features = false, features = ["handshake", "__rustls-tls"] }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = { version = "1", optional = true }
 
 # One native credential store per platform (only compiled where it applies).
 [target.'cfg(target_os = "macos")'.dependencies]

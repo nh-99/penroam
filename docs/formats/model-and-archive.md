@@ -266,7 +266,21 @@ manifest.json       { format: "penroam-notebook", formatVersion: 2, schemaVersio
                       assets: [{ sha256, path: "assets/<sha256>", mediaType, byteSize }] }
 pages/<uuid>.prp    canonical page, binary encoding, journal folded in; byte-identical on import
 assets/<sha256>     original attachment bytes (PDFs are never rasterised)
+comments/threads.json  only in an export of a shared notebook with "Include comments":
+                    { format: "penroam-comments", version: 1, notebookId, threads: [...] }
+authors/elements.json  only in an export of a shared notebook with "Include authors":
+                    { format: "penroam-authors", version: 1, notebookId,
+                      elements: [{ pageId, elementId, authors: [{ kind, accountId? }] }] }
 ```
+
+* `comments/threads.json` holds the shared notebook's comment threads as this device has them
+  (author account ids, anchors, bodies, status). It is written only when the export asks for
+  comments. Import skips it silently: comments belong to the shared notebook's comment stream,
+  so a file can't bring comments, members or access with it.
+* `authors/elements.json` lists, for each exported element, who wrote it as far as this device's
+  attribution knows: `kind` is `member`, `former`, `erased`, `beforeSharing`, `unknown` or
+  `unverified`, and `accountId` the account (an erased account's tombstone id). Members' emails are
+  never included. It is written only when asked for and skipped on import, like the comments.
 
 * Format 1 archives (pages as `pages/<uuid>.json`) are still imported.
 * A normal export is a snapshot of live pages; trashed pages, thumbnails, journals and version
@@ -283,5 +297,5 @@ assets/<sha256>     original attachment bytes (PDFs are never rasterised)
   4 GiB); compression ratio ≤ 200:1 for entries over 1 MiB; every page/asset SHA-256 verified;
   manifest ↔ notebook page order must match; every asset reference must resolve; pages are
   validated (finite numbers, ranges, unique ids). Work happens in a staging directory and is
-  moved into the library with one rename. If the notebook id already exists, the import
-  becomes a copy with a new id.
+  moved into the library with one rename. If the notebook id already exists (or belongs to a
+  notebook that is or was shared on this device), the import becomes a copy with a new id.

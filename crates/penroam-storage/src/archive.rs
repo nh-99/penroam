@@ -108,7 +108,20 @@ pub struct ExportOptions {
     /// Use the notebook's `updatedAt` as the export time. The same notebook
     /// content then always produces the same bytes.
     pub deterministic: bool,
+    /// Extra entries written as they are, for data the library doesn't hold (a shared notebook's
+    /// comments: [`COMMENTS_ENTRY`]; who wrote its elements: [`AUTHORS_ENTRY`]). Only the names in [`EXTRA_ENTRIES`] are accepted. Import
+    /// never reads them back: they grant nothing and create nothing.
+    pub extra_entries: Vec<(String, Vec<u8>)>,
 }
+
+/// Where an export with comments puts a shared notebook's comment threads (JSON). Import skips
+/// it: comments belong to the shared notebook's comment stream, not to the file.
+pub const COMMENTS_ENTRY: &str = "comments/threads.json";
+/// Where an export with authors puts who wrote each element of a shared notebook (JSON). Import
+/// skips it, like the comments.
+pub const AUTHORS_ENTRY: &str = "authors/elements.json";
+/// Entries an export may add with [`ExportOptions::extra_entries`].
+pub const EXTRA_ENTRIES: &[&str] = &[COMMENTS_ENTRY, AUTHORS_ENTRY];
 
 /// How [`Library::import_archive_with`] treats an archive.
 #[derive(Debug, Clone, Copy, Default)]
@@ -376,6 +389,10 @@ impl Library {
                         "unexpected directory {name}"
                     )));
                 }
+                continue;
+            }
+            // written by an export with comments; deliberately never imported
+            if EXTRA_ENTRIES.contains(&name.as_str()) {
                 continue;
             }
             if !entry_name_ok(&name) {
@@ -803,6 +820,13 @@ pub fn export_archive_from<W: Write + Seek>(
         assets,
         trashed_pages,
     };
+    for (name, bytes) in &options.extra_entries {
+        if !EXTRA_ENTRIES.contains(&name.as_str()) {
+            return Err(StorageError::Invalid(format!("not an extra entry: {name}")));
+        }
+        zip.start_file(name.as_str(), deflated).map_err(zerr)?;
+        zip.write_all(bytes)?;
+    }
     zip.start_file("manifest.json", deflated).map_err(zerr)?;
     zip.write_all(
         &serde_json::to_vec_pretty(&manifest).map_err(|e| StorageError::Io(e.to_string()))?,

@@ -209,3 +209,104 @@ fn a_shared_notebook_syncs_over_http_with_device_sessions() {
     assert_eq!(ink_count(&mut a.lib.lock().unwrap(), nb), 3);
     handle.shutdown();
 }
+
+#[test]
+fn the_live_channel_over_a_websocket_hints_commits_and_ends_on_removal() {
+    use penroam_sync::live::{LiveClient, LiveEvent, LiveState, WsDialer};
+    use std::sync::Mutex as StdMutex;
+    use std::time::Duration;
+
+    let server = Arc::new(InMemoryServer::new());
+    let handle = http::spawn("127.0.0.1:0", server.clone()).unwrap();
+    let url = handle.base_url.clone();
+    let mut a = Dev::new(&url, "ann");
+    let mut b = Dev::new(&url, "ben");
+    let (nb, page) = a
+        .lib
+        .lock()
+        .unwrap()
+        .create_notebook("Live", PageDefaults::default(), None)
+        .unwrap();
+    let (nb, page) = (nb.id, page.id);
+    a.sync();
+    let space = a
+        .with_access(|acc, spaces, lib, access| spaces.share(acc, lib, access, nb))
+        .unwrap();
+    a.sync();
+    a.account
+        .transport_mut()
+        .shared_invite(
+            &space.parse().unwrap(),
+            &CreateInvitationRequest {
+                email: "ben@example.org".into(),
+                role: Role::Editor,
+                idempotency_key: Uuid::new_v4().to_string(),
+            },
+        )
+        .unwrap();
+    b.with_access(|acc, spaces, lib, _| spaces.refresh(acc, lib))
+        .unwrap();
+    let inv = b.spaces.invitations[0].invitation_id.clone();
+    b.with_access(|acc, spaces, lib, access| spaces.accept(acc, lib, access, &inv))
+        .unwrap();
+    for _ in 0..3 {
+        a.sync();
+        b.sync();
+    }
+    // ben's live channel, with his device session on the space
+    let device = b.spaces.engine(&space).unwrap().device_id().to_string();
+    let (token, _) =
+        HttpTransport::test_session_as(&url, &space, Some(&device), Some(&b.me), None).unwrap();
+    let root = penroam_sync::shared::load_root(secrets_at(&b.root).as_ref(), &space)
+        .unwrap()
+        .unwrap();
+    let mut live = LiveClient::new(
+        space.parse().unwrap(),
+        b.me.parse().unwrap(),
+        device.parse().unwrap(),
+        root.awareness_key(),
+        true,
+        Box::new(WsDialer {
+            base_url: url.clone(),
+            token: Arc::new(StdMutex::new(token)),
+        }),
+    );
+    let until = |live: &mut LiveClient, pred: &dyn Fn(&LiveEvent) -> bool| -> Vec<LiveEvent> {
+        let mut seen = Vec::new();
+        for _ in 0..200 {
+            let ev = live.step(Duration::from_millis(20));
+            let hit = ev.iter().any(pred);
+            seen.extend(ev);
+            if hit {
+                break;
+            }
+        }
+        seen
+    };
+    let ev = until(&mut live, &|e| matches!(e, LiveEvent::CatchUp(_)));
+    assert_eq!(live.state(), LiveState::Live, "{ev:?}");
+    // a commit by ann reaches ben as a hint, and he pulls
+    add(
+        &mut a.lib.lock().unwrap(),
+        nb,
+        page,
+        vec![stroke(1, 1.0, "#000000")],
+    );
+    a.sync();
+    let ev = until(&mut live, &|e| matches!(e, LiveEvent::CatchUp(_)));
+    assert!(
+        ev.iter().any(|e| matches!(e, LiveEvent::CatchUp(_))),
+        "{ev:?}"
+    );
+    b.sync();
+    assert_eq!(ink_count(&mut b.lib.lock().unwrap(), nb), 1);
+    // ann removes ben: his socket is closed and the client stops
+    a.account
+        .transport_mut()
+        .shared_remove_member(&space.parse().unwrap(), &b.me.parse().unwrap())
+        .unwrap();
+    let ev = until(&mut live, &|e| matches!(e, LiveEvent::AccessRemoved));
+    assert!(ev.contains(&LiveEvent::AccessRemoved), "{ev:?}");
+    assert_eq!(live.state(), LiveState::Disabled);
+    handle.shutdown();
+}

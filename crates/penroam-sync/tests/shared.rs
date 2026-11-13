@@ -319,18 +319,26 @@ fn independent_offline_strokes_merge_without_duplicates() {
 }
 
 #[test]
-fn concurrent_text_edits_keep_both_versions_until_resolved() {
+fn concurrent_edits_merge_text_and_keep_both_versions_of_a_style_until_resolved() {
     let (_s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
     add(&mut a.lib(), nb, page, vec![text(0x77, "agenda")]);
     settle(&mut [&mut a, &mut b]);
     a.offline(true);
     b.offline(true);
+    // the same block: different words typed, and different colours chosen
+    let colored = |s: &str, c: &str| match text(0x77, s) {
+        Element::Text(mut t) => {
+            t.color = c.into();
+            Element::Text(t)
+        }
+        _ => unreachable!(),
+    };
     edit(
         &mut a.lib(),
         nb,
         page,
         OpKind::ReplaceElements {
-            elements: vec![text(0x77, "agenda: budget")],
+            elements: vec![colored("agenda: budget", "#aa0000")],
         },
     );
     edit(
@@ -338,26 +346,42 @@ fn concurrent_text_edits_keep_both_versions_until_resolved() {
         nb,
         page,
         OpKind::ReplaceElements {
-            elements: vec![text(0x77, "agenda: hiring")],
+            elements: vec![colored("agenda: hiring", "#0000aa")],
         },
     );
     a.offline(false);
     b.offline(false);
     settle(&mut [&mut a, &mut b]);
+    let texts = |d: &Dev| {
+        let p = d.lib().load_page(nb, page).unwrap();
+        p.elements
+            .iter()
+            .find_map(|e| match e {
+                Element::Text(t) if t.id == Uuid::from_u128(0x77) => {
+                    Some((t.text.clone(), t.color.clone()))
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    // the text merges: both people's words are kept
+    let (ta, _) = texts(&a);
+    assert_eq!(ta, texts(&b).0);
+    assert!(ta.contains("budget") && ta.contains("hiring"), "{ta}");
+    // the colour can't merge: both values are kept until someone picks one
     let conflicts = b.space_engine(&space).conflicts(nb).unwrap();
     assert_eq!(conflicts.len(), 1, "{conflicts:?}");
     let c = &conflicts[0];
     let mut values: Vec<String> = std::iter::once(&c.winner_value)
         .chain(c.alternates.iter().map(|x| &x.value))
-        .map(|v| v["text"].as_str().unwrap().to_string())
+        .map(|v| v["color"].as_str().unwrap().to_string())
         .collect();
     values.sort();
-    assert_eq!(values, ["agenda: budget", "agenda: hiring"]);
-    assert_eq!(a.space_engine(&space).conflicts(nb).unwrap().len(), 1);
+    assert_eq!(values, ["#0000aa", "#aa0000"]);
     assert_eq!(b.sync_state(nb), NotebookSyncState::NeedsResolution);
-    // B picks the alternate (the version not shown); everyone converges on it
+    // B picks the alternate; everyone converges on it, and the merged text stays
     let pick = c.alternates[0].op_id;
-    let chosen = c.alternates[0].value["text"].as_str().unwrap().to_string();
+    let chosen = c.alternates[0].value["color"].as_str().unwrap().to_string();
     {
         let mut lib = b.lib.lock().unwrap();
         b.spaces
@@ -368,18 +392,8 @@ fn concurrent_text_edits_keep_both_versions_until_resolved() {
     }
     settle(&mut [&mut a, &mut b]);
     assert!(a.space_engine(&space).conflicts(nb).unwrap().is_empty());
-    let texts = |d: &Dev| {
-        let p = d.lib().load_page(nb, page).unwrap();
-        p.elements
-            .iter()
-            .find_map(|e| match e {
-                Element::Text(t) if t.id == Uuid::from_u128(0x77) => Some(t.text.clone()),
-                _ => None,
-            })
-            .unwrap()
-    };
-    assert_eq!(texts(&a), chosen);
-    assert_eq!(texts(&b), chosen);
+    assert_eq!(texts(&a), (ta.clone(), chosen.clone()));
+    assert_eq!(texts(&b), (ta, chosen));
 }
 
 #[test]
@@ -1549,4 +1563,956 @@ fn a_failing_invitation_list_never_holds_back_membership_changes() {
         .unwrap();
     b.sync();
     assert_eq!(b.state(nb), Some(SharedState::AccessRemoved));
+}
+
+fn set_text(lib: &mut Library, nb: Uuid, page: Uuid, id: u128, s: &str) {
+    edit(
+        lib,
+        nb,
+        page,
+        OpKind::ReplaceElements {
+            elements: vec![text(id, s)],
+        },
+    );
+}
+
+fn text_of(lib: &mut Library, nb: Uuid, page: Uuid, id: u128) -> Option<String> {
+    lib.load_page(nb, page)
+        .unwrap()
+        .elements
+        .iter()
+        .find_map(|e| match e {
+            Element::Text(t) if t.id == Uuid::from_u128(id) => Some(t.text.clone()),
+            _ => None,
+        })
+}
+
+#[test]
+fn typing_at_the_same_spot_in_one_block_keeps_both_peoples_text() {
+    let (s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
+    add(
+        &mut a.lib(),
+        nb,
+        page,
+        vec![text(0x51, "Meeting: | budget |")],
+    );
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(
+        text_of(&mut b.lib(), nb, page, 0x51).as_deref(),
+        Some("Meeting: | budget |")
+    );
+    // both offline (a partition), typing at the same position, several saves each
+    a.offline(true);
+    b.offline(true);
+    for (i, w) in ["A", "Al", "Alpha "].iter().enumerate() {
+        set_text(
+            &mut a.lib(),
+            nb,
+            page,
+            0x51,
+            &format!("Meeting: {w}| budget |"),
+        );
+        let _ = i;
+        a.sync();
+    }
+    for w in ["B", "Be", "Beta "] {
+        set_text(
+            &mut b.lib(),
+            nb,
+            page,
+            0x51,
+            &format!("Meeting: {w}| budget |"),
+        );
+        b.sync();
+    }
+    // reconnect with lost responses (retries, duplicates on the server side)
+    a.offline(false);
+    b.offline(false);
+    s.drop_next_responses(3);
+    settle(&mut [&mut a, &mut b]);
+    let ta = text_of(&mut a.lib(), nb, page, 0x51).unwrap();
+    let tb = text_of(&mut b.lib(), nb, page, 0x51).unwrap();
+    assert_eq!(ta, tb);
+    assert!(
+        ta.contains("Alpha ")
+            && ta.contains("Beta ")
+            && ta.starts_with("Meeting: ")
+            && ta.ends_with("| budget |"),
+        "{ta}"
+    );
+    // the space carries text updates, not whole replaces of the text
+    let ops = a.space_engine(&space).logged_ops(nb).unwrap();
+    assert!(ops.iter().any(|(_, o)| o.body.name() == "textEdited"));
+    assert!(a.space_engine(&space).conflicts(nb).unwrap().is_empty());
+    // a third party joining later reads the same text
+    let c_id = person(&s, "cat");
+    let mut c = Dev::new(&s, &c_id, "c");
+    a.invite(&space, "cat@example.org", Role::Viewer);
+    c.accept();
+    settle(&mut [&mut a, &mut c]);
+    assert_eq!(text_of(&mut c.lib(), nb, page, 0x51).unwrap(), ta);
+}
+
+#[test]
+fn deleting_a_block_while_someone_types_in_it_keeps_the_typing_recoverable() {
+    let (_s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
+    add(&mut a.lib(), nb, page, vec![text(0x52, "draft")]);
+    settle(&mut [&mut a, &mut b]);
+    a.offline(true);
+    b.offline(true);
+    set_text(&mut a.lib(), nb, page, 0x52, "draft, with more");
+    a.sync();
+    edit(
+        &mut b.lib(),
+        nb,
+        page,
+        OpKind::RemoveElements {
+            ids: vec![Uuid::from_u128(0x52)],
+        },
+    );
+    b.sync();
+    a.offline(false);
+    b.offline(false);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(
+        text_of(&mut a.lib(), nb, page, 0x52),
+        text_of(&mut b.lib(), nb, page, 0x52)
+    );
+    let c = b.space_engine(&space).conflicts(nb).unwrap();
+    let kept = c.iter().find(|c| {
+        matches!(
+            c.target,
+            penroam_core::replica::ConflictTarget::EditedWhileDeleted { .. }
+        )
+    });
+    assert_eq!(
+        kept.unwrap().alternates[0].value["text"],
+        "draft, with more"
+    );
+}
+
+#[test]
+fn distinct_strokes_and_an_erase_converge_without_duplicates() {
+    let (_s, mut a, mut b, nb, page, _space) = shared_pair(Role::Editor);
+    a.offline(true);
+    b.offline(true);
+    add(&mut a.lib(), nb, page, vec![stroke(1100, 1.0, "#110000")]);
+    add(&mut b.lib(), nb, page, vec![stroke(1101, 2.0, "#110001")]);
+    // b erases one of the strokes both already had
+    let first = b.lib().load_page(nb, page).unwrap().elements[0].id();
+    edit(
+        &mut b.lib(),
+        nb,
+        page,
+        OpKind::RemoveElements { ids: vec![first] },
+    );
+    a.sync();
+    b.sync();
+    a.offline(false);
+    b.offline(false);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(a.notebook_view(nb), b.notebook_view(nb));
+    let p = a.lib().load_page(nb, page).unwrap();
+    let ids: std::collections::BTreeSet<Uuid> = p.elements.iter().map(|e| e.id()).collect();
+    assert_eq!(ids.len(), p.elements.len(), "no duplicates");
+    assert!(!ids.contains(&first));
+    assert_eq!(ink_count(&mut a.lib(), nb), 3 - 1 + 2);
+    // pressure and points come through unchanged
+    let want = stroke(1101, 2.0, "#110001");
+    let mine = p.elements.iter().find(|e| e.id() == want.id()).unwrap();
+    assert_eq!(mine, &want);
+}
+
+#[test]
+fn a_long_partition_with_work_on_both_sides_converges_from_the_old_cursor() {
+    let (_s, mut a, mut b, nb, page, _space) = shared_pair(Role::Editor);
+    add(&mut a.lib(), nb, page, vec![text(0x53, "log:")]);
+    settle(&mut [&mut a, &mut b]);
+    b.offline(true);
+    for i in 0..40u64 {
+        add(
+            &mut a.lib(),
+            nb,
+            page,
+            vec![stroke(1200 + i, i as f64, "#120000")],
+        );
+        if i % 4 == 0 {
+            let t = text_of(&mut a.lib(), nb, page, 0x53).unwrap();
+            set_text(&mut a.lib(), nb, page, 0x53, &format!("{t} a{i}"));
+        }
+        a.sync();
+    }
+    for i in 0..15u64 {
+        add(
+            &mut b.lib(),
+            nb,
+            page,
+            vec![stroke(1300 + i, i as f64, "#130000")],
+        );
+        let t = text_of(&mut b.lib(), nb, page, 0x53).unwrap();
+        set_text(&mut b.lib(), nb, page, 0x53, &format!("{t} b{i}"));
+        b.sync();
+    }
+    b.offline(false);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(a.notebook_view(nb), b.notebook_view(nb));
+    let t = text_of(&mut a.lib(), nb, page, 0x53).unwrap();
+    assert!(t.contains("a36") && t.contains("b14"), "{t}");
+    assert_eq!(ink_count(&mut a.lib(), nb), 3 + 40 + 15);
+}
+
+// ------------------------------------------------------------------ live --
+
+use penroam_sync::live::{InProcessDialer, LiveClient, LiveEvent, LiveState};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
+
+/// A live client for `d` in `space`, and its offline switch.
+fn live_client(d: &Dev, space: &str) -> (LiveClient, Arc<AtomicBool>) {
+    let root = shared::load_root(secrets_at(&d.root).as_ref(), space)
+        .unwrap()
+        .unwrap();
+    let offline = Arc::new(AtomicBool::new(false));
+    let device = DeviceId::new(d.space_keys_id(space)).unwrap();
+    let dialer = InProcessDialer {
+        server: d.server.clone(),
+        space: space.parse().unwrap(),
+        member: d.me.clone(),
+        device: device.clone(),
+        offline: offline.clone(),
+    };
+    let c = LiveClient::new(
+        space.parse().unwrap(),
+        d.me.clone(),
+        device,
+        root.awareness_key(),
+        true,
+        Box::new(dialer),
+    );
+    (c, offline)
+}
+
+fn pump(c: &mut LiveClient, steps: usize) -> Vec<LiveEvent> {
+    let mut out = Vec::new();
+    for _ in 0..steps {
+        out.extend(c.step(Duration::ZERO));
+    }
+    out
+}
+
+fn catch_ups(ev: &[LiveEvent]) -> Vec<u64> {
+    ev.iter()
+        .filter_map(|e| match e {
+            LiveEvent::CatchUp(s) => Some(*s),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_commit_hint_makes_the_other_member_pull_at_once() {
+    let (_s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
+    let (mut lb, _) = live_client(&b, &space);
+    let ev = pump(&mut lb, 3);
+    assert!(ev.contains(&LiveEvent::State(LiveState::Live)), "{ev:?}");
+    assert_eq!(catch_ups(&ev).len(), 1, "connecting always catches up");
+    add(&mut a.lib(), nb, page, vec![stroke(1400, 1.0, "#140000")]);
+    a.sync();
+    let ev = pump(&mut lb, 5);
+    assert_eq!(catch_ups(&ev).len(), 1, "{ev:?}");
+    // what the app does on a hint: reconcile that space now
+    b.spaces.engine(&space).unwrap().reconcile(&b.lib).unwrap();
+    assert_eq!(ink_count(&mut b.lib(), nb), 4);
+}
+
+#[test]
+fn hints_that_are_lost_or_doubled_never_lose_or_repeat_anything() {
+    let (s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
+    let (mut lb, offline) = live_client(&b, &space);
+    pump(&mut lb, 3);
+    // the server commits but never broadcasts (as if it restarted in between)
+    s.live_drop_next_hints(1);
+    add(&mut a.lib(), nb, page, vec![stroke(1500, 1.0, "#150000")]);
+    a.sync();
+    assert!(catch_ups(&pump(&mut lb, 5)).is_empty());
+    // the connection drops and comes back: it catches up over HTTP anyway
+    offline.store(true, std::sync::atomic::Ordering::SeqCst);
+    let ev = pump(&mut lb, 2);
+    assert!(ev.contains(&LiveEvent::State(LiveState::Offline)), "{ev:?}");
+    offline.store(false, std::sync::atomic::Ordering::SeqCst);
+    let mut ev = Vec::new();
+    for _ in 0..200 {
+        ev.extend(lb.step(Duration::from_millis(10)));
+        if !catch_ups(&ev).is_empty() {
+            break;
+        }
+    }
+    assert_eq!(catch_ups(&ev).len(), 1, "{ev:?}");
+    b.spaces.engine(&space).unwrap().reconcile(&b.lib).unwrap();
+    assert_eq!(ink_count(&mut b.lib(), nb), 4);
+    // doubled hints: one pull
+    s.live_duplicate_next_hints(3);
+    add(&mut a.lib(), nb, page, vec![stroke(1501, 2.0, "#150001")]);
+    a.sync();
+    assert_eq!(catch_ups(&pump(&mut lb, 6)).len(), 1);
+    // and even with no live channel at all, ordinary sync gets it
+    s.live_drop_next_hints(1);
+    add(&mut a.lib(), nb, page, vec![stroke(1502, 3.0, "#150002")]);
+    a.sync();
+    b.sync();
+    assert_eq!(ink_count(&mut b.lib(), nb), 6);
+}
+
+#[test]
+fn removing_a_member_ends_their_live_session_and_the_notebook_goes_read_only() {
+    let (_s, mut a, mut b, nb, _page, space) = shared_pair(Role::Editor);
+    let (mut lb, _) = live_client(&b, &space);
+    pump(&mut lb, 3);
+    assert_eq!(lb.state(), LiveState::Live);
+    a.account
+        .transport_mut()
+        .shared_remove_member(&space.parse().unwrap(), &b.me)
+        .unwrap();
+    let ev = pump(&mut lb, 5);
+    assert!(ev.contains(&LiveEvent::AccessRemoved), "{ev:?}");
+    assert_eq!(lb.state(), LiveState::Disabled);
+    // what the app does then: confirm over HTTP, which stops the space
+    let still = b
+        .with_access(|acc, spaces, lib, access| spaces.confirm_access(acc, lib, access, &space))
+        .unwrap();
+    assert!(!still);
+    assert_eq!(b.state(nb), Some(SharedState::AccessRemoved));
+    assert_eq!(
+        shared::notebook_access(&b.root, nb)
+            .unwrap()
+            .read_only_reason(),
+        Some("accessRemoved")
+    );
+    // and it never dials again
+    assert!(pump(&mut lb, 5).is_empty());
+}
+
+#[test]
+fn awareness_is_sealed_for_members_and_expires() {
+    let (s, a, b, nb, page, space) = shared_pair(Role::Editor);
+    let (mut la, _) = live_client(&a, &space);
+    let (mut lb, _) = live_client(&b, &space);
+    pump(&mut la, 3);
+    pump(&mut lb, 3);
+    let here = serde_json::json!({"page_id": page, "kind": "caret", "caret": [12.5, 40.0], "block_id": null});
+    assert!(la.send_awareness(&here).unwrap());
+    let ev = pump(&mut lb, 5);
+    let peers = ev
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            LiveEvent::Peers(p) => Some(p.clone()),
+            _ => None,
+        })
+        .expect("a peer");
+    assert_eq!(peers.len(), 1);
+    assert_eq!(peers[0].member, a.me);
+    assert_eq!(peers[0].payload, here);
+    // the server relays it but can't read it
+    let presence = s.live_presence(&space.parse().unwrap());
+    assert!(!presence.is_empty());
+    // a client with the wrong key drops it
+    let (mut wrong, _) = live_client(&b, &space);
+    let mut wrong = {
+        let _ = &mut wrong;
+        LiveClient::new(
+            space.parse().unwrap(),
+            b.me.clone(),
+            DeviceId::new(b.space_keys_id(&space)).unwrap(),
+            [7u8; 32],
+            true,
+            Box::new(InProcessDialer {
+                server: s.clone(),
+                space: space.parse().unwrap(),
+                member: b.me.clone(),
+                device: DeviceId::new(b.space_keys_id(&space)).unwrap(),
+                offline: Arc::new(AtomicBool::new(false)),
+            }),
+        )
+    };
+    pump(&mut wrong, 3);
+    // let the burst budget refill
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(la.send_awareness(&here).unwrap());
+    assert!(
+        wrong.peers().is_empty()
+            || pump(&mut wrong, 5)
+                .iter()
+                .all(|e| !matches!(e, LiveEvent::Peers(p) if !p.is_empty()))
+    );
+    // presence off: nothing is sent
+    la.set_presence(false);
+    pump(&mut la, 3);
+    assert!(!la.send_awareness(&here).unwrap());
+    let _ = nb;
+}
+
+#[test]
+fn two_members_rewriting_the_same_block_offline_lose_no_character() {
+    let (_s, mut a, mut b, nb, page, _space) = shared_pair(Role::Editor);
+    add(&mut a.lib(), nb, page, vec![text(0x54, "first draft")]);
+    settle(&mut [&mut a, &mut b]);
+    a.offline(true);
+    b.offline(true);
+    set_text(&mut a.lib(), nb, page, 0x54, "agenda: budget");
+    a.sync();
+    set_text(&mut b.lib(), nb, page, 0x54, "agenda: hiring");
+    b.sync();
+    a.offline(false);
+    b.offline(false);
+    settle(&mut [&mut a, &mut b]);
+    let ta = text_of(&mut a.lib(), nb, page, 0x54).unwrap();
+    assert_eq!(Some(&ta), text_of(&mut b.lib(), nb, page, 0x54).as_ref());
+    assert!(
+        ta.contains("agenda: budget") && ta.contains("agenda: hiring"),
+        "{ta}"
+    );
+}
+
+/// A live link that answers with fixed frames, for forged or misbehaving servers.
+struct ScriptedLink(std::collections::VecDeque<penroam_sync_protocol::live::ServerFrame>);
+
+impl penroam_sync::live::LiveLink for ScriptedLink {
+    fn send(&mut self, _: &penroam_sync_protocol::live::ClientFrame) -> Result<(), String> {
+        Ok(())
+    }
+    fn recv(
+        &mut self,
+        _: Duration,
+    ) -> Result<Option<penroam_sync_protocol::live::ServerFrame>, String> {
+        match self.0.pop_front() {
+            Some(f) => Ok(Some(f)),
+            None => Ok(None),
+        }
+    }
+    fn close(&mut self) {}
+}
+
+/// Welcomes every dial, then sends `after` (counting dials).
+struct ScriptedDialer {
+    after: Vec<penroam_sync_protocol::live::ServerFrame>,
+    dials: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl penroam_sync::live::LiveDialer for ScriptedDialer {
+    fn dial(
+        &mut self,
+        _: &penroam_sync_protocol::live::Hello,
+    ) -> Result<
+        (
+            penroam_sync_protocol::live::Welcome,
+            Box<dyn penroam_sync::live::LiveLink>,
+        ),
+        penroam_sync::live::DialError,
+    > {
+        self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let w = penroam_sync_protocol::live::Welcome {
+            session_id: "ls-test".parse().unwrap(),
+            server_seq: 0,
+            heartbeat_ms: 5_000,
+            max_frame_bytes: 16 * 1024,
+            role: Role::Editor,
+        };
+        Ok((w, Box::new(ScriptedLink(self.after.clone().into()))))
+    }
+}
+
+fn scripted(
+    after: Vec<penroam_sync_protocol::live::ServerFrame>,
+) -> (LiveClient, Arc<std::sync::atomic::AtomicUsize>) {
+    let dials = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let c = LiveClient::new(
+        "s-space".parse().unwrap(),
+        "ben".parse().unwrap(),
+        DeviceId::new("d1").unwrap(),
+        [1u8; 32],
+        true,
+        Box::new(ScriptedDialer {
+            after,
+            dials: dials.clone(),
+        }),
+    );
+    (c, dials)
+}
+
+#[test]
+fn a_live_revocation_notice_alone_never_removes_access() {
+    let (_s, mut a, mut b, nb, _page, space) = shared_pair(Role::Editor);
+    // a notice that ben was removed, from something that isn't the server's HTTP answer
+    let (mut forged, _) = scripted(vec![penroam_sync_protocol::live::ServerFrame::Bye(
+        penroam_sync_protocol::live::Bye {
+            code: penroam_sync_protocol::live::ByeCode::AccessRevoked,
+            retry_after_ms: None,
+        },
+    )]);
+    let ev = pump(&mut forged, 3);
+    assert!(ev.contains(&LiveEvent::AccessRemoved));
+    // the app confirms over HTTP: still a member, so nothing changes
+    let still = b
+        .with_access(|acc, spaces, lib, access| spaces.confirm_access(acc, lib, access, &space))
+        .unwrap();
+    assert!(still);
+    assert_eq!(b.state(nb), Some(SharedState::Active));
+    // and the owner's notebook can't be touched this way either
+    let still = a
+        .with_access(|acc, spaces, lib, access| spaces.confirm_access(acc, lib, access, &space))
+        .unwrap();
+    assert!(still);
+    assert_eq!(a.state(nb), Some(SharedState::Active));
+}
+
+#[test]
+fn a_server_that_says_bye_right_after_welcome_is_not_redialled_every_second() {
+    let (mut c, dials) = scripted(vec![penroam_sync_protocol::live::ServerFrame::Bye(
+        penroam_sync_protocol::live::Bye {
+            code: penroam_sync_protocol::live::ByeCode::ServerRestart,
+            retry_after_ms: None,
+        },
+    )]);
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_millis(3000) {
+        c.step(Duration::from_millis(20));
+    }
+    // without growing backoff this would be ~3 dials a second at least
+    let n = dials.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(n <= 6, "{n} dials in 3 s");
+    // each short-lived link counts as a failure, so the backoff keeps growing
+    assert!(n >= 2, "{n}");
+    assert!(
+        c.backoff_attempt() as usize >= n,
+        "attempt {} after {n} dials",
+        c.backoff_attempt()
+    );
+}
+
+// -------------------------------------------------------------- comments --
+
+use penroam_core::comment::{quote_hash, CommentAnchor};
+use penroam_sync::comments::CommentIntent;
+
+/// What the app does for a new thread: submit, then sync the comment stream.
+fn comment(d: &mut Dev, space: &str, intent: CommentIntent) -> Uuid {
+    let space = space.to_string();
+    d.with_access(|acc, spaces, lib, _| {
+        let roster = spaces.refresh_roster(acc, &space).unwrap().unwrap();
+        let cs = spaces.comment_stream(acc, lib, &space).unwrap().unwrap();
+        let id = cs
+            .submit(
+                intent,
+                roster.may_comment(),
+                roster.is_owner(),
+                penroam_core::now_ms(),
+            )
+            .unwrap();
+        let _ = spaces.sync_comments(acc, lib, &space);
+        id
+    })
+}
+
+fn threads(d: &mut Dev, space: &str) -> Vec<penroam_core::comment::CommentThread> {
+    let space = space.to_string();
+    d.with_access(|acc, spaces, lib, _| {
+        spaces
+            .comment_stream(acc, lib, &space)
+            .unwrap()
+            .map(|cs| cs.threads())
+            .unwrap_or_default()
+    })
+}
+
+#[test]
+fn a_comment_on_text_reaches_the_other_member_and_follows_the_text() {
+    let (_s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
+    add(
+        &mut a.lib(),
+        nb,
+        page,
+        vec![text(0x61, "check the budget numbers")],
+    );
+    settle(&mut [&mut a, &mut b]);
+    // ann anchors a comment to "budget" (UTF-16 offsets 10..16)
+    let el = Uuid::from_u128(0x61);
+    let (start, end) = {
+        let rep = a.spaces.engine(&space).unwrap().replica_of(nb).unwrap();
+        (
+            rep.text_sticky(page, el, 10, true).unwrap(),
+            rep.text_sticky(page, el, 16, false).unwrap(),
+        )
+    };
+    let anchor = CommentAnchor::TextRange {
+        page_id: page,
+        element_id: el,
+        start: start.clone(),
+        end: end.clone(),
+        quote: "budget".into(),
+        quote_hash: quote_hash("budget"),
+        fallback_rect: None,
+    };
+    let thread = comment(
+        &mut a,
+        &space,
+        CommentIntent::CreateThread {
+            anchor,
+            body: format!("@[{}] please look", b.me),
+        },
+    );
+    settle(&mut [&mut a, &mut b]);
+    let tb = threads(&mut b, &space);
+    assert_eq!(tb.len(), 1);
+    assert_eq!(tb[0].thread_id, thread);
+    assert_eq!(tb[0].comments[0].author, a.me.to_string());
+    // someone types before the word: the anchor still finds it on ben's device
+    set_text(
+        &mut b.lib(),
+        nb,
+        page,
+        0x61,
+        "please check the budget numbers",
+    );
+    settle(&mut [&mut a, &mut b]);
+    for d in [&mut a, &mut b] {
+        let rep = d.spaces.engine(&space).unwrap().replica_of(nb).unwrap();
+        let s = rep.text_offset(page, el, &start).unwrap();
+        let e = rep.text_offset(page, el, &end).unwrap();
+        assert_eq!((s, e), (17, 23));
+    }
+    // ben replies; ann gets it
+    comment(
+        &mut b,
+        &space,
+        CommentIntent::Reply {
+            thread_id: thread,
+            body: "on it".into(),
+            reply_to: None,
+        },
+    );
+    settle(&mut [&mut a, &mut b]);
+    let ta = threads(&mut a, &space);
+    assert_eq!(ta[0].comments.len(), 2);
+    assert_eq!(ta[0].comments[1].author, b.me.to_string());
+}
+
+#[test]
+fn a_live_comment_hint_arrives_and_a_commenter_comments_without_editing() {
+    let (s, mut a, _b, nb, page, space) = shared_pair(Role::Editor);
+    let c_id = person(&s, "cat");
+    let mut c = Dev::new(&s, &c_id, "c");
+    a.invite(&space, "cat@example.org", Role::Commenter);
+    c.accept();
+    settle(&mut [&mut a, &mut c]);
+    assert_eq!(c.state(nb), Some(SharedState::Active));
+    let (mut la, _) = live_client(&a, &space);
+    pump(&mut la, 3);
+    // the commenter's document edit never leaves the device...
+    let sid: AccountId = space.parse().unwrap();
+    let before = s.op_count(&sid);
+    add(&mut c.lib(), nb, page, vec![stroke(1600, 1.0, "#160000")]);
+    settle(&mut [&mut c]);
+    assert_eq!(s.op_count(&sid), before);
+    // ...but a comment does, and ann's live channel hears about it
+    comment(
+        &mut c,
+        &space,
+        CommentIntent::CreateThread {
+            anchor: CommentAnchor::PagePoint {
+                page_id: page,
+                x: 10.0,
+                y: 20.0,
+            },
+            body: "nice".into(),
+        },
+    );
+    let ev = pump(&mut la, 6);
+    assert!(
+        ev.iter()
+            .any(|e| matches!(e, LiveEvent::CommentsCatchUp(_))),
+        "{ev:?}"
+    );
+    let space2 = space.clone();
+    a.with_access(|acc, spaces, lib, _| spaces.sync_comments(acc, lib, &space2))
+        .unwrap();
+    assert_eq!(threads(&mut a, &space).len(), 1);
+}
+
+#[test]
+fn comments_go_into_an_export_only_when_asked_and_never_come_back_in() {
+    let (_s, mut a, _b, nb, page, space) = shared_pair(Role::Editor);
+    comment(
+        &mut a,
+        &space,
+        CommentIntent::CreateThread {
+            anchor: CommentAnchor::PagePoint {
+                page_id: page,
+                x: 1.0,
+                y: 2.0,
+            },
+            body: "secret remark".into(),
+        },
+    );
+    let json = serde_json::to_vec(&threads(&mut a, &space)).unwrap();
+    let mut with = std::io::Cursor::new(Vec::new());
+    a.lib()
+        .export_archive_with(
+            nb,
+            &mut with,
+            "test",
+            &penroam_storage::ExportOptions {
+                extra_entries: vec![(penroam_storage::COMMENTS_ENTRY.into(), json)],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let mut without = std::io::Cursor::new(Vec::new());
+    a.lib().export_archive(nb, &mut without, "test").unwrap();
+    let has = |b: &[u8]| {
+        b.windows(b"secret remark".len())
+            .any(|w| w == b"secret remark")
+            || b.windows(penroam_storage::COMMENTS_ENTRY.len())
+                .any(|w| w == penroam_storage::COMMENTS_ENTRY.as_bytes())
+    };
+    assert!(has(with.get_ref()));
+    assert!(!has(without.get_ref()));
+    // importing it gives an ordinary notebook: no comments, nothing shared, no warning about it
+    let dir = tempfile::tempdir().unwrap();
+    let mut other = Library::open(dir.path()).unwrap();
+    with.set_position(0);
+    let r = other.import_archive(with).unwrap();
+    assert!(
+        r.warnings.iter().all(|w| !w.contains("comments")),
+        "{:?}",
+        r.warnings
+    );
+    assert!(NotebookOwners::load(dir.path()).unwrap().shared.is_empty());
+}
+
+// ------------------------------------------------------------ attribution --
+
+#[test]
+fn every_member_learns_who_pushed_each_operation_and_a_removal_refetches() {
+    use penroam_sync::attribution::{classify, AttributionStore, AuthorKind, Stream};
+    let (s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
+    add(&mut b.lib(), nb, page, vec![stroke(1700, 1.0, "#170000")]);
+    settle(&mut [&mut a, &mut b]);
+    assert!(a.spaces.history_available);
+    let dir = a.spaces.engine(&space).unwrap().store.dir.clone();
+    let store = AttributionStore::open(&dir).unwrap();
+    let ops = a.spaces.engine(&space).unwrap().logged_ops(nb).unwrap();
+    assert!(!store.is_empty());
+    let list = a.spaces.members.get(&space).unwrap().clone();
+    let ctx = penroam_sync::attribution::AuthorContext::for_space(&list, None, Default::default());
+    let mut by_ben = 0;
+    for (_, op) in &ops {
+        let who = classify(op, store.get(Stream::Ops, op.id), &ctx);
+        assert_ne!(who.kind, AuthorKind::Unverified, "{who:?}");
+        assert_ne!(
+            who.kind,
+            AuthorKind::Unknown,
+            "every pushed op is attributed"
+        );
+        if who.account.as_deref() == Some(b.me.as_str()) {
+            by_ben += 1;
+        }
+    }
+    assert!(by_ben >= 1, "ben's stroke is his");
+    // ben is removed: the next pass fetches everything again (an erasure would rename him)
+    let sid: AccountId = space.parse().unwrap();
+    a.account
+        .transport_mut()
+        .shared_remove_member(&sid, &b.me)
+        .unwrap();
+    let _ = s;
+    let space2 = space.clone();
+    let n = a
+        .with_access(|acc, spaces, _, _| {
+            spaces.refresh_roster(acc, &space2).unwrap();
+            spaces.sync_attribution(acc, &space2)
+        })
+        .unwrap();
+    assert!(n >= ops.len(), "refetched from the start: {n}");
+}
+
+#[test]
+fn a_comment_written_offline_waits_and_is_sent_once_online_even_after_a_restart() {
+    use penroam_sync::comments::Delivery;
+    let (_s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
+    // ben read the member list once (any comment sync does), then goes offline
+    let sp = space.clone();
+    b.with_access(|acc, spaces, _, _| spaces.refresh_roster(acc, &sp).map(|_| ()))
+        .unwrap();
+    b.offline(true);
+    // as after a restart: nothing in memory, only what was saved
+    b.spaces.members.clear();
+    b.spaces.rosters.clear();
+    let sp = space.clone();
+    let id = b.with_access(|acc, spaces, lib, _| {
+        let roster = spaces.roster(acc, &sp).unwrap().expect("saved member list");
+        assert!(roster.may_comment());
+        let cs = spaces.comment_stream(acc, lib, &sp).unwrap().unwrap();
+        let id = cs
+            .submit(
+                CommentIntent::CreateThread {
+                    anchor: CommentAnchor::PagePoint {
+                        page_id: page,
+                        x: 5.0,
+                        y: 5.0,
+                    },
+                    body: "written on the train".into(),
+                },
+                roster.may_comment(),
+                roster.is_owner(),
+                penroam_core::now_ms(),
+            )
+            .unwrap();
+        assert!(spaces.sync_comments(acc, lib, &sp).is_err(), "offline");
+        id
+    });
+    let waiting = b.with_access(|acc, spaces, lib, _| {
+        let cs = spaces
+            .comment_stream(acc, lib, &space.clone())
+            .unwrap()
+            .unwrap();
+        (
+            cs.comment_delivery(id),
+            cs.threads().iter().any(|t| t.thread_id == id),
+        )
+    });
+    assert_eq!(
+        waiting,
+        (Delivery::Waiting, true),
+        "listed, waiting to send"
+    );
+    b.offline(false);
+    settle(&mut [&mut a, &mut b]);
+    let sp = space.clone();
+    let sent = b.with_access(|acc, spaces, lib, _| {
+        let cs = spaces.comment_stream(acc, lib, &sp).unwrap().unwrap();
+        cs.comment_delivery(id)
+    });
+    assert_eq!(sent, Delivery::Sent);
+    let ta = threads(&mut a, &space);
+    assert!(ta.iter().any(|t| t.thread_id == id), "ann has it: {ta:?}");
+    let _ = nb;
+}
+
+#[test]
+fn a_comment_payload_on_the_document_stream_is_quarantined() {
+    let (_s, mut a, mut b, nb, _page, space) = shared_pair(Role::Editor);
+    let before = a.notebook_view(nb);
+    let mut prcm = b"PRCM".to_vec();
+    prcm.extend_from_slice(&[1, 0, 0, 0, 0, 0]);
+    b.space_engine(&space)
+        .push_raw_for_tests(nb, &prcm)
+        .unwrap();
+    a.sync();
+    let st = a.space_engine(&space).status(0);
+    assert_eq!(st.quarantined, 1, "{st:?}");
+    assert!(a
+        .space_engine(&space)
+        .events
+        .iter()
+        .any(|e| e.contains("comment operation on the document stream")));
+    assert_eq!(a.notebook_view(nb), before);
+}
+
+#[test]
+fn an_older_client_parks_text_edits_keeps_uploading_and_converges_after_updating() {
+    let (_s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
+    add(&mut a.lib(), nb, page, vec![text(0x71, "draft")]);
+    settle(&mut [&mut a, &mut b]);
+    // ben runs a build that knows operation schemas up to 5 (no text CRDT)
+    b.space_engine(&space).max_op_schema_for_tests = Some(5);
+    set_text(&mut a.lib(), nb, page, 0x71, "draft two");
+    a.sync();
+    add(&mut b.lib(), nb, page, vec![stroke(1800, 1.0, "#180000")]);
+    b.sync();
+    assert_eq!(
+        b.space_engine(&space).phase(),
+        penroam_sync::Phase::NeedsUpgrade
+    );
+    assert!(
+        b.space_engine(&space).status(0).pending_remote >= 1,
+        "parked, not lost"
+    );
+    a.sync();
+    assert_eq!(
+        ink_count(&mut a.lib(), nb),
+        4,
+        "ben's own outbox still uploads"
+    );
+    // the update
+    b.space_engine(&space).max_op_schema_for_tests = None;
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(a.notebook_view(nb), b.notebook_view(nb));
+    assert!(b.notebook_view(nb).to_string().contains("draft two"));
+}
+
+#[test]
+fn keeping_the_shown_text_never_drops_typing_it_had_not_received() {
+    let (_s, mut a, mut b, nb, page, space) = shared_pair(Role::Editor);
+    add(&mut a.lib(), nb, page, vec![text(0x81, "base")]);
+    settle(&mut [&mut a, &mut b]);
+    // two whole-text writes at once (what older clients send): a content conflict
+    for (d, body) in [(&mut a, "from ann"), (&mut b, "from ben")] {
+        d.space_engine(&space)
+            .append_fixed(
+                Uuid::new_v4(),
+                penroam_core::now_ms(),
+                DocumentOperation::ElementsReplaced {
+                    notebook_id: nb,
+                    page_id: page,
+                    elements: vec![text(0x81, body)],
+                    changed: vec![penroam_core::operation::groups::CONTENT],
+                },
+            )
+            .unwrap();
+        d.space_engine(&space).save_state().unwrap();
+    }
+    settle(&mut [&mut a, &mut b]);
+    let (target, winner) = {
+        let c = b.space_engine(&space).conflicts(nb).unwrap();
+        assert_eq!(c.len(), 1, "{c:?}");
+        (c[0].target.clone(), c[0].winner)
+    };
+    // ann types into the shown text and uploads it; ben, who hasn't pulled it, keeps the shown
+    // version
+    let shown = match b
+        .lib()
+        .load_page(nb, page)
+        .unwrap()
+        .elements
+        .iter()
+        .find(|e| e.id() == Uuid::from_u128(0x81))
+    {
+        Some(Element::Text(t)) => t.text.clone(),
+        _ => unreachable!(),
+    };
+    set_text(&mut a.lib(), nb, page, 0x81, &format!("{shown} TYPED"));
+    a.sync();
+    b.offline(true);
+    {
+        let mut lib = b.lib.lock().unwrap();
+        b.spaces
+            .engine(&space)
+            .unwrap()
+            .resolve_conflict(&mut lib, nb, &target, winner)
+            .unwrap();
+    }
+    b.offline(false);
+    settle(&mut [&mut a, &mut b]);
+    settle(&mut [&mut a, &mut b]);
+    assert_eq!(a.notebook_view(nb), b.notebook_view(nb));
+    // the typing is in the shown text or kept as a version to choose; never gone
+    for d in [&mut a, &mut b] {
+        let view = d.notebook_view(nb).to_string();
+        let alts = serde_json::to_string(&d.space_engine(&space).conflicts(nb).unwrap()).unwrap();
+        assert!(
+            view.contains("TYPED") || alts.contains("TYPED"),
+            "lost: {view} / {alts}"
+        );
+    }
 }

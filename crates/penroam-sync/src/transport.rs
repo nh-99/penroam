@@ -124,6 +124,12 @@ pub trait SyncTransport: Send {
     fn checkpoint_put(&mut self, rec: &CheckpointRecord) -> TResult<()>;
     /// `GET /v1/checkpoints/latest`; `None` when the account has none yet.
     fn checkpoint_latest(&mut self) -> TResult<Option<CheckpointRecord>>;
+    /// `GET /v1/checkpoints/previous` (`history.v1`): the checkpoint before the latest, for
+    /// recovering when the latest is damaged; `None` when there is none or the server doesn't
+    /// keep it.
+    fn checkpoint_previous(&mut self) -> TResult<Option<CheckpointRecord>> {
+        Ok(None)
+    }
     /// `GET /v1/account/key`: the stored root secret; `None` when nothing is stored. Vault
     /// accounts always fail with `forbidden`.
     fn account_key_get(&mut self) -> TResult<Option<AccountKeyDocument>>;
@@ -456,6 +462,14 @@ mod in_process {
                 Err(e) => Err(map(e)),
             }
         }
+        fn checkpoint_previous(&mut self) -> TResult<Option<CheckpointRecord>> {
+            self.up()?;
+            match self.server.checkpoint_previous(self.caller(), &self.device) {
+                Ok(r) => Ok(Some(r)),
+                Err(RequestError::Api(b)) if b.code == ErrorCode::NotFound => Ok(None),
+                Err(e) => Err(map(e)),
+            }
+        }
         fn account_key_get(&mut self) -> TResult<Option<AccountKeyDocument>> {
             self.up()?;
             match self.server.account_key_get(&self.account) {
@@ -666,6 +680,17 @@ mod http {
         /// Replaces the bearer token (after re-authentication).
         pub fn set_token(&mut self, token: String) {
             self.token = token;
+        }
+
+        /// The bearer token in use (for opening the live channel with the same session). Keep it
+        /// in memory only.
+        pub fn token(&self) -> &str {
+            &self.token
+        }
+
+        /// The server's base URL, without a trailing slash.
+        pub fn base_url(&self) -> &str {
+            &self.base
         }
 
         /// Development test server only: obtain a session token
@@ -964,6 +989,18 @@ mod http {
                 Err(e) => Err(e),
             }
         }
+        fn checkpoint_previous(&mut self) -> TResult<Option<CheckpointRecord>> {
+            match self.get_json(routes::CHECKPOINT_PREVIOUS) {
+                Ok(r) => Ok(Some(r)),
+                // a server without `history.v1` has no such route
+                Err(TransportError::Api(b))
+                    if matches!(b.code, ErrorCode::NotFound | ErrorCode::Forbidden) =>
+                {
+                    Ok(None)
+                }
+                Err(e) => Err(e),
+            }
+        }
         fn account_key_get(&mut self) -> TResult<Option<AccountKeyDocument>> {
             match self.get_json(routes::ACCOUNT_KEY) {
                 Ok(d) => Ok(Some(d)),
@@ -1110,6 +1147,68 @@ mod http {
         fn invitation_cancel(&mut self, inv: &InvitationId) -> TResult<()> {
             self.send_json::<()>("DELETE", &inv_path(routes::INVITATION, inv), None)
                 .map(|_| ())
+        }
+    }
+
+    /// The comment and notification routes, over the same server and session as this transport
+    /// (the space's device session for comments, the account's for notifications).
+    impl crate::comments::CommentTransport for HttpTransport {
+        fn comment_push(&mut self, frame: Vec<u8>) -> TResult<PushOpsResponse> {
+            self.comments().comment_push(frame)
+        }
+        fn comment_pull(
+            &mut self,
+            req: &PullOpsRequest,
+            limits: &Limits,
+        ) -> TResult<crate::comments::PulledComments> {
+            self.comments().comment_pull(req, limits)
+        }
+        fn comment_ack(&mut self, req: &AckRequest) -> TResult<()> {
+            self.comments().comment_ack(req)
+        }
+        fn notifications_list(
+            &mut self,
+            cursor: Option<&penroam_sync_protocol::Cursor>,
+            limit: u32,
+        ) -> TResult<penroam_sync_protocol::comments::NotificationPage> {
+            self.comments().notifications_list(cursor, limit)
+        }
+        fn notification_update(
+            &mut self,
+            id: &penroam_sync_protocol::NotificationId,
+            read: bool,
+        ) -> TResult<penroam_sync_protocol::comments::NotificationRecord> {
+            self.comments().notification_update(id, read)
+        }
+        fn notification_prefs_get(
+            &mut self,
+        ) -> TResult<penroam_sync_protocol::comments::NotificationPrefs> {
+            self.comments().notification_prefs_get()
+        }
+        fn notification_prefs_put(
+            &mut self,
+            prefs: &penroam_sync_protocol::comments::NotificationPrefs,
+        ) -> TResult<()> {
+            self.comments().notification_prefs_put(prefs)
+        }
+    }
+
+    impl HttpTransport {
+        fn comments(&self) -> crate::comments::HttpCommentTransport {
+            crate::comments::HttpCommentTransport::new(&self.base, self.token.clone())
+        }
+    }
+
+    // attribution uses this transport's base URL and session, like comments
+    impl crate::attribution::AttributionTransport for HttpTransport {
+        fn attribution_page(
+            &mut self,
+            stream: crate::attribution::Stream,
+            from_seq: u64,
+            limit: u32,
+        ) -> TResult<penroam_sync_protocol::history::AttributionPage> {
+            crate::attribution::HttpAttribution::new(&self.base, self.token.clone())
+                .attribution_page(stream, from_seq, limit)
         }
     }
 

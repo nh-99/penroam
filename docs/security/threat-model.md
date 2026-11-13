@@ -299,6 +299,12 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
   remove the member).
 * **Low: a member can use up a space's device allowance** by registering many devices; servers are
   adding a cap per member.
+* **Live presence in shared notebooks.** Awareness frames (page, caret, selection, viewport) are
+  sealed under a key derived from the space's root, with the space and sender device as
+  associated data; the server relays them to the space's other sessions without reading them, but
+  sees who is connected and when. A member who turns "share presence" off sends none. The live
+  channel never carries notebook content or writes anything: content still travels only as
+  encrypted operations over HTTP.
 * **Which devices are revoked is the server's word.** Owner devices rotate out the devices the
   server reports as revoked in a space, so a hostile server can make an owner rotate a member out;
   it could refuse that member service anyway. It can't add a device to a space without the root.
@@ -317,6 +323,26 @@ Exact constructions: [`../protocol/sync-protocol-v1.md`](../protocol/sync-protoc
   notebook in the library or a vault, or belongs to another space, and a space maps to exactly one
   notebook (`a_rewritten_sealed_title_can_never_pull_another_notebook_into_a_space`). A forged
   title can still make an invitee's first join wait forever, which the owner fixes by renaming.
+* **The removed-device cutoff covers document operations only.** When a member's devices are
+  removed from a space's key log, their later document operations are refused by every client
+  (the cutoff is the last sequence the key log allows). Comments are not covered yet: a comment
+  from a removed device is accepted on its signature, and only the server's refusal stops a removed
+  device from pushing new comments (the server already holds the space's root). A cutoff for the
+  comment stream is a planned key-log addition.
+* **Hostile text edits are checked before they are decoded.** In a shared notebook a text edit
+  (`textEdited`) is a Yrs update from another member. The Yrs decoder reserves memory for the
+  counts an update declares, so a few crafted bytes could make a device allocate and clear
+  gigabytes. Every remote edit is first walked by a strict pre-scan of the encoding
+  (`penroam_core::textcrdt`): one client at most, only plain-text structures, every count and
+  length within the bytes that remain, no trailing bytes. Only then is it decoded, on a copy, with
+  panics contained; it must write only under its author's client id and leave the text plain. A
+  failure while applying an edit that passed rebuilds that block's text without it
+  (`updates_declaring_huge_counts_are_refused_before_decoding`,
+  `a_panic_inside_yrs_mid_sequence_leaves_the_text_as_if_that_edit_never_came`).
+* **An export with authors names accounts, not people.** "Include authors" writes each element's
+  authors as account ids and kinds only; members' email addresses never leave the app this way.
+  Account ids are stable, so whoever gets the file can tell authors apart and match them with
+  other exports.
 * **Older clients and downgrades.** A client that doesn't know operation schema 5 parks the
   `notebookShared` marker and pauses with "needs an update" (nothing is lost), but until it is
   updated it keeps uploading its own edits of that notebook to the account, where only an updated

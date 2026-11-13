@@ -1,0 +1,21 @@
+{
+  "edits": [
+    {
+      "device": "00000000-0000-0000-0000-000000000001",
+      "update": "AQGZwtq59tSnAwDEqZq--8LSmwUFqZq--8LSmwUGAkEgAA"
+    },
+    {
+      "device": "00000000-0000-0000-0000-000000000002",
+      "update": "AQGLsazXp4OxAQDEqZq--8LSmwU3qZq--8LSmwU4ATMBqZq--8LSmwUBNwE"
+    }
+  ],
+  "encoding": "yrs update v1, base64url",
+  "expected": "# Lab A 🧪\n- [x] $\\lambda$\n| a | b |\n|---|---|\n| 1 | =A2*3 |\n日本 שלום 👩🏽‍🔬",
+  "format": "penroam-text-crdt-vectors",
+  "genesis": {
+    "op": "40000000-0000-0000-0000-000000000001",
+    "text": "# Lab 🧪\n- [x] $\\lambda$\n| a | b |\n|---|---|\n| 1 | =A2*2 |\n日本 שלום 👩🏽‍🔬",
+    "update": "AQGpmr77wtKbBQAEAQR0ZXh0XCMgTGFiIPCfp6oKLSBbeF0gJFxsYW1iZGEkCnwgYSB8IGIgfAp8LS0tfC0tLXwKfCAxIHwgPUEyKjIgfArml6XmnKwg16nXnNeV150g8J-RqfCfj73igI3wn5SsAA"
+  },
+  "yrs": "0.28.1"
+}

@@ -75,6 +75,8 @@ privately, as [SECURITY.md](../SECURITY.md) describes.
   promise.
 * [formats/locked-vault.md](formats/locked-vault.md): how a locked vault is stored on a device.
 * [formats/handwriting-model.md](formats/handwriting-model.md): the handwriting model bundle.
+* [formats/comments.md](formats/comments.md): comment operations, their encoding, merge rules,
+  anchors and the comment log on a device.
 * [protocol/sync-protocol-v1.md](protocol/sync-protocol-v1.md): the sync protocol.
 
 **Security**

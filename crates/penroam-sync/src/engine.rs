@@ -66,6 +66,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use penroam_core::folder::LIBRARY_STREAM_ID;
+use penroam_core::operation::groups;
 use penroam_core::operation::{validate_body, DocumentOperation, LocalOperation, OperationRef};
 use penroam_core::replica::{Conflict, ConflictTarget, Replica};
 use penroam_core::{Element, Notebook, OpKind, OperationBatch, Page, PageOperation};
@@ -193,9 +194,15 @@ pub enum Phase {
     /// This account's access to a shared notebook was removed. The engine stops; the notebook
     /// and every change not uploaded yet stay on this device.
     AccessRemoved,
+    /// Catching up from a checkpoint after a long time offline (the server compacted the
+    /// history this device still needed). Unsent changes are kept and uploaded afterwards.
+    NeedsCatchUp,
     /// Any other failure; see `last_error`.
     Error,
 }
+
+/// What [`SyncEngine::set_phase_hook`] calls with the status.
+pub type PhaseHook = Box<dyn FnMut(&SyncStatus) + Send>;
 
 /// A snapshot of sync state for the UI ([`SyncEngine::status`]).
 #[derive(Debug, Clone, Serialize)]
@@ -383,6 +390,12 @@ pub struct SyncEngine<T: SyncTransport> {
     /// Test knob: behave like a build that applies operation schemas only up to this one.
     #[doc(hidden)]
     pub max_op_schema_for_tests: Option<u16>,
+    /// Called when the phase changes in the middle of a reconcile (see
+    /// [`SyncEngine::set_phase_hook`]).
+    phase_hook: Option<PhaseHook>,
+    /// A checkpoint recovery started and hasn't finished; a retryable failure keeps
+    /// [`Phase::NeedsCatchUp`] showing until it does.
+    catching_up: bool,
 }
 
 /// Wall clock in ms (display only; never used for ordering).
@@ -473,6 +486,27 @@ impl<T: SyncTransport> SyncEngine<T> {
             attempt: 0,
             events: Vec::new(),
             max_op_schema_for_tests: None,
+            phase_hook: None,
+            catching_up: false,
+        }
+    }
+
+    /// Calls `hook` with the status when the phase changes in the middle of a reconcile, so a
+    /// UI can show it while the reconcile still runs (today: [`Phase::NeedsCatchUp`] while
+    /// recovering from a checkpoint). Its `queued` leaves out journal changes not copied into
+    /// the sync log yet. The status at the end of a reconcile is read with
+    /// [`SyncEngine::status`] as before.
+    pub fn set_phase_hook(&mut self, hook: PhaseHook) {
+        self.phase_hook = Some(hook);
+    }
+
+    fn set_phase_now(&mut self, phase: Phase) {
+        self.phase = phase;
+        if self.phase_hook.is_some() {
+            let s = self.status(self.store.state.ingested_lib_seq);
+            if let Some(h) = self.phase_hook.as_mut() {
+                h(&s);
+            }
         }
     }
 
@@ -1138,7 +1172,7 @@ impl<T: SyncTransport> SyncEngine<T> {
     }
 
     /// Records a diagnostic event (bounded; callers must not pass content or secrets).
-    fn event(&mut self, e: impl Into<String>) {
+    pub(crate) fn event(&mut self, e: impl Into<String>) {
         if self.events.len() > 500 {
             self.events.drain(..100);
         }
@@ -1551,6 +1585,25 @@ impl<T: SyncTransport> SyncEngine<T> {
                     continue;
                 }
             }
+            // In a shared notebook, a text block's new text travels as a text CRDT update, so
+            // people typing in the same block at once all keep their text.
+            if matches!(self.scope, Scope::Shared(_)) {
+                if let DocumentOperation::ElementsReplaced { .. } = &op.body {
+                    let (texts, rest) = self.text_edits_of(op.body.clone())?;
+                    for (k, body) in texts.into_iter().enumerate() {
+                        n += self.append_local(
+                            text_edit_id(op.id, k),
+                            op.at,
+                            body,
+                            Some(op.local_sequence),
+                        )?;
+                    }
+                    if let Some(body) = rest {
+                        n += self.append_local(op.id, op.at, body, Some(op.local_sequence))?;
+                    }
+                    continue;
+                }
+            }
             n += self.append_local(op.id, op.at, op.body, Some(op.local_sequence))?;
         }
         // order matters: the copies must be durable (save flushes the log)
@@ -1559,6 +1612,71 @@ impl<T: SyncTransport> SyncEngine<T> {
         self.store.save()?;
         self.release_journal(lib)?;
         Ok(n)
+    }
+
+    /// Splits a whole-element replace into `textEdited` updates for the text blocks whose text
+    /// changed, and what remains of the replace (other field groups, other elements), if
+    /// anything. Each update is computed against the text as this device last showed it: its
+    /// own operations plus everyone else's up to `installed` (see the module docs of
+    /// `penroam_core::textcrdt`), so text that arrived since isn't deleted.
+    fn text_edits_of(
+        &mut self,
+        body: DocumentOperation,
+    ) -> Result<(Vec<DocumentOperation>, Option<DocumentOperation>)> {
+        let DocumentOperation::ElementsReplaced {
+            notebook_id,
+            page_id,
+            elements,
+            changed,
+        } = body
+        else {
+            return Ok((Vec::new(), Some(body)));
+        };
+        let installed: BTreeMap<Uuid, u64> = self
+            .store
+            .state
+            .installed
+            .iter()
+            .filter_map(|(d, s)| parse_uuid(d).map(|u| (u, *s)))
+            .collect();
+        let me = self.my_uuid;
+        let client = penroam_core::textcrdt::edit_client(me);
+        let mut texts = Vec::new();
+        let mut keep = Vec::new();
+        let mut masks = Vec::new();
+        for (e, mut mask) in elements.into_iter().zip(changed) {
+            if let (Element::Text(t), true) = (&e, mask & groups::CONTENT != 0) {
+                let rep = self.replica(notebook_id)?;
+                let visible =
+                    |d: Uuid, seq: u64| d == me || installed.get(&d).is_some_and(|s| seq <= *s);
+                if rep.text_of(page_id, t.id).is_some() {
+                    if let Some((base, update)) =
+                        rep.text_edit(page_id, t.id, client, &t.text, &visible)
+                    {
+                        let body = DocumentOperation::TextEdited {
+                            notebook_id,
+                            page_id,
+                            element_id: t.id,
+                            base,
+                            update,
+                        };
+                        texts.push(body);
+                    }
+                    mask &= !groups::CONTENT;
+                }
+            }
+            if mask != 0 {
+                keep.push(e);
+                masks.push(mask);
+            }
+        }
+        let rest = (!keep.is_empty()).then_some(DocumentOperation::ElementsReplaced {
+            notebook_id,
+            page_id,
+            elements: keep,
+            changed: masks,
+        });
+        Ok((texts, rest))
     }
 
     /// Phase 1 (library locked).
@@ -1800,6 +1918,48 @@ impl<T: SyncTransport> SyncEngine<T> {
         flush(self, &mut batch, &mut seqs, report)
     }
 
+    /// Test hook: seals `record` (any bytes) as this device's next operation in notebook `nb`
+    /// and pushes it, without logging it here (to simulate a misbehaving client).
+    #[doc(hidden)]
+    pub fn push_raw_for_tests(&mut self, nb: Uuid, record: &[u8]) -> Result<()> {
+        let (epoch, ek) = self.epoch_for_local()?;
+        let seq = self.store.state.next_seq + 1;
+        self.store.state.next_seq = seq;
+        let id = Uuid::new_v4();
+        let routing = ek.routing_id(nb);
+        let key = ek.notebook_key(&routing);
+        let mut h = EnvelopeHeader {
+            envelope_version: ENVELOPE_VERSION,
+            op_id: OpId::new(id.hyphenated().to_string())
+                .map_err(|e| SyncError::Invalid(e.to_string()))?,
+            device_id: did(&self.keys.device_id)?,
+            device_seq: seq,
+            notebook_id: NotebookRoutingId::new(routing)
+                .map_err(|e| SyncError::Invalid(e.to_string()))?,
+            depends_on: Vec::new(),
+            key_epoch: epoch,
+            op_schema_version: penroam_core::operation::OP_SCHEMA_VERSION,
+            ciphertext_sha256: "0".repeat(64),
+            ciphertext_length: crypto::sealed_len(record.len()) as u64,
+            signature: String::new(),
+        };
+        let ct = crypto::seal(&key, id.as_bytes(), &canonical_aad_bytes(&h), record);
+        h.ciphertext_sha256 = crypto::sha256_hex(&ct);
+        let sig = crypto::sign(&self.keys.signing, b"", &canonical_signing_bytes(&h));
+        h.signature = base64url::encode(&sig);
+        let frame = encode_batch(
+            &[FrameItem {
+                header_json: serde_json::to_vec(&h).expect("header serializes"),
+                ciphertext: ct,
+            }],
+            &self.limits,
+        )
+        .map_err(|e| SyncError::Invalid(e.to_string()))?;
+        self.transport.push(frame)?;
+        self.store.save()?;
+        Ok(())
+    }
+
     /// Test hook: seals every unacknowledged local operation without pushing
     /// it (to simulate what a removed device would upload).
     #[doc(hidden)]
@@ -1998,6 +2158,19 @@ impl<T: SyncTransport> SyncEngine<T> {
                 return Ok(false);
             }
         };
+        // A comment operation belongs to the comment stream, under its own key. One sealed
+        // with the document key and pushed here is a misbehaving member: keep it out, exactly as
+        // the comment stream keeps out document operations.
+        if penroam_core::comment::is_comment_payload(&record) {
+            self.quarantine(
+                server_seq,
+                h,
+                ct,
+                "a comment operation on the document stream",
+                report,
+            )?;
+            return Ok(false);
+        }
         let txn = match decode_txn(&record) {
             Ok(t) => t,
             Err(RecordError::NewerSchema(_)) => {
@@ -2259,6 +2432,23 @@ impl<T: SyncTransport> SyncEngine<T> {
                 Err(e) => return Err(e.into()),
             };
             let mut unknown_device = false;
+            // a log continues from where the cursor stands; an envelope at or before it means the
+            // server rolled the stream back (from no cursor everything is new)
+            let floor = if self.store.state.cursor.is_some() {
+                self.store.state.cursor_seq
+            } else {
+                0
+            };
+            if let Some(item) = page.response.items.iter().find(|i| i.server_seq <= floor) {
+                self.phase = Phase::IntegrityAlert;
+                return Err(SyncError::Integrity(format!(
+                    "the server's log moved backwards (sequence {} after {floor})",
+                    item.server_seq
+                )));
+            }
+            if let Some(last) = page.response.items.last() {
+                self.store.state.cursor_seq = last.server_seq;
+            }
             for (item, ct) in page.response.items.iter().zip(page.ciphertexts.iter()) {
                 report.pulled += 1;
                 self.store.state.last_server_seq =
@@ -2502,6 +2692,65 @@ impl<T: SyncTransport> SyncEngine<T> {
         let Some(rec) = self.transport.checkpoint_latest()? else {
             return Ok(false);
         };
+        self.catching_up = true;
+        self.set_phase_now(Phase::NeedsCatchUp);
+        let r = self.recover_from(rec, report);
+        if !matches!(&r, Err(e) if e.is_retryable()) {
+            self.catching_up = false;
+        }
+        r
+    }
+
+    /// [`Self::rebase_from_checkpoint`] from `rec`, falling back to the previous checkpoint.
+    fn recover_from(
+        &mut self,
+        rec: CheckpointRecord,
+        report: &mut ReconcileReport,
+    ) -> Result<bool> {
+        match self.apply_checkpoint(&rec, report) {
+            Ok(()) => Ok(true),
+            Err(SyncError::Integrity(why)) => {
+                // The latest checkpoint is damaged or untrusted. Servers keep the one before it
+                // (and the history after it), so recover from that instead. The alert names no
+                // content either way.
+                self.event(format!(
+                    "the latest checkpoint is unusable ({why}); trying the previous one"
+                ));
+                match self.transport.checkpoint_previous()? {
+                    Some(prev) if prev.blob_id != rec.blob_id => {
+                        match self.apply_checkpoint(&prev, report) {
+                            Ok(()) => Ok(true),
+                            Err(SyncError::Integrity(e)) => {
+                                self.event(format!(
+                                    "the previous checkpoint is unusable too ({e})"
+                                ));
+                                Err(SyncError::Integrity(why))
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                    _ => Err(SyncError::Integrity(why)),
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Verifies one checkpoint and imports the operations it holds that this device lacks, then
+    /// continues the pull from the position it covers. Refuses (as [`SyncError::Integrity`]) a
+    /// checkpoint older than one already recovered from, a signature from a device that isn't a
+    /// current member, and anything that doesn't match its record.
+    fn apply_checkpoint(
+        &mut self,
+        rec: &CheckpointRecord,
+        report: &mut ReconcileReport,
+    ) -> Result<()> {
+        if rec.covers_server_seq < self.store.state.applied_checkpoint_seq {
+            return Err(SyncError::Integrity(format!(
+                "checkpoint covers {} but one covering {} was already applied",
+                rec.covers_server_seq, self.store.state.applied_checkpoint_seq
+            )));
+        }
         let m = self.membership.as_ref().ok_or(SyncError::NotEnrolled)?;
         let signer = m
             .devices
@@ -2514,7 +2763,7 @@ impl<T: SyncTransport> SyncEngine<T> {
             })?;
         let pk = signer.cert.sign_pk()?;
         let sig = base64url::decode(&rec.signature).unwrap_or_default();
-        crypto::verify(&pk, b"", &canonical_checkpoint_bytes(&rec), &sig)
+        crypto::verify(&pk, b"", &canonical_checkpoint_bytes(rec), &sig)
             .map_err(|_| SyncError::Integrity("checkpoint signature does not verify".into()))?;
         let ek = self
             .epoch_keys
@@ -2535,6 +2784,11 @@ impl<T: SyncTransport> SyncEngine<T> {
         for (meta, record) in items {
             if self.store.oplog.contains(&meta.op) {
                 continue;
+            }
+            if penroam_core::comment::is_comment_payload(&record) {
+                return Err(SyncError::Integrity(
+                    "checkpoint holds a comment operation".into(),
+                ));
             }
             let txn = decode_txn(&record)
                 .map_err(|e| SyncError::Integrity(format!("checkpoint operation: {e}")))?;
@@ -2586,6 +2840,8 @@ impl<T: SyncTransport> SyncEngine<T> {
         }
         report.delivered += imported;
         self.store.state.cursor = Some(rec.covers_cursor.as_str().to_string());
+        self.store.state.cursor_seq = rec.covers_server_seq;
+        self.store.state.applied_checkpoint_seq = rec.covers_server_seq;
         self.store.state.last_server_seq =
             self.store.state.last_server_seq.max(rec.covers_server_seq);
         self.store.save()?;
@@ -2593,7 +2849,7 @@ impl<T: SyncTransport> SyncEngine<T> {
         self.event(format!(
             "recovered from a checkpoint: imported {imported} operations"
         ));
-        Ok(true)
+        Ok(())
     }
 
     // ------------------------------------------------------------ apply --
@@ -3054,6 +3310,10 @@ impl<T: SyncTransport> SyncEngine<T> {
                 };
                 if e.is_retryable() {
                     self.attempt = self.attempt.saturating_add(1);
+                    // still behind: say so rather than "offline" until the catch-up finishes
+                    if self.catching_up {
+                        self.phase = Phase::NeedsCatchUp;
+                    }
                 }
                 self.event(format!("reconcile failed: {}", short_error(e)));
             }
@@ -3187,6 +3447,45 @@ impl<T: SyncTransport> SyncEngine<T> {
             );
         }
         Ok(out)
+    }
+
+    /// The merge state of notebook `nb`, brought up to date with the log (text anchors read it).
+    pub fn replica_of(&mut self, nb: Uuid) -> Result<&Replica> {
+        self.replica(nb)
+    }
+
+    /// What sealing and verifying comments need from this space engine: its device keys, the
+    /// verified key log and the epoch keys. `None` before the key log was read.
+    pub fn comment_keys(&self, notebook: Uuid) -> Option<crate::comments::SpaceKeys<'_>> {
+        Some(crate::comments::SpaceKeys {
+            device: &self.keys,
+            membership: self.membership.as_ref()?,
+            epoch_keys: &self.epoch_keys,
+            notebook,
+        })
+    }
+
+    /// Runs `f` with this engine's transport and comment keys together (they are separate parts
+    /// of the engine, lent at once): what a space's comment stream needs to sync. `None` before
+    /// the key log was read.
+    pub fn comment_session<R>(
+        &mut self,
+        notebook: Uuid,
+        f: impl FnOnce(&mut T, &crate::comments::SpaceKeys<'_>, &Limits) -> R,
+    ) -> Option<R> {
+        let membership = self.membership.as_ref()?;
+        let keys = crate::comments::SpaceKeys {
+            device: &self.keys,
+            membership,
+            epoch_keys: &self.epoch_keys,
+            notebook,
+        };
+        Some(f(&mut self.transport, &keys, &self.limits))
+    }
+
+    /// The limits the server advertised at the last handshake.
+    pub fn limits(&self) -> Limits {
+        self.limits
     }
 
     /// Local operations in the log that the server hasn't acknowledged.
@@ -3329,13 +3628,30 @@ impl<T: SyncTransport> SyncEngine<T> {
                     .iter()
                     .find(|e| e.id() == *element_id)
                     .cloned();
+                let keeping_shown = value.is_none();
                 let chosen: Option<Element> = match value {
                     Some(v) => Some(
                         serde_json::from_value(v).map_err(|e| SyncError::Invalid(e.to_string()))?,
                     ),
                     None => current.clone(),
                 };
-                let Some(chosen) = chosen else { return Ok(()) };
+                let Some(mut chosen) = chosen else {
+                    return Ok(());
+                };
+                // Keeping the shown version changes nothing in the library, so nothing would be
+                // journaled; write that group again directly, which supersedes the others.
+                if let (ConflictTarget::Element { group, .. }, true, Some(cur)) =
+                    (target, keeping_shown, &current)
+                {
+                    return self.rewrite_group(nb, *page_id, cur.clone(), *group);
+                }
+                // A field-group conflict changes that group only: the rest stays as it is now
+                // (in a shared notebook the text may have merged others' typing since).
+                if let (ConflictTarget::Element { group, .. }, Some(cur)) = (target, &current) {
+                    let mut kept = cur.clone();
+                    penroam_core::operation::take_group(&mut kept, &chosen, *group);
+                    chosen = kept;
+                }
                 let kind = if current.is_some() {
                     OpKind::ReplaceElements {
                         elements: vec![chosen],
@@ -3367,6 +3683,111 @@ impl<T: SyncTransport> SyncEngine<T> {
         }
         Ok(())
     }
+
+    /// Appends a replace of `element` that writes field group `group` again with its current
+    /// value, as a local operation of this device. It depends on everything installed here, so it
+    /// supersedes the concurrent versions that made the conflict. (A replace made through the
+    /// library would carry no changed groups, since the value is the same.) In a shared notebook,
+    /// writing a text block's content group restarts its text CRDT from the current text.
+    fn rewrite_group(&mut self, nb: Uuid, page: Uuid, element: Element, group: u8) -> Result<()> {
+        // Written from the merged state, not the library's copy: the library may not have
+        // installed every delivered operation yet. For a text block's content this matters,
+        // since the write starts a new text CRDT from its text: from the merged text it holds
+        // every delivered edit, and edits not delivered yet stay on the old start (shown as an
+        // alternate), so no typed text is dropped.
+        let id = element.id();
+        let element = self
+            .replica(nb)?
+            .page(page)
+            .and_then(|p| p.elements.into_iter().find(|e| e.id() == id))
+            .unwrap_or(element);
+        self.append_fixed(
+            Uuid::new_v4(),
+            now_ms(),
+            DocumentOperation::ElementsReplaced {
+                notebook_id: nb,
+                page_id: page,
+                elements: vec![element],
+                changed: vec![group],
+            },
+        )?;
+        self.save_state()
+    }
+
+    /// Resolves an element conflict by keeping both versions: the shown version stays (its group
+    /// written again, so the conflict ends everywhere once synced) and the alternate written by
+    /// `alternate` is added as a copy with a new id, nudged down and to the right and drawn on
+    /// top, as an ordinary local edit.
+    ///
+    /// Errors with [`SyncError::Invalid`] when the conflict is gone, `alternate` isn't one of its
+    /// versions, the element no longer exists, or the conflict isn't about an element's fields
+    /// (titles, templates, moves and trash state have nothing to copy).
+    pub fn keep_both(
+        &mut self,
+        lib: &mut Library,
+        nb: Uuid,
+        target: &ConflictTarget,
+        alternate: Uuid,
+    ) -> Result<Uuid> {
+        let ConflictTarget::Element {
+            page_id,
+            element_id,
+            group,
+        } = target
+        else {
+            return Err(SyncError::Invalid(
+                "only versions of an element can be kept as copies".into(),
+            ));
+        };
+        let conflicts = self.conflicts(nb)?;
+        let c = conflicts
+            .iter()
+            .find(|c| &c.target == target)
+            .ok_or_else(|| SyncError::Invalid("that conflict no longer exists".into()))?;
+        let value = c
+            .alternates
+            .iter()
+            .find(|a| a.op_id == alternate)
+            .ok_or_else(|| SyncError::Invalid("that version is not part of the conflict".into()))?
+            .value
+            .clone();
+        let page = lib.load_page(nb, *page_id)?;
+        let current = page
+            .elements
+            .iter()
+            .find(|e| e.id() == *element_id)
+            .cloned()
+            .ok_or_else(|| SyncError::Invalid("the element no longer exists".into()))?;
+        let other: Element =
+            serde_json::from_value(value).map_err(|e| SyncError::Invalid(e.to_string()))?;
+        self.rewrite_group(nb, *page_id, current.clone(), *group)?;
+        // the copy is the element as it is now with the alternate's version of the group
+        let mut copy = current.clone();
+        penroam_core::operation::take_group(&mut copy, &other, *group);
+        let id = Uuid::new_v4();
+        match &mut copy {
+            Element::Ink(x) => x.id = id,
+            Element::Text(x) => x.id = id,
+            Element::Image(x) => x.id = id,
+        }
+        copy.translate(24.0, 24.0);
+        *copy.z_mut() = page.elements.iter().map(|e| e.z()).max().unwrap_or(0) + 1;
+        lib.apply_page_operations(
+            nb,
+            *page_id,
+            &OperationBatch {
+                batch_id: Uuid::new_v4(),
+                base_revision: page.revision,
+                ops: vec![PageOperation {
+                    op_id: Uuid::new_v4(),
+                    kind: OpKind::AddElements {
+                        elements: vec![copy],
+                    },
+                }],
+            },
+        )?;
+        Ok(id)
+    }
 }
 
 /// A compact error label for diagnostic events (no messages from the server).
@@ -3377,6 +3798,23 @@ fn short_error(e: &SyncError) -> String {
         SyncError::Transport(TransportError::ResponseLost) => "response lost".into(),
         other => other.to_string(),
     }
+}
+
+/// Deterministic id of the `k`-th text update a journal operation became (see
+/// `SyncEngine::text_edits_of`), so re-ingesting it after a crash yields the same ids.
+fn text_edit_id(id: Uuid, k: usize) -> Uuid {
+    let h = crypto::sha256(
+        &[
+            b"penroam/text-edit-id/v1".as_slice(),
+            id.as_bytes(),
+            &(k as u64).to_le_bytes(),
+        ]
+        .concat(),
+    );
+    let mut b: [u8; 16] = h[..16].try_into().unwrap();
+    b[6] = (b[6] & 0x0f) | 0x80;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(b)
 }
 
 /// Deterministic id for chunk `i` of a split operation, so re-ingesting the

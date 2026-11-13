@@ -1,0 +1,909 @@
+{
+  "encoding": "comment operation schema 1, base64url",
+  "format": "penroam-comment-vectors",
+  "operations": [
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAAAAAAAAAAA0AEB0q-r_vliAAphY2N0X2FsaWNlAAEAAAAAAAAAAQAAAAAAAAABAwAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAGAAAQAAAAAAgEnAAAAAAACATsAAAAAAAABFQAAAAAAAAEVAIUlzIHRoaXMgYXJyb3cgcmlnaHQsIEBbYWNjdF9ib2JdP7uEhrQ",
+      "operation": {
+        "at": 1700000001001,
+        "author": "acct_alice",
+        "causalDependencies": [],
+        "deviceId": "00000000-0000-0000-0000-00000000d001",
+        "id": "00000000-0000-0001-0000-000000000001",
+        "op": {
+          "anchor": {
+            "elementId": "00000000-0000-0000-0000-000000006000",
+            "fallbackRect": {
+              "h": 42.0,
+              "w": 42.0,
+              "x": -51.0,
+              "y": -61.0
+            },
+            "kind": "element",
+            "pageId": "00000000-0000-0000-0000-000000005000"
+          },
+          "body": "Is this arrow right, @[acct_bob]?",
+          "threadId": "00000000-0000-0001-0000-000000000001",
+          "type": "threadCreated"
+        },
+        "schemaVersion": 1,
+        "sequence": 1
+      },
+      "outcome": "Applied"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAIAAAAAAAAAAQAAAAAAAAAAAAAAAAAA0AIB1K-r_vliAAhhY2N0X2JvYgEAAAAAAAAAAAAAAAAAANABAQEAAAAAAAAAAgAAAAAAAAABBAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAGABAQQBBgbml6XmnKzPKr8MW-Mmy5IqcPgWP5EHnE2aqGVcYOrYmtVFyd4ukgEAAAAAAABZQAAAAAAAAGlAAAAAAAAASUAAAAAAAAA0QApUeXBvIGhlcmU_QWK34g",
+      "operation": {
+        "at": 1700000001002,
+        "author": "acct_bob",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 1
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d002",
+        "id": "00000000-0000-0002-0000-000000000001",
+        "op": {
+          "anchor": {
+            "elementId": "00000000-0000-0000-0000-000000006001",
+            "end": "Bg",
+            "fallbackRect": {
+              "h": 20.0,
+              "w": 50.0,
+              "x": 100.0,
+              "y": 200.0
+            },
+            "kind": "text",
+            "pageId": "00000000-0000-0000-0000-000000005000",
+            "quote": "日本",
+            "quoteHash": "cf2abf0c5be326cb922a70f8163f91079c4d9aa8655c60ead89ad545c9de2e92",
+            "start": "BA"
+          },
+          "body": "Typo here?",
+          "threadId": "00000000-0000-0002-0000-000000000001",
+          "type": "threadCreated"
+        },
+        "schemaVersion": 1,
+        "sequence": 1
+      },
+      "outcome": "Applied"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAAAAAAAAAA0AECor-r_vliAAphY2N0X2FsaWNlAgAAAAAAAAAAAAAAAAAA0AEBAAAAAAAAAAAAAAAAAADQAgEFAAAAAAAAAAEAAAAAAAAAAUxjfUU",
+      "operation": {
+        "at": 1700000002001,
+        "author": "acct_alice",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 1
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d002",
+            "deviceSeq": 1
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d001",
+        "id": "00000000-0000-0001-0000-000000000002",
+        "op": {
+          "threadId": "00000000-0000-0001-0000-000000000001",
+          "type": "threadResolved"
+        },
+        "schemaVersion": 1,
+        "sequence": 2
+      },
+      "outcome": "Applied"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAAAAAAAAAAA0AICpL-r_vliAAhhY2N0X2JvYgIAAAAAAAAAAAAAAAAAANABAQAAAAAAAAAAAAAAAAAA0AIBAgAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAACIE5vdCBxdWl0ZTogaXQgc2hvdWxkIHBvaW50IGxlZnQuAQAAAAAAAAABAAAAAAAAAAGZ_QAZ",
+      "operation": {
+        "at": 1700000002002,
+        "author": "acct_bob",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 1
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d002",
+            "deviceSeq": 1
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d002",
+        "id": "00000000-0000-0002-0000-000000000002",
+        "op": {
+          "body": "Not quite: it should point left.",
+          "commentId": "00000000-0000-0002-0000-000000000002",
+          "replyTo": "00000000-0000-0001-0000-000000000001",
+          "threadId": "00000000-0000-0001-0000-000000000001",
+          "type": "replied"
+        },
+        "schemaVersion": 1,
+        "sequence": 2
+      },
+      "outcome": "Applied"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAIAAAAAAAAAAwAAAAAAAAAAAAAAAAAA0AID9M6r_vliAAhhY2N0X2JvYgIAAAAAAAAAAAAAAAAAANABAgAAAAAAAAAAAAAAAAAA0AICAgAAAAAAAAACAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAADB2J1eSBub3cASq8RbQ",
+      "operation": {
+        "at": 1700000003002,
+        "author": "acct_bob",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 2
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d002",
+            "deviceSeq": 2
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d002",
+        "id": "00000000-0000-0002-0000-000000000003",
+        "op": {
+          "body": "buy now",
+          "commentId": "00000000-0000-0002-0000-000000000003",
+          "threadId": "00000000-0000-0002-0000-000000000001",
+          "type": "replied"
+        },
+        "schemaVersion": 1,
+        "sequence": 3
+      },
+      "outcome": "Applied"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAMAAAAAAAAAAQAAAAAAAAAAAAAAAAAA0AMB1q-r_vliAQphY2N0X293bmVyAgAAAAAAAAAAAAAAAAAA0AECAAAAAAAAAAAAAAAAAADQAgMEAAAAAAAAAAIAAAAAAAAAA6l9wfo",
+      "operation": {
+        "at": 1700000001003,
+        "author": "acct_owner",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 2
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d002",
+            "deviceSeq": 3
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d003",
+        "id": "00000000-0000-0003-0000-000000000001",
+        "moderation": true,
+        "op": {
+          "commentId": "00000000-0000-0002-0000-000000000003",
+          "type": "commentDeleted"
+        },
+        "schemaVersion": 1,
+        "sequence": 1
+      },
+      "outcome": "Applied"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAEAAAAAAAAAAwAAAAAAAAAAAAAAAAAA0AED8s6r_vliAAphY2N0X2FsaWNlAwAAAAAAAAAAAAAAAAAA0AECAAAAAAAAAAAAAAAAAADQAgMAAAAAAAAAAAAAAAAAANADAQMAAAAAAAAAAQAAAAAAAAABL0lzIHRoaXMgYXJyb3cgcmlnaHQsIEBbYWNjdF9ib2JdPyAodGhlIHJlZCBvbmUpW6FBqg",
+      "operation": {
+        "at": 1700000003001,
+        "author": "acct_alice",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 2
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d002",
+            "deviceSeq": 3
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d003",
+            "deviceSeq": 1
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d001",
+        "id": "00000000-0000-0001-0000-000000000003",
+        "op": {
+          "body": "Is this arrow right, @[acct_bob]? (the red one)",
+          "commentId": "00000000-0000-0001-0000-000000000001",
+          "type": "commentEdited"
+        },
+        "schemaVersion": 1,
+        "sequence": 3
+      },
+      "outcome": "Applied"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAEAAAAAAAAABAAAAAAAAAAAAAAAAAAA0AEEwt6r_vliAAphY2N0X2FsaWNlAwAAAAAAAAAAAAAAAAAA0AEDAAAAAAAAAAAAAAAAAADQAgMAAAAAAAAAAAAAAAAAANADAQMAAAAAAAAAAgAAAAAAAAACCG5vdCBtaW5lgoCz6w",
+      "operation": {
+        "at": 1700000004001,
+        "author": "acct_alice",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 3
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d002",
+            "deviceSeq": 3
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d003",
+            "deviceSeq": 1
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d001",
+        "id": "00000000-0000-0001-0000-000000000004",
+        "op": {
+          "body": "not mine",
+          "commentId": "00000000-0000-0002-0000-000000000002",
+          "type": "commentEdited"
+        },
+        "schemaVersion": 1,
+        "sequence": 4
+      },
+      "outcome": "Rejected(NotAuthor(00000000-0000-0002-0000-000000000002))"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAIAAAAAAAAABAAAAAAAAAAAAAAAAAAA0AIExN6r_vliAAhhY2N0X2JvYgMAAAAAAAAAAAAAAAAAANABBAAAAAAAAAAAAAAAAAAA0AIDAAAAAAAAAAAAAAAAAADQAwEHAAAAAAAAAAIAAAAAAAAAAQEAAAAAAAAAAAAAAAAAAFAAAAAAAAAAKcAAAAAAAABEQJJaQRU",
+      "operation": {
+        "at": 1700000004002,
+        "author": "acct_bob",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 4
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d002",
+            "deviceSeq": 3
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d003",
+            "deviceSeq": 1
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d002",
+        "id": "00000000-0000-0002-0000-000000000004",
+        "op": {
+          "anchor": {
+            "kind": "point",
+            "pageId": "00000000-0000-0000-0000-000000005000",
+            "x": -12.5,
+            "y": 40.0
+          },
+          "threadId": "00000000-0000-0002-0000-000000000001",
+          "type": "anchorReattached"
+        },
+        "schemaVersion": 1,
+        "sequence": 4
+      },
+      "outcome": "Applied"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAMAAAAAAAAAAgAAAAAAAAAAAAAAAAAA0AMCpr-r_vliAAphY2N0X293bmVyAwAAAAAAAAAAAAAAAAAA0AEEAAAAAAAAAAAAAAAAAADQAgQAAAAAAAAAAAAAAAAAANADAQUAAAAAAAAAAgAAAAAAAAABhTH7Zg",
+      "operation": {
+        "at": 1700000002003,
+        "author": "acct_owner",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 4
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d002",
+            "deviceSeq": 4
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d003",
+            "deviceSeq": 1
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d003",
+        "id": "00000000-0000-0003-0000-000000000002",
+        "op": {
+          "threadId": "00000000-0000-0002-0000-000000000001",
+          "type": "threadResolved"
+        },
+        "schemaVersion": 1,
+        "sequence": 2
+      },
+      "outcome": "Applied"
+    },
+    {
+      "encoded": "UFJDTQEAAAAAAAAAAAIAAAAAAAAABQAAAAAAAAAAAAAAAAAA0AIFlO6r_vliAAhhY2N0X2JvYgMAAAAAAAAAAAAAAAAAANABBAAAAAAAAAAAAAAAAAAA0AIEAAAAAAAAAAAAAAAAAADQAwIGAAAAAAAAAAIAAAAAAAAAARNmr-U",
+      "operation": {
+        "at": 1700000005002,
+        "author": "acct_bob",
+        "causalDependencies": [
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d001",
+            "deviceSeq": 4
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d002",
+            "deviceSeq": 4
+          },
+          {
+            "deviceId": "00000000-0000-0000-0000-00000000d003",
+            "deviceSeq": 2
+          }
+        ],
+        "deviceId": "00000000-0000-0000-0000-00000000d002",
+        "id": "00000000-0000-0002-0000-000000000005",
+        "op": {
+          "threadId": "00000000-0000-0002-0000-000000000001",
+          "type": "threadReopened"
+        },
+        "schemaVersion": 1,
+        "sequence": 5
+      },
+      "outcome": "Applied"
+    }
+  ],
+  "resolutions": [
+    {
+      "anchor": {
+        "kind": "point",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "x": -1500.25,
+        "y": -3.5
+      },
+      "case": "negative point on an infinite canvas",
+      "expected": {
+        "kind": "placed",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "rect": {
+          "h": 0.0,
+          "w": 0.0,
+          "x": -1500.25,
+          "y": -3.5
+        }
+      }
+    },
+    {
+      "anchor": {
+        "kind": "rect",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "rect": {
+          "h": 6.0,
+          "w": 4.0,
+          "x": -1.0,
+          "y": -2.0
+        }
+      },
+      "case": "rect",
+      "expected": {
+        "kind": "placed",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "rect": {
+          "h": 6.0,
+          "w": 4.0,
+          "x": -1.0,
+          "y": -2.0
+        }
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006000",
+        "fallbackRect": {
+          "h": 1.0,
+          "w": 1.0,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "kind": "element",
+        "pageId": "00000000-0000-0000-0000-000000005000"
+      },
+      "case": "element follows the stroke",
+      "expected": {
+        "kind": "placed",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "rect": {
+          "h": 42.0,
+          "w": 42.0,
+          "x": -51.0,
+          "y": -61.0
+        }
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006fff",
+        "fallbackRect": {
+          "h": 1.0,
+          "w": 1.0,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "kind": "element",
+        "pageId": "00000000-0000-0000-0000-000000005000"
+      },
+      "case": "deleted element",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005000",
+        "reason": "elementDeleted"
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006000",
+        "kind": "element",
+        "pageId": "00000000-0000-0000-0000-000000005001"
+      },
+      "case": "element anchor never moves to another page",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005001",
+        "reason": "elementDeleted"
+      }
+    },
+    {
+      "anchor": {
+        "kind": "point",
+        "pageId": "00000000-0000-0000-0000-000000005002",
+        "x": 1.0,
+        "y": 1.0
+      },
+      "case": "trashed page",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005002",
+        "reason": "pageTrashed"
+      }
+    },
+    {
+      "anchor": {
+        "kind": "rect",
+        "pageId": "00000000-0000-0000-0000-000000005003",
+        "rect": {
+          "h": 1.0,
+          "w": 1.0,
+          "x": 0.0,
+          "y": 0.0
+        }
+      },
+      "case": "deleted page",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005003",
+        "reason": "pageDeleted"
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006001",
+        "end": "Bg",
+        "fallbackRect": {
+          "h": 20.0,
+          "w": 50.0,
+          "x": 100.0,
+          "y": 200.0
+        },
+        "kind": "text",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "quote": "日本",
+        "quoteHash": "cf2abf0c5be326cb922a70f8163f91079c4d9aa8655c60ead89ad545c9de2e92",
+        "start": "BA"
+      },
+      "case": "text range still matching",
+      "expected": {
+        "kind": "placed",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "rect": {
+          "h": 40.0,
+          "w": 300.0,
+          "x": 100.0,
+          "y": 200.0
+        },
+        "textRange": [
+          4,
+          6
+        ]
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006001",
+        "end": "Dg",
+        "fallbackRect": {
+          "h": 20.0,
+          "w": 50.0,
+          "x": 100.0,
+          "y": 200.0
+        },
+        "kind": "text",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "quote": "👩🏽‍🔬",
+        "quoteHash": "f5210798f3a48c6f0d102084ea76c6c57471ab69880051c8d4cc1b475a0810c4",
+        "start": "Bw"
+      },
+      "case": "text range over an emoji sequence",
+      "expected": {
+        "kind": "placed",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "rect": {
+          "h": 40.0,
+          "w": 300.0,
+          "x": 100.0,
+          "y": 200.0
+        },
+        "textRange": [
+          7,
+          14
+        ]
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006001",
+        "end": "Bg",
+        "fallbackRect": {
+          "h": 20.0,
+          "w": 50.0,
+          "x": 100.0,
+          "y": 200.0
+        },
+        "kind": "text",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "quote": "中国",
+        "quoteHash": "f0e9521611bb290d7b09b8cd14a63c3fe7cbf9a2f4e0090d8238d22403d35182",
+        "start": "BA"
+      },
+      "case": "text range whose text changed",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005000",
+        "quote": "中国",
+        "reason": "quoteMismatch"
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006001",
+        "end": "Dg",
+        "fallbackRect": {
+          "h": 20.0,
+          "w": 50.0,
+          "x": 100.0,
+          "y": 200.0
+        },
+        "kind": "text",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "quote": "👩🏽‍🔬",
+        "quoteHash": "f5210798f3a48c6f0d102084ea76c6c57471ab69880051c8d4cc1b475a0810c4",
+        "start": "CA"
+      },
+      "case": "text range inside a surrogate pair",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005000",
+        "quote": "👩🏽‍🔬",
+        "reason": "textRangeLost"
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006001",
+        "end": "Bg",
+        "fallbackRect": {
+          "h": 20.0,
+          "w": 50.0,
+          "x": 100.0,
+          "y": 200.0
+        },
+        "kind": "text",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "quote": "日本",
+        "quoteHash": "cf2abf0c5be326cb922a70f8163f91079c4d9aa8655c60ead89ad545c9de2e92",
+        "start": "_w"
+      },
+      "case": "text range whose sticky index is gone",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005000",
+        "quote": "日本",
+        "reason": "textRangeLost"
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006fff",
+        "end": "AQ",
+        "kind": "text",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "quote": "s",
+        "quoteHash": "043a718774c572bd8a25adbeb1bfcd5c0256ae11cecf9f9c3f925d0e52beaf89",
+        "start": "AA"
+      },
+      "case": "text range on a deleted block",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005000",
+        "quote": "s",
+        "reason": "elementDeleted"
+      }
+    },
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006000",
+        "end": "AQ",
+        "kind": "text",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "quote": "s",
+        "quoteHash": "043a718774c572bd8a25adbeb1bfcd5c0256ae11cecf9f9c3f925d0e52beaf89",
+        "start": "AA"
+      },
+      "case": "text range on a stroke",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005000",
+        "quote": "s",
+        "reason": "textRangeLost"
+      }
+    },
+    {
+      "anchor": {
+        "kind": "pdf",
+        "normalizedRect": {
+          "h": 0.25,
+          "w": 0.5,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "pageId": "00000000-0000-0000-0000-000000005004",
+        "pdfPageIndex": 0,
+        "rotation": 0
+      },
+      "case": "pdf background measured unrotated",
+      "expected": {
+        "kind": "placed",
+        "pageId": "00000000-0000-0000-0000-000000005004",
+        "rect": {
+          "h": 300.0,
+          "w": 200.0,
+          "x": 600.0,
+          "y": 0.0
+        }
+      }
+    },
+    {
+      "anchor": {
+        "kind": "pdf",
+        "normalizedRect": {
+          "h": 0.5,
+          "w": 0.5,
+          "x": 0.5,
+          "y": 0.0
+        },
+        "pageId": "00000000-0000-0000-0000-000000005004",
+        "pdfPageIndex": 0,
+        "rotation": 90
+      },
+      "case": "pdf background measured as displayed",
+      "expected": {
+        "kind": "placed",
+        "pageId": "00000000-0000-0000-0000-000000005004",
+        "rect": {
+          "h": 300.0,
+          "w": 400.0,
+          "x": 400.0,
+          "y": 0.0
+        }
+      }
+    },
+    {
+      "anchor": {
+        "kind": "pdf",
+        "normalizedRect": {
+          "h": 0.25,
+          "w": 0.5,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "pdfPageIndex": 3,
+        "rotation": 0
+      },
+      "case": "pdf page on a canvas, rotated",
+      "expected": {
+        "kind": "placed",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "rect": {
+          "h": 300.0,
+          "w": 200.0,
+          "x": -400.0,
+          "y": -2000.0
+        }
+      }
+    },
+    {
+      "anchor": {
+        "kind": "pdf",
+        "normalizedRect": {
+          "h": 1.0,
+          "w": 1.0,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "pdfPageIndex": 4,
+        "rotation": 0
+      },
+      "case": "pdf page shown twice is not guessed",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005000",
+        "reason": "pdfPageMissing"
+      }
+    },
+    {
+      "anchor": {
+        "kind": "pdf",
+        "normalizedRect": {
+          "h": 1.0,
+          "w": 1.0,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "pdfPageIndex": 9,
+        "rotation": 0
+      },
+      "case": "pdf page not shown",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005000",
+        "reason": "pdfPageMissing"
+      }
+    },
+    {
+      "anchor": {
+        "kind": "pdf",
+        "normalizedRect": {
+          "h": 0.25,
+          "w": 0.5,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "pageId": "00000000-0000-0000-0000-000000005004",
+        "pdfAssetSha256": "abababababababababababababababababababababababababababababababab",
+        "pdfPageIndex": 0,
+        "rotation": 0
+      },
+      "case": "pdf background of the same document",
+      "expected": {
+        "kind": "placed",
+        "pageId": "00000000-0000-0000-0000-000000005004",
+        "rect": {
+          "h": 300.0,
+          "w": 200.0,
+          "x": 600.0,
+          "y": 0.0
+        }
+      }
+    },
+    {
+      "anchor": {
+        "kind": "pdf",
+        "normalizedRect": {
+          "h": 0.25,
+          "w": 0.5,
+          "x": 0.0,
+          "y": 0.0
+        },
+        "pageId": "00000000-0000-0000-0000-000000005004",
+        "pdfAssetSha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "pdfPageIndex": 0,
+        "rotation": 0
+      },
+      "case": "pdf background replaced by another document",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005004",
+        "reason": "pdfPageMissing"
+      }
+    },
+    {
+      "anchor": {
+        "kind": "point",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "x": 1.0,
+        "y": 1.0
+      },
+      "case": "live page whose content wasn't supplied",
+      "expected": {
+        "kind": "orphaned",
+        "lastKnownPage": "00000000-0000-0000-0000-000000005000",
+        "reason": "pageUnavailable"
+      }
+    }
+  ],
+  "threads": [
+    {
+      "anchor": {
+        "elementId": "00000000-0000-0000-0000-000000006000",
+        "fallbackRect": {
+          "h": 42.0,
+          "w": 42.0,
+          "x": -51.0,
+          "y": -61.0
+        },
+        "kind": "element",
+        "pageId": "00000000-0000-0000-0000-000000005000"
+      },
+      "comments": [
+        {
+          "author": "acct_alice",
+          "body": "Is this arrow right, @[acct_bob]? (the red one)",
+          "commentId": "00000000-0000-0001-0000-000000000001",
+          "createdAt": 1700000001001,
+          "edited": true,
+          "editedAt": 1700000003001,
+          "mentions": [
+            "acct_bob"
+          ],
+          "state": "visible",
+          "threadId": "00000000-0000-0001-0000-000000000001"
+        },
+        {
+          "author": "acct_bob",
+          "body": "Not quite: it should point left.",
+          "commentId": "00000000-0000-0002-0000-000000000002",
+          "createdAt": 1700000002002,
+          "edited": false,
+          "replyTo": "00000000-0000-0001-0000-000000000001",
+          "state": "visible",
+          "threadId": "00000000-0000-0001-0000-000000000001"
+        }
+      ],
+      "createdAt": 1700000001001,
+      "createdBy": "acct_alice",
+      "status": "open",
+      "statusChange": {
+        "at": 1700000002002,
+        "by": "acct_bob",
+        "kind": "replied",
+        "opId": "00000000-0000-0002-0000-000000000002"
+      },
+      "threadId": "00000000-0000-0001-0000-000000000001"
+    },
+    {
+      "anchor": {
+        "kind": "point",
+        "pageId": "00000000-0000-0000-0000-000000005000",
+        "x": -12.5,
+        "y": 40.0
+      },
+      "comments": [
+        {
+          "author": "acct_bob",
+          "body": "Typo here?",
+          "commentId": "00000000-0000-0002-0000-000000000001",
+          "createdAt": 1700000001002,
+          "edited": false,
+          "state": "visible",
+          "threadId": "00000000-0000-0002-0000-000000000001"
+        },
+        {
+          "author": "acct_bob",
+          "commentId": "00000000-0000-0002-0000-000000000003",
+          "createdAt": 1700000003002,
+          "deletedAt": 1700000001003,
+          "edited": false,
+          "state": "removedByOwner",
+          "threadId": "00000000-0000-0002-0000-000000000001"
+        }
+      ],
+      "createdAt": 1700000001002,
+      "createdBy": "acct_bob",
+      "status": "open",
+      "statusChange": {
+        "at": 1700000005002,
+        "by": "acct_bob",
+        "kind": "reopened",
+        "opId": "00000000-0000-0002-0000-000000000005"
+      },
+      "threadId": "00000000-0000-0002-0000-000000000001"
+    }
+  ]
+}

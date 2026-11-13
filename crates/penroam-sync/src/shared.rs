@@ -68,6 +68,7 @@
 //!
 //! See `docs/protocol/sync-protocol-v1.md` §12f and `docs/security/threat-model.md`.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -1402,7 +1403,12 @@ pub enum NotebookSyncState {
     AccessRemoved,
     /// Concurrent edits left a conflict to resolve.
     NeedsResolution,
+    /// Catching up from a checkpoint after a long time away; unsent changes are kept.
+    NeedsCatchUp,
 }
+
+/// Where a space's last member list is saved (in its sync folder).
+const MEMBERS_FILE: &str = "members.json";
 
 /// The engines of every shared notebook space this device takes part in, and the server's
 /// latest list of spaces and invitations. The app's sync worker owns one and calls
@@ -1423,6 +1429,22 @@ pub struct SpaceSet<T: SyncTransport> {
     /// (`reauth_required`: the verified email is older than its window). The invitations are
     /// then unknown; shared notebooks keep syncing.
     pub invitations_need_sign_in: bool,
+    /// Whether the server has comment streams (`comments.v1`), as of the last refresh.
+    pub comments_available: bool,
+    /// Each space's comment stream on this device, opened on first use.
+    pub comments: BTreeMap<String, crate::comments::CommentSync>,
+    /// Each space's member roster, from its member list at the last comment sync.
+    pub rosters: BTreeMap<String, crate::comments::SpaceRoster>,
+    /// This account's notifications as last fetched (which threads have unread ones).
+    pub notifications: Vec<penroam_sync_protocol::comments::NotificationRecord>,
+    /// Whether the server records who pushed what (`history.v1`), as of the last refresh.
+    pub history_available: bool,
+    /// Each space's member list as last read (for rosters and author names).
+    pub members: BTreeMap<String, penroam_sync_protocol::MemberList>,
+    /// The active members each space's attribution was last fetched with. When one of them is
+    /// no longer active (left, removed or erased), attribution is fetched again from the start,
+    /// because the server may have replaced their id with a tombstone.
+    attributed_members: BTreeMap<String, std::collections::BTreeSet<String>>,
 }
 
 impl<T: SyncTransport> Default for SpaceSet<T> {
@@ -1434,6 +1456,13 @@ impl<T: SyncTransport> Default for SpaceSet<T> {
             errors: Default::default(),
             available: false,
             invitations_need_sign_in: false,
+            comments_available: false,
+            comments: BTreeMap::new(),
+            rosters: BTreeMap::new(),
+            notifications: Vec::new(),
+            history_available: false,
+            members: BTreeMap::new(),
+            attributed_members: BTreeMap::new(),
         }
     }
 }
@@ -1442,7 +1471,12 @@ fn is_code(e: &SyncError, code: ErrorCode) -> bool {
     matches!(e, SyncError::Transport(t) if t.code() == Some(code))
 }
 
-impl<T: SyncTransport> SpaceSet<T> {
+impl<
+        T: SyncTransport
+            + crate::comments::CommentTransport
+            + crate::attribution::AttributionTransport,
+    > SpaceSet<T>
+{
     /// An empty set; engines are opened by [`SpaceSet::reconcile`] as needed.
     pub fn new() -> Self {
         Self::default()
@@ -1479,6 +1513,10 @@ impl<T: SyncTransport> SpaceSet<T> {
     pub fn refresh(&mut self, account: &mut SyncEngine<T>, lib: &Mutex<Library>) -> Result<bool> {
         let meta = account.transport_mut().meta()?;
         let available = meta.has_capability(penroam_sync_protocol::dto::capabilities::SHARING_V1);
+        self.comments_available =
+            meta.has_capability(penroam_sync_protocol::dto::capabilities::COMMENTS_V1);
+        self.history_available =
+            meta.has_capability(penroam_sync_protocol::dto::capabilities::HISTORY_V1);
         if !available {
             let changed =
                 self.available || !self.records.is_empty() || !self.invitations.is_empty();
@@ -1536,9 +1574,39 @@ impl<T: SyncTransport> SpaceSet<T> {
         Ok(changed)
     }
 
+    /// Checks over HTTP whether this account still has access to `space`, after a cue that it
+    /// might not (a live channel's `bye access_revoked` or membership notice, which aren't proof):
+    /// rereads the shared notebook list ([`SpaceSet::refresh`], which stops the space only if the
+    /// server lists the membership as revoked or not at all), then syncs the space (an
+    /// authenticated `access_revoked` answer stops it too). Returns whether the space is still
+    /// active here.
+    pub fn confirm_access(
+        &mut self,
+        account: &mut SyncEngine<T>,
+        lib: &Mutex<Library>,
+        access: &mut SpaceAccess<'_, T>,
+        space: &str,
+    ) -> Result<bool> {
+        self.refresh(account, lib)?;
+        let _ = self.reconcile_space(account, lib, access, space);
+        let root = lib
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .root()
+            .to_path_buf();
+        Ok(NotebookOwners::load(&root)?
+            .space(space)
+            .is_some_and(|(_, e)| e.state != SharedState::AccessRemoved))
+    }
+
     /// Stops a space after access was removed: its engine keeps local data
     /// ([`mark_access_removed`]) and leaves the set.
     pub fn stop(&mut self, space: &str, lib: &Mutex<Library>) -> Result<()> {
+        // the comment stream stays on disk (drafts and unsent comments are kept); it just stops
+        self.comments.remove(space);
+        self.rosters.remove(space);
+        self.members.remove(space);
+        self.attributed_members.remove(space);
         match self.take(space) {
             Some(mut e) => mark_access_removed(&mut e, lib)?,
             None => {
@@ -1597,33 +1665,67 @@ impl<T: SyncTransport> SpaceSet<T> {
             owners = o;
         }
         for (nb, entry) in owners.shared.clone() {
-            let space = entry.space_id.clone();
-            if entry.state == SharedState::AccessRemoved {
-                self.take(&space);
-                continue;
-            }
-            let res = self.reconcile_one(account, lib, access, nb, &entry, &root);
-            match res {
-                Ok(Some(r)) => {
-                    self.errors.remove(&space);
-                    reports.push(r);
-                }
-                Ok(None) => {}
-                Err(e) if is_code(&e, ErrorCode::AccessRevoked) => {
-                    let _ = self.stop(&space, lib);
-                }
-                Err(e) => {
-                    if is_code(&e, ErrorCode::Unauthenticated) {
-                        // the space session expired: the next pass asks for a new one
-                        if let Some(eng) = self.engine(&space) {
-                            let _ = access.reconnect(account, eng);
-                        }
-                    }
-                    self.errors.insert(space, e.to_string());
-                }
+            if let Some(r) = self.reconcile_entry(account, lib, access, nb, &entry, &root) {
+                reports.push(r);
             }
         }
         reports
+    }
+
+    /// Syncs one space now (a live commit hint asked for it). `None` when this device has no
+    /// such space, it stopped, or the attempt failed (kept in [`SpaceSet::errors`]).
+    pub fn reconcile_space(
+        &mut self,
+        account: &mut SyncEngine<T>,
+        lib: &Mutex<Library>,
+        access: &mut SpaceAccess<'_, T>,
+        space: &str,
+    ) -> Option<ReconcileReport> {
+        let root = lib
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .root()
+            .to_path_buf();
+        let owners = NotebookOwners::load(&root).ok()?;
+        let (nb, entry) = owners.space(space).map(|(n, e)| (n, e.clone()))?;
+        self.reconcile_entry(account, lib, access, nb, &entry, &root)
+    }
+
+    fn reconcile_entry(
+        &mut self,
+        account: &mut SyncEngine<T>,
+        lib: &Mutex<Library>,
+        access: &mut SpaceAccess<'_, T>,
+        nb: Uuid,
+        entry: &SharedEntry,
+        root: &Path,
+    ) -> Option<ReconcileReport> {
+        let space = entry.space_id.clone();
+        if entry.state == SharedState::AccessRemoved {
+            self.take(&space);
+            return None;
+        }
+        match self.reconcile_one(account, lib, access, nb, entry, root) {
+            Ok(Some(r)) => {
+                self.errors.remove(&space);
+                Some(r)
+            }
+            Ok(None) => None,
+            Err(e) if is_code(&e, ErrorCode::AccessRevoked) => {
+                let _ = self.stop(&space, lib);
+                None
+            }
+            Err(e) => {
+                if is_code(&e, ErrorCode::Unauthenticated) {
+                    // the space session expired: the next pass asks for a new one
+                    if let Some(eng) = self.engine(&space) {
+                        let _ = access.reconnect(account, eng);
+                    }
+                }
+                self.errors.insert(space, e.to_string());
+                None
+            }
+        }
     }
 
     fn reconcile_one(
@@ -1685,6 +1787,21 @@ impl<T: SyncTransport> SpaceSet<T> {
             republish_concurrent(account, engine, nb)?;
         }
         let report = engine.reconcile(lib)?;
+        // the comment stream after the document stream (its keys are fresh now); a failure here
+        // never fails the document sync
+        if self.comments_available {
+            if let Err(e) = self.sync_comments(account, lib, &space) {
+                self.errors.insert(space.clone(), format!("comments: {e}"));
+            }
+        }
+        if self.history_available {
+            if let Err(e) = self.sync_attribution(account, &space) {
+                if !e.is_retryable() {
+                    self.errors.insert(space.clone(), format!("history: {e}"));
+                }
+            }
+        }
+        let engine = self.engine(&space).expect("inserted");
         if owner {
             // members who were removed or left: rotate their devices out of the key log
             if let Err(e) = engine.remove_revoked_devices() {
@@ -1733,6 +1850,210 @@ impl<T: SyncTransport> SpaceSet<T> {
             }
             Ok(())
         })
+    }
+
+    /// The comment stream of a space, opened (from `<space folder>/comments`) on first use.
+    /// `None` when the space has no engine here or isn't assigned to a notebook.
+    pub fn comment_stream(
+        &mut self,
+        account: &SyncEngine<T>,
+        lib: &Mutex<Library>,
+        space: &str,
+    ) -> Result<Option<&mut crate::comments::CommentSync>> {
+        if !self.comments.contains_key(space) {
+            let root = lib
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .root()
+                .to_path_buf();
+            let Some(engine) = self.engine(space) else {
+                return Ok(None);
+            };
+            let device = Uuid::parse_str(engine.device_id())
+                .map_err(|_| SyncError::Integrity("space device id is not a UUID".into()))?;
+            let me: penroam_sync_protocol::AccountId = account
+                .account_id()
+                .parse()
+                .map_err(|_| SyncError::Invalid("invalid account id".into()))?;
+            let dir = Scope::shared(space)?.dir(&root).join("comments");
+            let cs = crate::comments::CommentSync::open(&dir, device, &me)
+                .map_err(|e| SyncError::Invalid(e.to_string()))?;
+            self.comments.insert(space.to_string(), cs);
+        }
+        Ok(self.comments.get_mut(space))
+    }
+
+    /// Rereads a space's member list (who may comment, who moderates, who can be mentioned) and
+    /// saves it next to the space's sync data (`members.json`), so [`Self::cached_roster`] works
+    /// offline after a restart.
+    pub fn refresh_roster(
+        &mut self,
+        account: &mut SyncEngine<T>,
+        space: &str,
+    ) -> Result<Option<crate::comments::SpaceRoster>> {
+        let list = account.transport_mut().shared_members(&space_id(space)?)?;
+        let roster = crate::comments::SpaceRoster::from_member_list(&list);
+        if let Some(e) = self.engine(space) {
+            if let Ok(b) = serde_json::to_vec(&list) {
+                // a cache only: failing to write it costs nothing but offline names
+                let _ = penroam_storage::fsutil::write_atomic(&e.store.dir.join(MEMBERS_FILE), &b);
+            }
+        }
+        self.members.insert(space.to_string(), list);
+        match &roster {
+            Some(r) => {
+                self.rosters.insert(space.to_string(), r.clone());
+            }
+            None => {
+                self.rosters.remove(space);
+            }
+        }
+        Ok(roster)
+    }
+
+    /// The space's member list as last read: in memory, else as saved by
+    /// [`Self::refresh_roster`]. `None` when it was never read on this device.
+    pub fn cached_members(&mut self, space: &str) -> Option<&penroam_sync_protocol::MemberList> {
+        if !self.members.contains_key(space) {
+            let dir = self.engine(space)?.store.dir.clone();
+            let b = std::fs::read(dir.join(MEMBERS_FILE)).ok()?;
+            let list: penroam_sync_protocol::MemberList = serde_json::from_slice(&b).ok()?;
+            self.members.insert(space.to_string(), list);
+        }
+        self.members.get(space)
+    }
+
+    /// The roster from [`Self::cached_members`].
+    pub fn cached_roster(&mut self, space: &str) -> Option<crate::comments::SpaceRoster> {
+        crate::comments::SpaceRoster::from_member_list(self.cached_members(space)?)
+    }
+
+    /// [`Self::refresh_roster`], falling back to [`Self::cached_roster`] when the server can't
+    /// be reached (a network or other retryable failure). Other errors are returned.
+    pub fn roster(
+        &mut self,
+        account: &mut SyncEngine<T>,
+        space: &str,
+    ) -> Result<Option<crate::comments::SpaceRoster>> {
+        match self.refresh_roster(account, space) {
+            Err(e)
+                if e.is_retryable()
+                    || matches!(
+                        e,
+                        SyncError::Transport(
+                            crate::transport::TransportError::Network(_)
+                                | crate::transport::TransportError::ResponseLost
+                        )
+                    ) =>
+            {
+                Ok(self.cached_roster(space))
+            }
+            r => r,
+        }
+    }
+
+    /// Fetches who pushed each new operation and comment of a space (`history.v1`) into the
+    /// space's [`AttributionStore`](crate::attribution::AttributionStore). Uses the member list
+    /// read for comments when there is one, else reads it. When someone active at the last fetch
+    /// no longer is, everything is fetched again ([`crate::attribution::refresh`]) so an erased
+    /// account's tombstone replaces its id. Returns how many entries arrived.
+    pub fn sync_attribution(&mut self, account: &mut SyncEngine<T>, space: &str) -> Result<usize> {
+        use crate::attribution::{self as attr, AttributionStore, Stream};
+        if !self.members.contains_key(space) {
+            self.refresh_roster(account, space)?;
+        }
+        let active: std::collections::BTreeSet<String> = self
+            .members
+            .get(space)
+            .map(|l| {
+                l.members
+                    .iter()
+                    .filter(|m| m.state == penroam_sync_protocol::MembershipState::Active)
+                    .map(|m| m.account_id.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let again = self
+            .attributed_members
+            .get(space)
+            .is_some_and(|before| before.iter().any(|m| !active.contains(m)));
+        let comments = self.comments_available;
+        let engine = self
+            .engine(space)
+            .ok_or_else(|| SyncError::Invalid("no engine for this shared notebook".into()))?;
+        let mut store = AttributionStore::open(&engine.store.dir)?;
+        // what opening found was logged when it first arrived
+        let known = store.pin_violations().len();
+        let mut n = 0;
+        let t = engine.transport_mut() as &mut dyn attr::AttributionTransport;
+        for stream in [Stream::Ops, Stream::Comments] {
+            if stream == Stream::Comments && !comments {
+                continue;
+            }
+            n += if again {
+                attr::refresh(&mut store, t, stream)?
+            } else {
+                attr::fetch(&mut store, t, stream)?
+            };
+        }
+        // a device the server named with an account other than the one it was first seen with:
+        // its operations show as unverified; record why (ids only, no content)
+        let violations: Vec<String> = store.pin_violations()[known..]
+            .iter()
+            .map(|v| v.event())
+            .collect();
+        let engine = self.engine(space).expect("checked above");
+        for v in violations {
+            engine.event(v);
+        }
+        self.attributed_members.insert(space.to_string(), active);
+        Ok(n)
+    }
+
+    /// Syncs a space's comment stream: rereads its roster, then uploads what is queued and pulls,
+    /// verifies and merges what is new (`CommentSync::sync`), with the space engine's session and
+    /// keys. Call after the space's document sync, so its key log is fresh.
+    pub fn sync_comments(
+        &mut self,
+        account: &mut SyncEngine<T>,
+        lib: &Mutex<Library>,
+        space: &str,
+    ) -> Result<crate::comments::CommentReport> {
+        let root = lib
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .root()
+            .to_path_buf();
+        let nb = NotebookOwners::load(&root)?
+            .space(space)
+            .map(|(n, _)| n)
+            .ok_or_else(|| SyncError::Invalid("this shared notebook isn't assigned here".into()))?;
+        let roster = self.refresh_roster(account, space)?.ok_or_else(|| {
+            SyncError::Invalid("the member list has no owner or no caller".into())
+        })?;
+        if self.comment_stream(account, lib, space)?.is_none() {
+            return Err(SyncError::Invalid(
+                "no engine for this shared notebook".into(),
+            ));
+        }
+        let mut cs = self.comments.remove(space).expect("opened");
+        let engine = self.engine(space).expect("checked by comment_stream");
+        let res = engine.comment_session(nb, |t, keys, limits| {
+            cs.sync(
+                t as &mut dyn crate::comments::CommentTransport,
+                keys,
+                &roster,
+                limits,
+            )
+        });
+        self.comments.insert(space.to_string(), cs);
+        match res {
+            Some(r) => r.map_err(|e| match e {
+                crate::comments::CommentSyncError::Transport(t) => SyncError::Transport(t),
+                other => SyncError::Invalid(other.to_string()),
+            }),
+            None => Err(SyncError::NotEnrolled),
+        }
     }
 
     /// Accepts an invitation and joins its space as far as it goes now (the rest continues in
@@ -1829,6 +2150,9 @@ impl<T: SyncTransport> SpaceSet<T> {
         }
         if e.conflict_count(nb) > 0 {
             return NotebookSyncState::NeedsResolution;
+        }
+        if e.phase() == crate::engine::Phase::NeedsCatchUp {
+            return NotebookSyncState::NeedsCatchUp;
         }
         let queued = e.unacked() + e.not_ingested(lib, nb);
         if queued > 0 {

@@ -15,6 +15,13 @@ ts-rs.workspace = true
 crc32fast = "1"
 flate2 = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
+# Text CRDT for concurrent editing in shared notebooks (textcrdt.rs). Pinned exactly: the update
+# encoding is checked by golden vectors (tests/vectors/text-crdt.json).
+yrs = "=0.28.1"
+sha2.workspace = true
+# Grapheme and word boundaries for the text CRDT's diff (textcrdt::diff).
+unicode-segmentation = "1"
+
 
 [dev-dependencies]
 sha2.workspace = true

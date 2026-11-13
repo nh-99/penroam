@@ -15,12 +15,17 @@
 //! * [`geometry`], [`text`], [`markdown`]: brush geometry and text layout
 //!   shared with the renderer and the PDF exporter.
 //! * [`sheet`]: spreadsheet values and formulas in Markdown tables.
+//! * [`textcrdt`]: concurrent editing of a text block's text in shared notebooks.
+//! * [`comment`]: comment threads on shared notebooks: operations, their encoding,
+//!   order-independent merge and anchor resolution (`docs/formats/comments.md`).
 //!
 //! Architecture overview: `docs/architecture/overview.md`.
 
 #![warn(missing_docs)]
 
+pub mod activity;
 pub mod binary;
+pub mod comment;
 pub mod folder;
 pub mod geometry;
 pub mod markdown;
@@ -32,6 +37,7 @@ pub mod order_key;
 pub mod replica;
 pub mod sheet;
 pub mod text;
+pub mod textcrdt;
 pub mod validate;
 
 pub use model::*;

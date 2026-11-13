@@ -33,11 +33,12 @@ pub mod history;
 pub mod journal;
 mod legacy;
 pub mod library;
+pub mod restore;
 pub mod state;
 
 pub use archive::{
     export_archive_from, ArchiveSource, ArchiveSummary, ExportOptions, ImportOptions, ImportReport,
-    Manifest,
+    Manifest, AUTHORS_ENTRY, COMMENTS_ENTRY,
 };
 pub use backup::{
     BackupManifest, BackupPreview, BackupProblem, BackupReader, BackupWriter, ConflictPolicy,

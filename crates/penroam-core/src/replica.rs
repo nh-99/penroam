@@ -30,6 +30,14 @@
 //!   folder's name isn't worth interrupting anyone for.
 //! * Whether a notebook shows infinite canvases is a register that raises no
 //!   conflict either: it only changes how the pages are shown.
+//! * A text block's text, in a shared notebook, is also a sequence CRDT
+//!   ([`crate::textcrdt`]): every content write of the block starts one (its
+//!   *genesis*, built deterministically from that write), `textEdited` updates
+//!   edit the genesis they name, and the block shows the CRDT of its content
+//!   winner. Concurrent typing in one block therefore keeps everyone's text. An
+//!   edit to a genesis the winner didn't see (a whole-content write from an older
+//!   client, say) is kept as a content conflict alternate, and an edit the
+//!   winning delete didn't see makes `editedWhileDeleted`, as other edits do.
 //! * The shared notebook space a notebook moved to (`notebookShared`) is a
 //!   register too, without a conflict: the highest operation id wins, so every
 //!   device routes the notebook to the same space even if two devices shared it
@@ -103,22 +111,91 @@ impl Register<bool> {
     }
 }
 
+/// One applied `textEdited` (kept for conflicts and for rebuilding a text at an earlier state).
+#[derive(Debug, Clone)]
+struct TextEdit {
+    id: OperationId,
+    key: OpKey,
+    frontier: Arc<Frontier>,
+    base: OperationId,
+    update: Arc<Vec<u8>>,
+}
+
+/// A text block's CRDT started by one content write.
+#[derive(Debug, Clone)]
+struct Genesis {
+    key: OpKey,
+    frontier: Arc<Frontier>,
+    text: Arc<String>,
+    doc: crate::textcrdt::TextDoc,
+}
+
 #[derive(Debug, Clone)]
 struct ElementState {
     alive: Register<bool>,
     placement: Register<Arc<Element>>,
     content: Register<Arc<Element>>,
     style: Register<Arc<Element>>,
+    /// Text blocks: one CRDT per content write, by that write's id.
+    geneses: BTreeMap<OperationId, Genesis>,
+    /// Text blocks: every `textEdited`, in the order applied.
+    text_edits: Vec<TextEdit>,
 }
 
 impl ElementState {
     /// The element as shown: content from the content winner, overlaid with
     /// the placement and style winners (field groups merge independently).
     fn materialize(&self) -> Element {
-        let mut e = (*self.content.winner().value).clone();
+        let w = self.content.winner();
+        let mut e = (*w.value).clone();
+        if let (Element::Text(t), Some(g)) = (&mut e, self.geneses.get(&w.id)) {
+            t.text = g.doc.text();
+        }
         take_group(&mut e, &self.placement.winner().value, groups::PLACEMENT);
         take_group(&mut e, &self.style.winner().value, groups::STYLE);
         e
+    }
+
+    /// Starts a text CRDT for a content write of a text block.
+    fn start_text(&mut self, w: &WriteCtx, e: &Element) {
+        if let Element::Text(t) = e {
+            self.geneses.entry(w.id).or_insert_with(|| Genesis {
+                key: w.key,
+                frontier: w.frontier.clone(),
+                text: Arc::new(t.text.clone()),
+                doc: crate::textcrdt::TextDoc::genesis(w.id, &t.text),
+            });
+        }
+    }
+
+    /// Whether some write on the genesis `base` (its content write or an edit of it) causally
+    /// follows `h`.
+    fn followed_on(&self, base: OperationId, h: OpKey) -> bool {
+        self.geneses
+            .get(&base)
+            .is_some_and(|g| g.key == h || dominated(h, g.key, &g.frontier))
+            || self
+                .text_edits
+                .iter()
+                .filter(|e| e.base == base)
+                .any(|e| e.key == h || dominated(h, e.key, &e.frontier))
+    }
+
+    /// The text of the genesis `base` with only the edits `visible` accepts, or `None` without
+    /// that genesis.
+    fn text_at(
+        &self,
+        base: OperationId,
+        visible: &dyn Fn(DeviceId, u64) -> bool,
+    ) -> Option<crate::textcrdt::TextDoc> {
+        let g = self.geneses.get(&base)?;
+        let doc = crate::textcrdt::TextDoc::genesis(base, &g.text);
+        for e in self.text_edits.iter().filter(|e| e.base == base) {
+            if visible(e.key.device, e.key.seq) {
+                let _ = doc.apply(&e.update);
+            }
+        }
+        Some(doc)
     }
 }
 
@@ -433,7 +510,7 @@ impl Replica {
         };
         // validate everything before mutating anything
         validate_body(&op.body)?;
-        self.check(&op.body)?;
+        self.check(&op.body, op.device_id)?;
         self.mutate(&op.body, &w, op.at);
         let f = self.frontier.entry(op.device_id).or_insert(0);
         *f = (*f).max(op.local_sequence);
@@ -453,7 +530,7 @@ impl Replica {
         self.pages.get(id).ok_or(OpError::NoPage(*id))
     }
 
-    fn check(&self, body: &DocumentOperation) -> Result<(), OpError> {
+    fn check(&self, body: &DocumentOperation, author: DeviceId) -> Result<(), OpError> {
         use DocumentOperation::*;
         let pre = |m: String| Err(OpError::Precondition(m));
         match body {
@@ -503,6 +580,36 @@ impl Replica {
                 let p = self.page_state(page_id)?;
                 if let Some(id) = ids.iter().find(|id| !p.elements.contains_key(id)) {
                     return pre(format!("element {id} does not exist"));
+                }
+            }
+            TextEdited {
+                page_id,
+                element_id,
+                base,
+                update,
+                ..
+            } => {
+                let p = self.page_state(page_id)?;
+                let Some(e) = p.elements.get(element_id) else {
+                    return pre(format!("element {element_id} does not exist"));
+                };
+                if !matches!(&*e.content.winner().value, Element::Text(_)) {
+                    return pre(format!("element {element_id} is not a text block"));
+                }
+                if !e.geneses.contains_key(base) {
+                    return pre(format!(
+                        "text of element {element_id} has no genesis {base}"
+                    ));
+                }
+                let bytes = crate::textcrdt::b64::decode(update)
+                    .ok_or_else(|| OpError::Precondition("invalid text update".into()))?;
+                // written under its author's own client id, complete, bounded and plain text
+                // (checked on a copy, panics contained), before anything changes
+                if let Err(err) = e.geneses[base]
+                    .doc
+                    .check_edit(&bytes, crate::textcrdt::edit_client(author))
+                {
+                    return pre(format!("text update refused: {err}"));
                 }
             }
             ElementsReplaced {
@@ -729,17 +836,19 @@ impl Replica {
                             s.placement.write(w.of(v.clone()));
                             s.content.write(w.of(v.clone()));
                             s.style.write(w.of(v));
+                            s.start_text(w, e);
                         }
                         None => {
-                            p.elements.insert(
-                                e.id(),
-                                ElementState {
-                                    alive: Register::new(w.of(true)),
-                                    placement: Register::new(w.of(v.clone())),
-                                    content: Register::new(w.of(v.clone())),
-                                    style: Register::new(w.of(v)),
-                                },
-                            );
+                            let mut s = ElementState {
+                                alive: Register::new(w.of(true)),
+                                placement: Register::new(w.of(v.clone())),
+                                content: Register::new(w.of(v.clone())),
+                                style: Register::new(w.of(v)),
+                                geneses: BTreeMap::new(),
+                                text_edits: Vec::new(),
+                            };
+                            s.start_text(w, e);
+                            p.elements.insert(e.id(), s);
                         }
                     }
                 }
@@ -754,6 +863,37 @@ impl Replica {
                         .alive
                         .write(w.of(false));
                 }
+            }
+            TextEdited {
+                page_id,
+                element_id,
+                base,
+                update,
+                ..
+            } => {
+                let p = self.pg(page_id, at);
+                p.ops += 1;
+                let s = p.elements.get_mut(element_id).expect("checked");
+                let bytes = crate::textcrdt::b64::decode(update).expect("validated");
+                let g = s.geneses.get(base).expect("checked");
+                if g.doc.apply(&bytes).is_err() {
+                    // Checked, yet Yrs failed (a contained panic): its document may be
+                    // half-changed. Rebuild it from the genesis and the edits applied before,
+                    // and leave this one out, as every replica that rebuilds does.
+                    let doc = crate::textcrdt::TextDoc::genesis(*base, &g.text);
+                    for e in s.text_edits.iter().filter(|e| e.base == *base) {
+                        let _ = doc.apply(&e.update);
+                    }
+                    s.geneses.get_mut(base).expect("checked").doc = doc;
+                    return;
+                }
+                s.text_edits.push(TextEdit {
+                    id: w.id,
+                    key: w.key,
+                    frontier: w.frontier.clone(),
+                    base: *base,
+                    update: Arc::new(bytes),
+                });
             }
             ElementsReplaced {
                 page_id,
@@ -771,6 +911,7 @@ impl Replica {
                     }
                     if mask & groups::CONTENT != 0 {
                         s.content.write(w.of(v.clone()));
+                        s.start_text(w, e);
                     }
                     if mask & groups::STYLE != 0 {
                         s.style.write(w.of(v));
@@ -849,6 +990,67 @@ impl Replica {
                 })
                 .collect(),
         )
+    }
+
+    /// The genesis a text block's shown text comes from, and that text. `None` for other
+    /// elements and for blocks without a CRDT (none outside shared notebooks have one).
+    pub fn text_of(&self, page: Uuid, element: Uuid) -> Option<(OperationId, String)> {
+        let e = self.pages.get(&page)?.elements.get(&element)?;
+        let w = e.content.winner();
+        let g = e.geneses.get(&w.id)?;
+        Some((w.id, g.doc.text()))
+    }
+
+    /// A stable position (Yrs sticky index bytes) at UTF-16 offset `offset` in a text block's
+    /// shown text ([`crate::textcrdt::TextDoc::sticky`]); `after` for a range's start. `None` for
+    /// other elements, blocks without a text CRDT, or an offset past the end.
+    pub fn text_sticky(
+        &self,
+        page: Uuid,
+        element: Uuid,
+        offset: u32,
+        after: bool,
+    ) -> Option<Vec<u8>> {
+        let e = self.pages.get(&page)?.elements.get(&element)?;
+        e.geneses
+            .get(&e.content.winner().id)?
+            .doc
+            .sticky(offset, after)
+    }
+
+    /// Where a [`Replica::text_sticky`] position is now in the block's shown text, as a UTF-16
+    /// offset; `None` when the position belongs to text that is no longer the block's (another
+    /// whole-content write replaced it) or the bytes are bad.
+    pub fn text_offset(&self, page: Uuid, element: Uuid, sticky: &[u8]) -> Option<usize> {
+        let e = self.pages.get(&page)?.elements.get(&element)?;
+        e.geneses
+            .get(&e.content.winner().id)?
+            .doc
+            .resolve_sticky(sticky)
+            .map(|o| o as usize)
+    }
+
+    /// The `textEdited` update that turns a text block's text, **as of the state `visible`
+    /// selects** (which edits count), into `new_text`, written under `client`
+    /// ([`crate::textcrdt::edit_client`]). Returns the genesis it edits and the base64url update,
+    /// or `None` when there is nothing to change or the element has no text CRDT.
+    ///
+    /// Use the state the person saw when they typed (the sync client passes "everything this
+    /// device wrote, plus what it had installed"), so text that arrived later isn't deleted by a
+    /// change computed without it; the update refers to items by id, so that text stays.
+    pub fn text_edit(
+        &self,
+        page: Uuid,
+        element: Uuid,
+        client: u64,
+        new_text: &str,
+        visible: &dyn Fn(DeviceId, u64) -> bool,
+    ) -> Option<(OperationId, String)> {
+        let e = self.pages.get(&page)?.elements.get(&element)?;
+        let base = e.content.winner().id;
+        let doc = e.text_at(base, visible)?;
+        let update = doc.edit_update(client, new_text)?;
+        Some((base, crate::textcrdt::b64::encode(&update)))
     }
 
     /// The shared notebook space this notebook moved to (`notebookShared`), if any. When two
@@ -955,6 +1157,7 @@ impl Replica {
                         |a, b| changed_groups(a, b) & g == 0,
                     );
                 }
+                text_conflict(&mut out, *pid, *eid, e);
                 alive_conflict(
                     &mut out,
                     ConflictTarget::ElementTrash {
@@ -966,15 +1169,23 @@ impl Replica {
                 let alive = e.alive.alive_winner();
                 if !alive.value {
                     let deletes: Vec<&Write<bool>> = e.alive.heads.iter().collect();
+                    let seen = |id: OperationId, key: OpKey| {
+                        deletes
+                            .iter()
+                            .any(|d| d.id == id || dominated(key, d.key, &d.frontier))
+                    };
                     let unseen: Vec<OperationId> = [&e.placement, &e.content, &e.style]
                         .iter()
                         .flat_map(|r| r.heads.iter())
-                        .filter(|h| {
-                            !deletes
-                                .iter()
-                                .any(|d| d.id == h.id || dominated(h.key, d.key, &d.frontier))
-                        })
+                        .filter(|h| !seen(h.id, h.key))
                         .map(|h| h.id)
+                        // typing the deleting device hadn't seen is an edit too
+                        .chain(
+                            e.text_edits
+                                .iter()
+                                .filter(|t| !seen(t.id, t.key))
+                                .map(|t| t.id),
+                        )
                         .collect();
                     if let Some(latest) = unseen.iter().max() {
                         out.push(Conflict {
@@ -1046,6 +1257,78 @@ fn reg_conflict<T: Clone>(
             })
             .collect(),
     });
+}
+
+/// For a text block: shows the content conflict's values with their CRDT text, and adds the
+/// texts of geneses that were edited without the winner seeing those edits (an older client's
+/// whole-content write concurrent with typing) as alternates, so that text stays recoverable.
+fn text_conflict(out: &mut Vec<Conflict>, page_id: Uuid, element_id: Uuid, e: &ElementState) {
+    if e.geneses.is_empty() || !matches!(&*e.content.winner().value, Element::Text(_)) {
+        return;
+    }
+    let winner = e.content.winner();
+    let with_text = |id: OperationId, v: &Element| -> serde_json::Value {
+        let mut v = v.clone();
+        if let (Element::Text(t), Some(g)) = (&mut v, e.geneses.get(&id)) {
+            t.text = g.doc.text();
+        }
+        serde_json::to_value(v).expect("json")
+    };
+    let target = ConflictTarget::Element {
+        page_id,
+        element_id,
+        group: groups::CONTENT,
+    };
+    // the shown value and register alternates carry the text as edited, not as first written
+    if let Some(c) = out.iter_mut().find(|c| c.target == target) {
+        c.winner_value = with_text(winner.id, &winner.value);
+        for a in &mut c.alternates {
+            if let Some(h) = e.content.heads.iter().find(|h| h.id == a.op_id) {
+                a.value = with_text(h.id, &h.value);
+            }
+        }
+    }
+    let mut extra: Vec<Alternate> = Vec::new();
+    for (base, g) in &e.geneses {
+        if *base == winner.id {
+            continue;
+        }
+        let missed = e
+            .text_edits
+            .iter()
+            .filter(|t| t.base == *base)
+            .any(|t| !e.followed_on(winner.id, t.key));
+        if missed
+            && g.doc.text()
+                != e.geneses
+                    .get(&winner.id)
+                    .map(|w| w.doc.text())
+                    .unwrap_or_default()
+        {
+            extra.push(Alternate {
+                op_id: *base,
+                value: with_text(*base, &winner.value),
+            });
+        }
+    }
+    if extra.is_empty() {
+        return;
+    }
+    match out.iter_mut().find(|c| c.target == target) {
+        Some(c) => {
+            for a in extra {
+                if !c.alternates.iter().any(|x| x.op_id == a.op_id) {
+                    c.alternates.push(a);
+                }
+            }
+        }
+        None => out.push(Conflict {
+            target,
+            winner: winner.id,
+            winner_value: with_text(winner.id, &winner.value),
+            alternates: extra,
+        }),
+    }
 }
 
 fn alive_conflict(out: &mut Vec<Conflict>, target: ConflictTarget, r: &Register<bool>) {
