@@ -11,6 +11,10 @@
 //! when sync is not set up); the sync worker waits for the library lock, so
 //! nudging before the change is safe.
 //!
+//! Every command that changes a notebook takes the library through [`writable_lib!`], which
+//! holds the lock and refuses shared notebooks this account may only view or lost access to
+//! ([`crate::sharing::require_writable`], the one place that rule lives).
+//!
 //! Large payloads (pages, thumbnails, assets) travel as raw IPC bodies
 //! instead of JSON-encoded byte arrays.
 
@@ -78,6 +82,16 @@ macro_rules! lib {
             message: "library lock poisoned".into(),
         })?
     };
+}
+
+/// The library, locked, after checking that notebook `$id` may be changed here
+/// ([`crate::sharing::require_writable`]). Every command that changes a notebook uses this.
+macro_rules! writable_lib {
+    ($state:expr, $id:expr) => {{
+        let guard = lib!($state);
+        crate::sharing::require_writable(&guard, $id)?;
+        guard
+    }};
 }
 
 /// Returns freed heap pages to the OS after large transient allocations
@@ -184,7 +198,8 @@ pub fn create_notebook(
 #[tauri::command(async)]
 pub fn move_notebook_to_vault(state: State<'_, AppState>, id: Uuid, vault: String) -> R<Notebook> {
     let copy = {
-        let mut lib = lib!(state);
+        let mut lib = writable_lib!(state, id);
+        crate::sharing::require_not_shared(&lib, id)?;
         let root = lib.root().to_path_buf();
         crate::sync::require_open_vault(&root, &vault)?;
         let mut archive = std::io::Cursor::new(Vec::new());
@@ -239,7 +254,7 @@ pub fn duplicate_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
 #[tauri::command(async)]
 pub fn rename_notebook(state: State<'_, AppState>, id: Uuid, title: String) -> R<Notebook> {
     state.sync.nudge();
-    let nb = lib!(state).rename_notebook(id, &title)?;
+    let nb = writable_lib!(state, id).rename_notebook(id, &title)?;
     state.search.notebook_changed(id);
     Ok(nb)
 }
@@ -280,7 +295,8 @@ pub fn delete_folder(state: State<'_, AppState>, id: Uuid) -> R<()> {
 
 /// Files a notebook in a folder, or at the top level. Vault notebooks can't
 /// be filed: folders sync through the main account, and a vault's contents
-/// must not depend on it.
+/// must not depend on it. Shared notebooks can be, whatever the role: where a notebook is filed
+/// is personal, so it is never sent to the other members (it stays on this device).
 #[tauri::command(async)]
 pub fn file_notebook(state: State<'_, AppState>, id: Uuid, folder: Option<Uuid>) -> R<Notebook> {
     let nb = {
@@ -298,14 +314,14 @@ pub fn file_notebook(state: State<'_, AppState>, id: Uuid, folder: Option<Uuid>)
 #[tauri::command(async)]
 pub fn set_notebook_cover(state: State<'_, AppState>, id: Uuid, cover: String) -> R<Notebook> {
     state.sync.nudge();
-    Ok(lib!(state).set_notebook_cover(id, &cover)?)
+    Ok(writable_lib!(state, id).set_notebook_cover(id, &cover)?)
 }
 
 /// Moves a notebook to the trash (restorable).
 #[tauri::command(async)]
 pub fn delete_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
     state.sync.nudge();
-    let nb = lib!(state).delete_notebook(id)?;
+    let nb = writable_lib!(state, id).delete_notebook(id)?;
     state.search.notebook_changed(id);
     Ok(nb)
 }
@@ -314,7 +330,7 @@ pub fn delete_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
 #[tauri::command(async)]
 pub fn restore_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
     state.sync.nudge();
-    let nb = lib!(state).restore_notebook(id)?;
+    let nb = writable_lib!(state, id).restore_notebook(id)?;
     state.search.notebook_changed(id);
     Ok(nb)
 }
@@ -324,7 +340,7 @@ pub fn restore_notebook(state: State<'_, AppState>, id: Uuid) -> R<Notebook> {
 #[tauri::command(async)]
 pub fn purge_notebook(state: State<'_, AppState>, id: Uuid) -> R<()> {
     state.sync.nudge();
-    lib!(state).purge_notebook(id)?;
+    writable_lib!(state, id).purge_notebook(id)?;
     state.search.notebook_changed(id);
     Ok(())
 }
@@ -341,7 +357,7 @@ pub fn set_infinite_canvas(
 ) -> R<Notebook> {
     state.sync.nudge();
     let nb = {
-        let mut lib = lib!(state);
+        let mut lib = writable_lib!(state, id);
         if infinite && collapse == Some(true) {
             lib.collapse_pages_into_canvas(id)?;
         }
@@ -363,7 +379,7 @@ pub fn create_page(
     size: Option<Size>,
 ) -> R<NotebookAndPage> {
     state.sync.nudge();
-    let mut lib = lib!(state);
+    let mut lib = writable_lib!(state, notebook_id);
     if let Some(size) = size {
         // explicit size (custom paper): used by the benchmark harness
         let t = template.unwrap_or(Template {
@@ -391,7 +407,7 @@ pub fn update_page_order(
     order: Vec<Uuid>,
 ) -> R<Notebook> {
     state.sync.nudge();
-    let nb = lib!(state).update_page_order(notebook_id, order)?;
+    let nb = writable_lib!(state, notebook_id).update_page_order(notebook_id, order)?;
     state.search.notebook_changed(notebook_id);
     Ok(nb)
 }
@@ -400,7 +416,7 @@ pub fn update_page_order(
 #[tauri::command(async)]
 pub fn delete_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Notebook> {
     state.sync.nudge();
-    let nb = lib!(state).delete_page(notebook_id, page_id)?;
+    let nb = writable_lib!(state, notebook_id).delete_page(notebook_id, page_id)?;
     state.search.notebook_changed(notebook_id);
     Ok(nb)
 }
@@ -409,7 +425,7 @@ pub fn delete_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid)
 #[tauri::command(async)]
 pub fn restore_page(state: State<'_, AppState>, notebook_id: Uuid, page_id: Uuid) -> R<Notebook> {
     state.sync.nudge();
-    let nb = lib!(state).restore_page(notebook_id, page_id)?;
+    let nb = writable_lib!(state, notebook_id).restore_page(notebook_id, page_id)?;
     state.search.notebook_changed(notebook_id);
     Ok(nb)
 }
@@ -447,7 +463,12 @@ pub fn apply_page_operations(
     batch: OperationBatch,
 ) -> R<ApplyOutcome> {
     state.sync.nudge();
-    let out = lib!(state).apply_page_operations(notebook_id, page_id, &batch)?;
+    // page edits have their own rule: see `require_page_writable`
+    let out = {
+        let mut lib = lib!(state);
+        crate::sharing::require_page_writable(&lib, notebook_id)?;
+        lib.apply_page_operations(notebook_id, page_id, &batch)?
+    };
     state.search.page_changed(notebook_id, page_id);
     Ok(out)
 }
@@ -566,7 +587,7 @@ pub fn import_pdf(
     state.sync.nudge();
     let bytes = read_pdf_file(&app, &path)?;
     let info = penroam_pdf::inspect(&bytes)?;
-    let mut lib = lib!(state);
+    let mut lib = writable_lib!(state, notebook_id);
     let asset = lib.add_asset(notebook_id, &bytes, "application/pdf", file_name)?;
     let pages = info
         .iter()
@@ -609,7 +630,7 @@ pub fn add_pdf_asset(
     state.sync.nudge();
     let bytes = read_pdf_file(&app, &path)?;
     let info = penroam_pdf::inspect(&bytes)?;
-    let mut lib = lib!(state);
+    let mut lib = writable_lib!(state, notebook_id);
     let asset = lib.add_asset(notebook_id, &bytes, "application/pdf", file_name)?;
     let pages = info.iter().map(|i| i.background(&asset.sha256)).collect();
     Ok(PdfAsset {
@@ -1219,7 +1240,8 @@ pub fn restore_page_version(
 ) -> R<ApplyOutcome> {
     state.sync.nudge();
     let target = version_of(&state, notebook_id, page_id, revision, position)?;
-    let r = lib!(state).restore_page_content(notebook_id, page_id, &target)?;
+    let r =
+        writable_lib!(state, notebook_id).restore_page_content(notebook_id, page_id, &target)?;
     state.search.page_changed(notebook_id, page_id);
     Ok(r)
 }
@@ -1239,9 +1261,14 @@ pub fn restore_notebook_version(
         let (nb, pages) = crate::sync::notebook_at(&state, notebook_id, at)?
             .ok_or_else(|| invalid("that version isn't available"))?;
         let targets = pages.into_iter().map(|p| (p.id, p)).collect();
-        lib!(state).restore_notebook_content(notebook_id, &nb.title, &nb.page_order, &targets)?
+        writable_lib!(state, notebook_id).restore_notebook_content(
+            notebook_id,
+            &nb.title,
+            &nb.page_order,
+            &targets,
+        )?
     } else {
-        lib!(state).restore_notebook_version(notebook_id, at)?
+        writable_lib!(state, notebook_id).restore_notebook_version(notebook_id, at)?
     };
     state.search.notebook_changed(notebook_id);
     Ok(r)
@@ -1253,7 +1280,8 @@ pub fn history_stats(state: State<'_, AppState>, notebook_id: Uuid) -> R<History
     Ok(lib!(state).history_stats(notebook_id)?)
 }
 
-/// Deletes a notebook's history on this device.
+/// Deletes a notebook's history on this device. Not behind the read-only rule: the history is
+/// this device's own record and is never synced, so clearing it changes nothing shared.
 #[tauri::command(async)]
 pub fn clear_history(state: State<'_, AppState>, notebook_id: Uuid) -> R<()> {
     Ok(lib!(state).clear_history(notebook_id)?)
@@ -1299,7 +1327,12 @@ pub fn import_notebook(
 ) -> R<ImportReport> {
     state.sync.nudge();
     let bytes = read_user_file(&app, &path, MAX_IMPORT_BYTES)?;
-    let r = lib!(state).import_archive(std::io::Cursor::new(bytes));
+    let r = {
+        let mut lib = lib!(state);
+        // a notebook that is or was shared here can't come back under its own id
+        crate::sharing::reserve_import_ids(&mut lib);
+        lib.import_archive(std::io::Cursor::new(bytes))
+    };
     trim_heap();
     let r = r?;
     state.search.notebook_changed(r.notebook.id);
@@ -1541,7 +1574,7 @@ pub fn import_stroke_document(
     state.sync.nudge();
     let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| invalid(e.to_string()))?;
     drop(json);
-    let mut lib = lib!(state);
+    let mut lib = writable_lib!(state, notebook_id);
     let (rev, z) = lib.with_page(notebook_id, page_id, |p| (p.revision, p.max_z()))?;
     let elements = penroam_core::migrate::stroke_doc_to_elements(&v, z + 1)
         .map_err(|e| invalid(e.to_string()))?;

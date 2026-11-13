@@ -3547,6 +3547,7 @@ dependencies = [
  "tauri-plugin-store-billing",
  "tauri-plugin-updater",
  "tempfile",
+ "ts-rs",
  "url",
  "uuid",
  "windows",

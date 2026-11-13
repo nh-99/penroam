@@ -228,7 +228,10 @@ pub fn restore_backup(
     }
     for i in 0..total {
         report(&app, "Restoring notebooks", i, total);
-        r.restore(&mut *lock(&state)?, i, &options, &mut out);
+        let mut lib = lock(&state)?;
+        // a notebook that is or was shared here comes back as a copy under a new id
+        crate::sharing::reserve_import_ids(&mut lib);
+        r.restore(&mut lib, i, &options, &mut out);
     }
     // search rebuilds from the notes: the index is not part of a backup
     for id in &out.restored {

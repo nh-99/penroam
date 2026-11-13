@@ -11,6 +11,12 @@ import CloudNotebookCard from "../components/CloudNotebookCard.vue";
 import NewNotebookDialog from "../components/NewNotebookDialog.vue";
 import MoveToVaultDialog from "../components/MoveToVaultDialog.vue";
 import VaultBar from "../components/VaultBar.vue";
+import ShareDialog from "../components/ShareDialog.vue";
+import SharedNotebookCard from "../components/SharedNotebookCard.vue";
+import InvitationCard from "../components/InvitationCard.vue";
+import ConflictsDialog from "../components/ConflictsDialog.vue";
+import { useSharing } from "../stores/sharing";
+import { sharedStatusLabel, type SharedNotebookView } from "../platform/sharing";
 import PromptDialog from "../components/PromptDialog.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import SettingsDialog from "../components/SettingsDialog.vue";
@@ -44,7 +50,45 @@ const renamingFolder = ref<Folder | null>(null);
 const movingFolder = ref<Folder | null>(null);
 const deletingFolder = ref<Folder | null>(null);
 
-const list = computed(() => (showTrash.value ? lib.trashed : lib.shelf));
+const sharing = useSharing();
+/** Notebooks owned by somebody else are listed in "Shared with me", not on the shelf. */
+const list = computed(() => (showTrash.value ? lib.trashed : lib.shelf.filter((n) => !sharing.withMeIds.has(n.id))));
+const sharingNb = ref<{ id: string; title: string } | null>(null);
+const resolving = ref<{ id: string; title: string } | null>(null);
+const removingShared = ref<SharedNotebookView | null>(null);
+/** Shared-with-me entries show at the top level only, like cloud-only notebooks. */
+const withMeHere = computed(() => (lib.openFolder ? [] : sharing.withMe));
+const invitesHere = computed(() => (lib.openFolder ? [] : sharing.invitations));
+const signInForInvites = () => sync.signIn(sync.status?.serverUrl ?? sync.defaultServerUrl);
+const summaryOf = (id?: string) => (id ? lib.notebooks.find((n) => n.id === id) : undefined);
+const sharedStatusOf = (id: string) => {
+  const v = sharing.byNotebook.get(id);
+  return v && v.owner ? sharedStatusLabel(v) : undefined;
+};
+/** The access-removed copy an invitation to the same notebook is blocked by. */
+const oldCopyFor = (inv: { spaceId: string }) => sharing.withMe.find((n) => n.spaceId === inv.spaceId && n.state === "accessRemoved");
+const oldCopyOf = (inv: { spaceId: string }) => {
+  const v = oldCopyFor(inv);
+  return v ? Promise.resolve(v) : undefined;
+};
+function removeOldCopy(inv: { spaceId: string }) {
+  removingShared.value = oldCopyFor(inv) ?? null;
+}
+function openShared(v: SharedNotebookView) {
+  if (v.notebookId) void lib.open(v.notebookId);
+}
+function exportShared(v: SharedNotebookView) {
+  const nb = summaryOf(v.notebookId);
+  if (nb) void lib.exportNotebook(nb.id, nb.title);
+}
+function peopleOf(v: SharedNotebookView) {
+  if (v.notebookId) sharingNb.value = { id: v.notebookId, title: summaryOf(v.notebookId)?.title ?? v.title };
+}
+async function confirmRemoveShared() {
+  const v = removingShared.value;
+  removingShared.value = null;
+  if (v) await sharing.removeLocal(v);
+}
 /** Cloud-only notebooks have no folder until they're downloaded, so they stay at the top level. */
 const cloudHere = computed(() => (lib.openFolder ? [] : sync.cloudNotebooks));
 const search = useSearch();
@@ -153,6 +197,29 @@ function recolor(nb: NotebookSummary) {
 
       <template v-else-if="!showTrash">
         <VaultBar v-if="sync.status?.phase !== 'revoked' && !lib.openFolder" />
+        <section v-if="invitesHere.length || (sharing.invitationsNeedSignIn && !lib.openFolder)" class="mb-6" aria-labelledby="invites-h">
+          <h2 id="invites-h" class="mb-2 text-sm font-semibold">Invitations</h2>
+          <div v-if="sharing.invitationsNeedSignIn" class="mb-2 flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface-2 px-4 py-3 text-sm" role="note" data-testid="invites-signin">
+            <p class="min-w-0 flex-1 basis-48">Sign in again to see invitations sent to your email address.</p>
+            <Btn variant="outline" @click="signInForInvites">Sign in again</Btn>
+          </div>
+          <ul class="space-y-2">
+            <InvitationCard v-for="inv in invitesHere" :key="inv.invitationId" :invitation="inv" :busy="sharing.working.includes(inv.invitationId)"
+              :problem="sharing.problems[inv.invitationId]"
+              @accept="sharing.accept(inv)" @decline="sharing.decline(inv)" @sign-in="signInForInvites"
+              @keep-copy="oldCopyOf(inv)?.then((v) => v && sharing.keepPrivateCopy(v))" @remove-local="removeOldCopy(inv)" />
+          </ul>
+        </section>
+        <section v-if="withMeHere.length" class="mb-8" aria-labelledby="shared-h">
+          <h2 id="shared-h" class="mb-2 text-sm font-semibold">Shared with me</h2>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+            <SharedNotebookCard v-for="v in withMeHere" :key="v.spaceId" :shared="v" :nb="summaryOf(v.notebookId)" :cover="v.notebookId ? lib.covers[v.notebookId] : undefined"
+              :busy="sharing.working.includes(v.spaceId)"
+              @open="openShared(v)" @people="peopleOf(v)" @export="exportShared(v)"
+              @resolve="resolving = { id: v.notebookId!, title: summaryOf(v.notebookId)?.title ?? v.title }"
+              @keep-copy="sharing.keepPrivateCopy(v)" @remove-local="removingShared = v" />
+          </div>
+        </section>
         <nav v-if="lib.openFolder" class="mb-4 flex flex-wrap items-center gap-1 text-sm" aria-label="Folders">
           <button class="touch-target rounded-lg px-2 text-muted hover:bg-surface-2" @click="lib.openFolderId = null">All notebooks</button>
           <template v-for="f in lib.breadcrumb" :key="f.id">
@@ -165,7 +232,7 @@ function recolor(nb: NotebookSummary) {
             @open="lib.openFolderId = f.id" @rename="renamingFolder = f" @move="movingFolder = f" @delete="deletingFolder = f" />
         </div>
         <p v-if="lib.openFolder && list.length === 0 && lib.subfolders.length === 0" class="mt-16 text-center text-sm text-muted">This folder is empty.</p>
-        <div v-else-if="lib.loaded && !lib.openFolder && list.length === 0 && lib.subfolders.length === 0 && cloudHere.length === 0" class="mx-auto mt-16 max-w-md text-center">
+        <div v-else-if="lib.loaded && !lib.openFolder && list.length === 0 && lib.subfolders.length === 0 && cloudHere.length === 0 && withMeHere.length === 0 && invitesHere.length === 0" class="mx-auto mt-16 max-w-md text-center">
           <NotebookPen :size="40" class="mx-auto mb-4 text-muted" />
           <h2 class="text-lg font-semibold">Your shelf is empty</h2>
           <p class="mt-2 text-sm leading-relaxed text-muted">Create a notebook to start writing by hand or typing on the same page. Everything stays on this device; nothing needs an account.</p>
@@ -178,7 +245,7 @@ function recolor(nb: NotebookSummary) {
           <NotebookCard v-for="nb in list" :key="nb.id" :nb="nb" :cover="lib.covers[nb.id]" @visible="(v) => lib.coverVisible(nb.id, v)"
             :vault-name="vaultName(nb.id)" :can-move-to-vault="sync.openVaults.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-vault="moving = nb"
             :can-move-to-folder="lib.folders.length > 0 && !sync.vaults.notebooks[nb.id]" @move-to-folder="filing = nb"
-            @open="lib.open(nb.id)" @rename="renaming = nb" @duplicate="lib.duplicate(nb.id)" @recolor="recolor(nb)"
+            @open="lib.open(nb.id)" :shared-status="sharedStatusOf(nb.id)" @share="sharingNb = { id: nb.id, title: nb.title }" @rename="renaming = nb" @duplicate="lib.duplicate(nb.id)" @recolor="recolor(nb)"
             @export="lib.exportNotebook(nb.id, nb.title)" @export-pdf="lib.exportPdf(nb.id, nb.title)" @print="lib.printNotebook(nb.id)" @trash="lib.trash(nb.id)" />
           <CloudNotebookCard v-for="nb in cloudHere" :key="nb.notebookId" :nb="nb"
             :downloading="sync.downloading.includes(nb.notebookId)" @download="download(nb.notebookId)" />
@@ -212,6 +279,11 @@ function recolor(nb: NotebookSummary) {
     </main>
 
     <NewNotebookDialog v-if="showNew" @close="showNew = false" @create="create" />
+    <ShareDialog v-if="sharingNb" :notebook-id="sharingNb.id" :title="sharingNb.title" @close="sharingNb = null" />
+    <ConflictsDialog v-if="resolving" :notebook-id="resolving.id" :current-title="resolving.title" @close="resolving = null" @resolved="lib.refresh(); sharing.refresh()" />
+    <ConfirmDialog v-if="removingShared" danger title="Remove from this device?" confirm="Remove from this device"
+      message="This only removes the copy on this device. Nothing is deleted for the owner or anyone else."
+      @close="removingShared = null" @confirm="confirmRemoveShared" />
     <MoveToVaultDialog v-if="moving" :notebook="moving" @close="moving = null" />
     <FolderPickerDialog v-if="filing" :title="`Move “${filing.title}” to a folder`" :current="filing.folder ?? null"
       @close="filing = null" @choose="(f) => { lib.fileNotebook(filing!.id, f); filing = null; }" />

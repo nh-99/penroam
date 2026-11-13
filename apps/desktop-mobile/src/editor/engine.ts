@@ -557,6 +557,7 @@ export class InkEditor {
     }
     this.scrollRequested = null;
     this.session = session;
+    session.readOnly = this.viewOnly;
     // PDF page bitmaps belong to the notebook the cache reads from
     if (pdfCache !== this.pdfCache) {
       this.renderer.pdfPages.clear();
@@ -707,7 +708,7 @@ export class InkEditor {
 
   setTemplate(t: Template) {
     const s = this.session;
-    if (!s) return;
+    if (!s || this.viewOnly) return;
     const prev = s.page.template;
     if (prev.kind === t.kind && prev.spacing === t.spacing) return;
     // Locked text follows the paper's rows. Paper without rows leaves it where it is.
@@ -1000,7 +1001,7 @@ export class InkEditor {
    */
   placePdfPages(pages: PdfBackgroundRef[]) {
     const s = this.session;
-    if (!s || !pages.length) return;
+    if (!s || this.viewOnly || !pages.length) return;
     this.endTextEdit();
     this.cancelGestures();
     const sp = s.page.template.spacing;
@@ -1253,7 +1254,32 @@ export class InkEditor {
 
   // ========================================================== tools ==
 
+  /** View-only: drawing, erasing, text and selection tools are refused (hand/pan stays). */
+  private viewOnly = false;
+
+  /**
+   * Switches view-only mode (viewer role, or access removed). The tool becomes the hand, native
+   * ink stops being attached for writing, and the session refuses every change. Zoom, scrolling,
+   * search and export are unaffected.
+   */
+  setReadOnly(on: boolean) {
+    if (on === this.viewOnly) return;
+    this.viewOnly = on;
+    this.endTextEdit();
+    this.cancelGestures();
+    this.clearSelection();
+    if (this.session) this.session.readOnly = on;
+    if (on) this.setTool("hand");
+    this.updateNative();
+    this.emitAll();
+  }
+
+  get isReadOnly() {
+    return this.viewOnly;
+  }
+
   setTool(tool: Tool) {
+    if (this.viewOnly && tool !== "hand") return;
     if (tool === this.tool) return;
     this.endTextEdit();
     this.cancelGestures();
@@ -1343,7 +1369,7 @@ export class InkEditor {
   // ================================================== pointer input ==
 
   private effectiveTool(e: PointerEvent): Tool {
-    if (this.spaceDown) return "hand";
+    if (this.spaceDown || this.viewOnly) return "hand";
     if (penErases(e)) return "eraser";
     return this.tool;
   }
@@ -1895,7 +1921,7 @@ export class InkEditor {
 
   /** The checkbox this press could tick. Ticking belongs to the pen, select and hand tools. */
   private pressedTask(e: PointerEvent, tool: Tool): TaskTap | null {
-    if (!this.session || e.button > 0 || (tool !== "pen" && tool !== "select" && tool !== "hand")) return null;
+    if (!this.session || this.viewOnly || e.button > 0 || (tool !== "pen" && tool !== "select" && tool !== "hand")) return null;
     const hit = this.taskAtPoint(...this.docPoint(e));
     if (!hit) return null;
     const [x, y] = this.viewportPoint(e);
@@ -1906,7 +1932,7 @@ export class InkEditor {
     const s = this.session;
     const t = s?.elementById(hit.id);
     // a sync or an undo can change the block under a press, and `at` is only good for its text
-    if (!s || t?.type !== "text" || t.text !== hit.text) return;
+    if (!s || this.viewOnly || t?.type !== "text" || t.text !== hit.text) return;
     const next: Text = { ...t, text: toggledTask(t.text, hit.box) };
     s.commit({ label: hit.box.done ? "Untick task" : "Tick task", forward: [{ op: "replaceElements", elements: [next] }], inverse: [{ op: "replaceElements", elements: [t] }] });
   }
@@ -2233,14 +2259,14 @@ export class InkEditor {
   }
 
   selectAll() {
-    if (!this.session) return;
+    if (!this.session || this.viewOnly) return;
     this.selection = new Set(this.session.page.elements.map((e) => e.id));
     this.updateSelectionBox();
   }
 
   deleteSelection() {
     const s = this.session;
-    if (!s || this.selection.size === 0) return;
+    if (!s || this.viewOnly || this.selection.size === 0) return;
     const els = [...this.selection].map((id) => s.elementById(id)).filter(Boolean) as Element[];
     this.selection = new Set();
     s.commit({ label: "Delete", forward: [{ op: "removeElements", ids: els.map((e) => e.id) }], inverse: [{ op: "addElements", elements: els }] });
@@ -2316,7 +2342,7 @@ export class InkEditor {
 
   editSelectedText() {
     const t = this.singleSelectedText();
-    if (t) this.beginTextEdit(t, false);
+    if (t && !this.viewOnly) this.beginTextEdit(t, false);
   }
 
   private beginTextEdit(t: Text, isNew: boolean) {
@@ -2839,7 +2865,7 @@ export class InkEditor {
 
   private wantNative(): boolean {
     // native layers draw strokes themselves and cannot lock them to the ruler
-    if (!this.native || !this.settings.useNativeInk || !this.session || this.overlayBlocked || this.edit || this.rulerShown) return false;
+    if (!this.native || !this.settings.useNativeInk || !this.session || this.viewOnly || this.overlayBlocked || this.edit || this.rulerShown) return false;
     if (this.native.kind === "ios-pencil") return this.tool === "pen" || this.tool === "highlighter";
     return DRAW_TOOLS.includes(this.tool);
   }

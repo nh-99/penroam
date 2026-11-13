@@ -143,6 +143,20 @@ export class PageSession {
   private rebases = 0;
   events: SessionEvents = {};
   /**
+   * View-only access (a viewer, or access that was removed). This is the central guard: while
+   * set, `commit`, `undo` and `redo` refuse, so nothing is applied locally or queued for Rust,
+   * whatever the UI above still offers. Rust refuses the same writes; this keeps the page from
+   * showing edits that would never be saved.
+   */
+  private readOnlyFlag = false;
+  get readOnly() {
+    return this.readOnlyFlag;
+  }
+  set readOnly(on: boolean) {
+    this.readOnlyFlag = on;
+    this.emitHistory();
+  }
+  /**
    * Reloads the page from storage. When set, a batch rejected because the
    * page changed underneath (e.g. synced remote edits) is rebased: the fresh
    * page is loaded and the unsaved local ops are re-applied on top, so local
@@ -161,10 +175,10 @@ export class PageSession {
   }
 
   get canUndo() {
-    return this.undoStack.length > 0;
+    return !this.readOnlyFlag && this.undoStack.length > 0;
   }
   get canRedo() {
-    return this.redoStack.length > 0;
+    return !this.readOnlyFlag && this.redoStack.length > 0;
   }
   get pendingCount() {
     return this.pending.length;
@@ -182,7 +196,7 @@ export class PageSession {
   /** Applies a change locally, records it for undo and queues it for saving. */
   commit(change: Change): void {
     if (this.closed) throw new Error("session closed");
-    if (change.forward.length === 0) return;
+    if (this.readOnlyFlag || change.forward.length === 0) return;
     this.applyLocal(change.forward);
     this.undoStack.push(change);
     if (this.undoStack.length > this.historyLimit) this.undoStack.shift();
@@ -192,6 +206,7 @@ export class PageSession {
   }
 
   undo(): Change | null {
+    if (this.readOnlyFlag) return null;
     const c = this.undoStack.pop();
     if (!c) return null;
     const ops = this.tolerant(c.inverse);
@@ -203,6 +218,7 @@ export class PageSession {
   }
 
   redo(): Change | null {
+    if (this.readOnlyFlag) return null;
     const c = this.redoStack.pop();
     if (!c) return null;
     const ops = this.tolerant(c.forward);

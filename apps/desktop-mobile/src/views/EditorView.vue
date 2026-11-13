@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search, FileText, FileImage, ClipboardCopy, History, File, GalleryVertical, Infinity as InfinityIcon, Check } from "@lucide/vue";
+import { ArrowLeft, ChevronLeft, ChevronRight, PanelLeft, Plus, LayoutTemplate, FileUp, Download, FileDown, Printer, Settings, LoaderCircle, TriangleAlert, Search, FileText, FileImage, ClipboardCopy, History, File, GalleryVertical, Infinity as InfinityIcon, Check, Users, Eye } from "@lucide/vue";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
@@ -14,6 +14,9 @@ import ConflictsDialog from "../components/ConflictsDialog.vue";
 import HistoryDialog from "../components/HistoryDialog.vue";
 import { useSync } from "../stores/sync";
 import SettingsDialog from "../components/SettingsDialog.vue";
+import ShareDialog from "../components/ShareDialog.vue";
+import { useSharing } from "../stores/sharing";
+import { accessBanner, sharingApi, syncStateLabel, type NotebookAccess } from "../platform/sharing";
 import CloudBanner from "../components/CloudBanner.vue";
 import SearchPanel from "../components/SearchPanel.vue";
 import { useSearch } from "../stores/search";
@@ -44,9 +47,31 @@ function openSync() {
   else showSettings.value = true;
 }
 const renaming = ref(false);
+const sharing = useSharing();
+const showShare = ref(false);
+/** What Rust says this device may do with the notebook; null until it answers. */
+const access = ref<NotebookAccess | null>(null);
+const readOnly = computed(() => !!access.value?.readOnly);
+const banner = computed(() => accessBanner(access.value));
+/** The shared-notebook entry (sync state, role) of the open notebook, if it is shared. */
+const sharedEntry = computed(() => sharing.byNotebook.get(lib.current?.id ?? ""));
+async function loadAccess() {
+  const id = lib.current?.id;
+  if (!id) return;
+  try {
+    const a = await sharingApi.access(id);
+    if (lib.current?.id === id) access.value = a;
+  } catch {
+    // no host or an older backend: an ordinary, writable notebook
+    if (lib.current?.id === id) access.value = null;
+  }
+}
 const blocked = computed(() => narrow.value && drawerOpen.value);
 const host = useEditorHost(viewport, blocked);
 const st = host.state;
+// loaded again when the notebook changes, and when the shared list does (role changed, access removed)
+watch([() => lib.current?.id, () => sharing.notebooks], loadAccess, { immediate: true });
+watch([readOnly, () => host.editor.value], () => host.setReadOnly(readOnly.value), { immediate: true });
 const mod = modKey();
 
 const nb = computed(() => lib.current!);
@@ -82,6 +107,7 @@ function selectPage(id: string) {
   if (narrow.value) drawerOpen.value = false;
 }
 async function addPage(after?: number) {
+  if (readOnly.value) return;
   const id = await lib.addPage(after ?? idx.value);
   if (id) lib.currentPageId = id;
 }
@@ -95,6 +121,7 @@ async function back() {
   lib.close();
 }
 async function importPdf() {
+  if (readOnly.value) return;
   if (canvas.value) {
     // the whole document goes onto the page that is open
     const pages = await lib.importPdfForCanvas();
@@ -108,10 +135,12 @@ async function importPdf() {
 /** Asking whether to combine the pages, before infinite canvases go on. */
 const askCanvas = ref(false);
 function toggleCanvas() {
+  if (readOnly.value) return;
   if (!canvas.value && nb.value.pageOrder.length > 1) askCanvas.value = true;
   else void setCanvas(!canvas.value, false);
 }
 async function setCanvas(on: boolean, collapse: boolean) {
+  if (readOnly.value) return;
   askCanvas.value = false;
   try {
     await host.flush();
@@ -189,11 +218,39 @@ const templates: { kind: TemplateKind; label: string }[] = [
   { kind: "dotted", label: "Dotted" },
 ];
 function setTemplate(kind: TemplateKind) {
+  if (readOnly.value) return;
   host.editor.value?.setTemplate({ kind, spacing: kind === "dotted" ? 20 : kind === "grid" ? 18 : 24 });
 }
 
 function setTool(t: Tool) {
+  if (readOnly.value && t !== "hand") return;
   host.editor.value?.setTool(t);
+}
+
+/** Shortcuts while view-only: looking around, searching, zooming and exporting; nothing that edits. */
+function onViewOnlyKey(e: KeyboardEvent, ed: NonNullable<typeof host.editor.value>, m: boolean, k: string) {
+  if (m && (k === "f" || k === "k")) {
+    e.preventDefault();
+    search.panelOpen = true;
+  } else if (m && !e.shiftKey && k === "p") {
+    e.preventDefault();
+    void print();
+  } else if (m && (k === "=" || k === "+")) {
+    e.preventDefault();
+    ed.zoomBy(1.25);
+  } else if (m && k === "-") {
+    e.preventDefault();
+    ed.zoomBy(0.8);
+  } else if (m && k === "0") {
+    e.preventDefault();
+    ed.fit("width");
+  } else if (m && ["z", "y", "a", "s", "n"].includes(k)) {
+    // undo, redo, select all, save, new page: nothing to do here, and not for the browser either
+    e.preventDefault();
+  } else if (!m && !e.altKey) {
+    if (k === "pagedown" || (k === "arrowright" && st.selectionCount === 0)) go(idx.value + 1);
+    else if (k === "pageup" || (k === "arrowleft" && st.selectionCount === 0)) go(idx.value - 1);
+  }
 }
 
 function onKey(e: KeyboardEvent) {
@@ -204,6 +261,7 @@ function onKey(e: KeyboardEvent) {
   if (!ed) return;
   const m = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
+  if (readOnly.value) return onViewOnlyKey(e, ed, m, k);
   if (m && k === "z") {
     e.preventDefault();
     if (e.shiftKey) ed.redo();
@@ -267,7 +325,8 @@ watch(narrow, (n) => {
       <div class="flex items-center gap-1 px-1.5 py-1">
         <IconBtn label="Back to notebooks" @click="back"><ArrowLeft :size="20" /></IconBtn>
         <IconBtn :label="sidebarVisible ? 'Hide pages' : 'Show pages'" :active="sidebarVisible" @click="toggleSidebar"><PanelLeft :size="20" /></IconBtn>
-        <button class="min-w-0 truncate rounded-lg px-2 py-1 text-left text-sm font-semibold hover:bg-surface-2" :title="`Rename “${nb.title}”`" @click="renaming = true">
+        <h1 v-if="readOnly" class="min-w-0 truncate px-2 py-1 text-sm font-semibold">{{ nb.title }}</h1>
+        <button v-else class="min-w-0 truncate rounded-lg px-2 py-1 text-left text-sm font-semibold hover:bg-surface-2" :title="`Rename “${nb.title}”`" @click="renaming = true">
           {{ nb.title }}
         </button>
         <div class="ml-1 flex items-center">
@@ -278,9 +337,12 @@ watch(narrow, (n) => {
         <div class="ml-auto flex items-center gap-0.5">
           <SaveIndicator class="mr-1.5" :state="st.saveState" :error="st.saveError" @retry="host.retry()" />
           <SyncIndicator class="mr-1" @open="openSync" />
+          <component :is="sharedEntry.syncState === 'needsResolution' ? 'button' : 'span'" v-if="sharedEntry && sharedEntry.state !== 'joining'" class="mr-1 hidden whitespace-nowrap text-xs text-muted sm:inline"
+            :class="sharedEntry.syncState === 'needsResolution' ? 'underline' : ''" data-testid="shared-sync-state"
+            v-bind="sharedEntry.syncState === 'needsResolution' ? { type: 'button', onClick: () => (showConflicts = true) } : {}">Shared · {{ syncStateLabel(sharedEntry.syncState) }}</component>
           <IconBtn label="Search notebooks" :shortcut="`${mod}+F`" @click="search.panelOpen = true"><Search :size="20" /></IconBtn>
-          <IconBtn label="Add page after this one" :shortcut="`${mod}+Shift+N`" @click="addPage()"><Plus :size="20" /></IconBtn>
-          <Menu label="Page template">
+          <IconBtn v-if="!readOnly" label="Add page after this one" :shortcut="`${mod}+Shift+N`" @click="addPage()"><Plus :size="20" /></IconBtn>
+          <Menu v-if="!readOnly" label="Page template">
             <template #trigger="{ toggle, open }">
               <IconBtn label="Page template" :aria-expanded="open" aria-haspopup="menu" @click="toggle"><LayoutTemplate :size="20" /></IconBtn>
             </template>
@@ -294,7 +356,7 @@ watch(narrow, (n) => {
               <Check v-if="canvas" :size="16" aria-hidden="true" />
             </MenuItem>
           </Menu>
-          <IconBtn :label="canvas ? 'Import PDF onto this canvas' : 'Import PDF as pages'" @click="importPdf"><FileUp :size="20" /></IconBtn>
+          <IconBtn v-if="!readOnly" :label="canvas ? 'Import PDF onto this canvas' : 'Import PDF as pages'" @click="importPdf"><FileUp :size="20" /></IconBtn>
           <Menu label="Export and print">
             <template #trigger="{ toggle, open }">
               <IconBtn label="Export and print" :aria-expanded="open" aria-haspopup="menu" @click="toggle"><Download :size="20" /></IconBtn>
@@ -309,25 +371,32 @@ watch(narrow, (n) => {
             <MenuItem @click="exportOnePage"><Download :size="16" />This page (.penroam, editable)…</MenuItem>
             <MenuItem @click="copyText"><ClipboardCopy :size="16" />Copy this page's text</MenuItem>
           </Menu>
-          <IconBtn label="Version history" @click="openHistory"><History :size="20" /></IconBtn>
+          <IconBtn v-if="!readOnly" label="Version history" @click="openHistory"><History :size="20" /></IconBtn>
+          <IconBtn :label="sharedEntry && !sharedEntry.owner ? 'People and leaving' : 'Share notebook'" @click="showShare = true"><Users :size="20" /></IconBtn>
           <IconBtn class="hidden sm:inline-flex" label="Settings" @click="showSettings = true"><Settings :size="20" /></IconBtn>
         </div>
       </div>
-      <Toolbar v-if="!narrow" class="border-t border-line" :state="st" @tool="setTool" @format="host.editor.value?.formatText($event)" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()" @ruler="host.editor.value?.toggleRuler()"
+      <Toolbar v-if="!narrow" class="border-t border-line" :read-only="readOnly" :state="st" @tool="setTool" @format="host.editor.value?.formatText($event)" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()" @ruler="host.editor.value?.toggleRuler()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
         @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" @free-placement="(f) => host.editor.value?.setSelectionFreePlacement(f)" />
       <CloudBanner compact class="border-t border-b-0" />
     </header>
 
+    <div v-if="banner" class="flex items-start gap-2 border-b border-line bg-surface-2 px-3 py-2 text-sm epaper:border-b-2" role="status" data-testid="access-banner">
+      <Eye :size="18" class="mt-0.5 shrink-0" aria-hidden="true" />
+      <p class="min-w-0 flex-1">{{ banner }}</p>
+      <Btn v-if="access?.reason === 'accessRemoved' && sharedEntry" variant="outline" @click="sharing.keepPrivateCopy(sharedEntry).then((c) => c && back())">Keep a private copy</Btn>
+    </div>
+
     <div class="relative flex min-h-0 flex-1">
       <!-- sidebar (wide) / drawer (narrow) -->
       <aside v-if="!narrow && sidebarOpen" class="w-44 shrink-0 border-r border-line bg-surface">
-        <PageSidebar :notebook="nb" :current="lib.currentPageId" :thumbs="lib.thumbs" @select="selectPage" @add="addPage" @delete="lib.deletePage" @reorder="lib.reorder" @restore="lib.restorePage" />
+        <PageSidebar :notebook="nb" :current="lib.currentPageId" :thumbs="lib.thumbs" :read-only="readOnly" @select="selectPage" @add="addPage" @delete="lib.deletePage" @reorder="lib.reorder" @restore="lib.restorePage" />
       </aside>
       <template v-if="narrow && drawerOpen">
         <div class="absolute inset-0 z-20 bg-black/25 epaper:bg-white/60" @click="drawerOpen = false" />
         <aside class="absolute inset-y-0 left-0 z-30 w-56 border-r border-line bg-surface shadow-xl epaper:border-r-2">
-          <PageSidebar :notebook="nb" :current="lib.currentPageId" :thumbs="lib.thumbs" @select="selectPage" @add="addPage" @delete="lib.deletePage" @reorder="lib.reorder" @restore="lib.restorePage" />
+          <PageSidebar :notebook="nb" :current="lib.currentPageId" :thumbs="lib.thumbs" :read-only="readOnly" @select="selectPage" @add="addPage" @delete="lib.deletePage" @reorder="lib.reorder" @restore="lib.restorePage" />
         </aside>
       </template>
 
@@ -350,7 +419,7 @@ watch(narrow, (n) => {
         <div v-if="nb.pageOrder.length === 0" class="absolute inset-0 flex items-center justify-center">
           <div class="text-center">
             <p class="text-sm text-muted">This notebook has no pages.</p>
-            <Btn class="mt-3" variant="primary" @click="addPage(-1)"><Plus :size="18" />Add a page</Btn>
+            <Btn v-if="!readOnly" class="mt-3" variant="primary" @click="addPage(-1)"><Plus :size="18" />Add a page</Btn>
           </div>
         </div>
       </main>
@@ -358,13 +427,14 @@ watch(narrow, (n) => {
 
     <!-- bottom tray on narrow screens -->
     <footer v-if="narrow" class="safe-bottom relative z-30 border-t border-line bg-surface">
-      <Toolbar compact :state="st" @tool="setTool" @format="host.editor.value?.formatText($event)" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()" @ruler="host.editor.value?.toggleRuler()"
+      <Toolbar compact :read-only="readOnly" :state="st" @tool="setTool" @format="host.editor.value?.formatText($event)" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()" @ruler="host.editor.value?.toggleRuler()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
         @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" @free-placement="(f) => host.editor.value?.setSelectionFreePlacement(f)" />
     </footer>
 
     <ConflictsDialog v-if="showConflicts" :notebook-id="nb.id" :current-title="nb.title" @close="showConflicts = false" @resolved="lib.reloadCurrent(); lib.currentPageId && host.markChanged([lib.currentPageId])" />
     <HistoryDialog v-if="showHistory && lib.currentPageId" :notebook="nb" :page-id="lib.currentPageId" :render="(p, w) => host.renderPagePng(p, w, { paper: true })" @close="showHistory = false" @restored="onHistoryRestored" />
+    <ShareDialog v-if="showShare" :notebook-id="nb.id" :title="nb.title" @close="showShare = false" />
     <SettingsDialog v-if="showSettings" :native-kind="host.native.value?.kind ?? null" @close="showSettings = false" />
     <SearchPanel v-if="search.panelOpen" @close="search.panelOpen = false" @open="openHit" />
     <CanvasModeDialog v-if="askCanvas" :pages="nb.pageOrder.length" @close="askCanvas = false" @choose="(c) => setCanvas(true, c)" />

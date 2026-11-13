@@ -43,6 +43,12 @@
 //! unlocked here, and reconciles them after the main one. A vault's session
 //! comes from the main session, so vaults stop with the sign-in.
 //!
+//! Shared notebooks (`penroam_sync::shared`, commands in [`crate::sharing`]): the worker owns a
+//! [`SpaceSet`] with one more engine per shared notebook space, reconciled after the main engine
+//! and the vaults with space sessions the main session asks for. Each pass also rereads the
+//! server's lists of shared notebooks and invitations, and `sync://shared` tells the UI when what
+//! it shows changed.
+//!
 //! Locking a vault on this device (`penroam_sync::locker`) stops its engine and
 //! encrypts its notebooks, sync folder and search index under a key derived from
 //! the vault's root; its notebooks leave the library until it is unlocked again,
@@ -60,6 +66,7 @@ use penroam_sync::auth;
 use penroam_sync::crypto::RootSecret;
 use penroam_sync::locker::{self, LockerError};
 use penroam_sync::secrets::KeychainSecretStore;
+use penroam_sync::shared::{SpaceAccess, SpaceSet};
 use penroam_sync::store::SyncStore;
 use penroam_sync::transport::HttpTransport;
 use penroam_sync::vault::{self, NotebookOwners, Scope, VaultKey};
@@ -226,6 +233,8 @@ enum Cmd {
     Diagnostics(Reply<String>),
     /// A new account session was stored: drop the current token and retry.
     Reauth,
+    /// A shared notebook request ([`crate::sharing`]).
+    Shared(crate::sharing::SharedCmd),
     /// Plan and storage (`account.v1`); `None` when the server has no accounts.
     Account(Reply<Option<AccountView>>),
     /// A billing page URL (`account.v1`): action and offer id.
@@ -292,6 +301,115 @@ fn ask<T>(slot: &SyncSlot, make: impl FnOnce(Reply<T>) -> Cmd) -> Result<T, CmdE
     rx.recv_timeout(Duration::from_secs(120))
         .map_err(|_| err("the sync worker did not answer"))?
         .map_err(err)
+}
+
+/// Sends a shared notebook request to the worker and waits (bounded) for its answer.
+pub(crate) fn ask_shared<T>(
+    slot: &SyncSlot,
+    make: impl FnOnce(Reply<T>) -> crate::sharing::SharedCmd,
+) -> Result<T, CmdError> {
+    ask(slot, |r| Cmd::Shared(make(r)))
+}
+
+/// Gives `f` what the shared notebook functions need: space sessions obtained with the main
+/// engine's session, and this library's secret store.
+fn with_space_access<R>(
+    app: &AppHandle,
+    url: &str,
+    f: impl FnOnce(&mut SpaceAccess<'_, HttpTransport>) -> R,
+) -> R {
+    let url = url.to_string();
+    let mut connect =
+        |main: &mut Engine, id: &AccountId| -> penroam_sync::engine::Result<HttpTransport> {
+            let t = main.transport_mut().shared_session(id)?;
+            Ok(HttpTransport::new(&url, t.access_token))
+        };
+    let root = library_root(app);
+    let secrets = || secrets(app, &root).map_err(|e| SyncError::Invalid(e.message));
+    let mut upgrade = |main: &mut Engine, space: &mut Engine| -> penroam_sync::engine::Result<()> {
+        let t = space_device_token(app, main, space)?;
+        space.transport_mut().set_token(t);
+        Ok(())
+    };
+    let mut access = SpaceAccess {
+        connect: &mut connect,
+        secrets: &secrets,
+        upgrade: &mut upgrade,
+    };
+    f(&mut access)
+}
+
+/// Classifies a failure to get a space's device session, so the worker retries what is worth
+/// retrying: network, lost responses, `5xx` and rate limits stay transport errors (offline,
+/// backoff); a refused session reads as `unauthenticated` (sign in again); a removed membership
+/// keeps its `access_revoked`.
+fn session_err(e: auth::AuthError) -> SyncError {
+    use penroam_sync::TransportError as T;
+    match e {
+        auth::AuthError::Transport(t) => SyncError::Transport(t),
+        auth::AuthError::Io(e) => SyncError::Transport(T::Network(e.to_string())),
+        auth::AuthError::Timeout => SyncError::Transport(T::Network("timed out".into())),
+        auth::AuthError::Denied(m) => SyncError::Transport(T::Api(
+            penroam_sync_protocol::ErrorBody::new(WireCode::Unauthenticated, m, ""),
+        )),
+        other => SyncError::Invalid(other.to_string()),
+    }
+}
+
+/// A device session for a shared notebook space's engine, which its sync routes need: the
+/// stored one if it still refreshes, else a new one signed with the space device's key, by way of
+/// an account session on the space that the main session asks for (and that is ended right
+/// after). On the development test server, its session stub for the member's device. Errors keep
+/// their kind ([`session_err`]), so an outage is retried rather than reported as a failure.
+fn space_device_token(
+    app: &AppHandle,
+    main: &mut Engine,
+    space: &mut Engine,
+) -> penroam_sync::engine::Result<String> {
+    let url = space.store.state.server_url.clone();
+    let device = space.store.state.device_id.clone();
+    let id: AccountId = space
+        .store
+        .state
+        .account_id
+        .parse()
+        .map_err(|_| SyncError::Invalid("bad shared notebook id".into()))?;
+    let sign_in = HttpTransport::new(&url, String::new())
+        .meta()?
+        .has_capability(capabilities::AUTH_V1);
+    if !sign_in {
+        let member = main.store.state.account_id.clone();
+        let (t, _) =
+            HttpTransport::test_session_as(&url, id.as_str(), Some(&device), Some(&member), None)?;
+        return Ok(t);
+    }
+    let root = library_root(app);
+    let store = secrets(app, &root).map_err(|e| SyncError::Invalid(e.message))?;
+    let name = space.scope().secret_name(DEVICE_SESSION);
+    if let Some(d) = load_session(store.as_ref(), &name, &url) {
+        match auth::refresh(&url, &d.refresh_token) {
+            Ok(t) => {
+                save_session(store.as_ref(), &name, &url, &t).map_err(SyncError::Invalid)?;
+                return Ok(t.access_token);
+            }
+            // an outage: try again later with the same stored session
+            Err(auth::AuthError::Transport(t)) if t.is_retryable() => {
+                return Err(SyncError::Transport(t))
+            }
+            // refused or ended: a new one below
+            Err(_) => {
+                let _ = store.delete(&name);
+            }
+        }
+    }
+    // `access_revoked` here reaches the caller as is, which stops the space
+    let account = main.transport_mut().shared_session(&id)?;
+    let t = space
+        .device_session(&url, &account.access_token)
+        .map_err(session_err)?;
+    let _ = auth::logout(&url, &account.access_token);
+    save_session(store.as_ref(), &name, &url, &t).map_err(SyncError::Invalid)?;
+    Ok(t.access_token)
 }
 
 /// Versions of a page in the account's operation log. Empty when sync isn't running.
@@ -1576,6 +1694,8 @@ fn emit_status(app: &AppHandle, e: &Engine) {
 /// rejected token triggers a fresh sign-in.
 fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
     let mut slots = open_vault_slots(&app);
+    // shared notebook engines are opened by the first pass, with sessions from the main one
+    let mut spaces: SpaceSet<HttpTransport> = SpaceSet::new();
     for s in &slots {
         app.state::<AppState>()
             .search
@@ -1679,6 +1799,14 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                         Err(e) => eprintln!("penroam: removal from a vault failed: {e}"),
                     }
                 }
+                // and from each shared notebook space it is in (members remove their own devices)
+                for e in &mut spaces.engines {
+                    if e.devices().iter().any(|d| d.device_id == id && d.active) {
+                        if let Err(err) = e.remove_device(&id) {
+                            eprintln!("penroam: removal from a shared notebook failed: {err}");
+                        }
+                    }
+                }
                 let mut res = engine.remove_device(&id);
                 if res.as_ref().is_err_and(unauth) {
                     have_token = false;
@@ -1720,40 +1848,50 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 let res = {
                     let state = app.state::<AppState>();
                     let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
-                    engine_for(&app, nb, &mut engine, &mut slots).restore_erased(&mut lib, nb)
+                    engine_for(&app, nb, &mut engine, &mut slots, &mut spaces)
+                        .and_then(|e| e.restore_erased(&mut lib, nb).map_err(|e| e.to_string()))
                 };
-                let _ = r.send(res.map_err(|e| e.to_string()));
+                let _ = r.send(res);
                 due = Some(Instant::now());
                 continue;
             }
             Ok(Cmd::PageVersions(nb, page, r)) => {
-                let e = engine_for(&app, nb, &mut engine, &mut slots);
-                let _ = r.send(e.page_versions(nb, page).map_err(|e| e.to_string()));
+                let res = engine_for(&app, nb, &mut engine, &mut slots, &mut spaces)
+                    .and_then(|e| e.page_versions(nb, page).map_err(|e| e.to_string()));
+                let _ = r.send(res);
                 continue;
             }
             Ok(Cmd::PageAt(nb, page, position, r)) => {
-                let e = engine_for(&app, nb, &mut engine, &mut slots);
-                let _ = r.send(e.page_at(nb, page, position).map_err(|e| e.to_string()));
+                let res = engine_for(&app, nb, &mut engine, &mut slots, &mut spaces)
+                    .and_then(|e| e.page_at(nb, page, position).map_err(|e| e.to_string()));
+                let _ = r.send(res);
                 continue;
             }
             Ok(Cmd::NotebookAt(nb, at, r)) => {
-                let e = engine_for(&app, nb, &mut engine, &mut slots);
-                let _ = r.send(e.notebook_at(nb, at).map_err(|e| e.to_string()));
+                let res = engine_for(&app, nb, &mut engine, &mut slots, &mut spaces)
+                    .and_then(|e| e.notebook_at(nb, at).map_err(|e| e.to_string()));
+                let _ = r.send(res);
                 continue;
             }
             Ok(Cmd::Conflicts(nb, r)) => {
-                let e = engine_for(&app, nb, &mut engine, &mut slots);
-                let _ = r.send(e.conflicts(nb).map_err(|e| e.to_string()));
+                let res = engine_for(&app, nb, &mut engine, &mut slots, &mut spaces)
+                    .and_then(|e| e.conflicts(nb).map_err(|e| e.to_string()));
+                let _ = r.send(res);
                 continue;
             }
             Ok(Cmd::Resolve(nb, target, choose, r)) => {
                 let res = {
                     let state = app.state::<AppState>();
                     let mut lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
-                    engine_for(&app, nb, &mut engine, &mut slots)
-                        .resolve_conflict(&mut lib, nb, &target, choose)
+                    crate::sharing::require_writable(&lib, nb)
+                        .map_err(|e| e.message)
+                        .and_then(|()| engine_for(&app, nb, &mut engine, &mut slots, &mut spaces))
+                        .and_then(|e| {
+                            e.resolve_conflict(&mut lib, nb, &target, choose)
+                                .map_err(|e| e.to_string())
+                        })
                 };
-                let _ = r.send(res.map_err(|e| e.to_string()));
+                let _ = r.send(res);
                 due = Some(Instant::now());
                 continue;
             }
@@ -2026,6 +2164,18 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 due = Some(Instant::now());
                 continue;
             }
+            Ok(Cmd::Shared(c)) => {
+                ensure(&mut engine, &mut have_token, &mut signed_out);
+                let url = engine.store.state.server_url.clone();
+                let changed = with_space_access(&app, &url, |access| {
+                    crate::sharing::handle(&app, &mut engine, &mut spaces, access, c)
+                });
+                if changed {
+                    let _ = app.emit("sync://shared", ());
+                    due = Some(Instant::now());
+                }
+                continue;
+            }
             Ok(Cmd::Disconnect(r)) => {
                 let root = library_root(&app);
                 if let Ok(store) = secrets(&app, &root) {
@@ -2039,6 +2189,37 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                 for s in slots.drain(..) {
                     if let Err(e) = s.engine.disconnect() {
                         eprintln!("penroam: a vault was not cleaned up: {e}");
+                    }
+                }
+                // Shared notebooks stay assigned (so the main account never takes them), and
+                // join again from scratch after the next connect.
+                if let Ok(store) = secrets(&app, &root) {
+                    let url = engine.store.state.server_url.clone();
+                    for e in &spaces.engines {
+                        forget_session(
+                            store.as_ref(),
+                            &e.scope().secret_name(DEVICE_SESSION),
+                            &url,
+                        );
+                    }
+                }
+                for e in spaces.engines.drain(..) {
+                    if let Err(e) = e.disconnect() {
+                        eprintln!("penroam: a shared notebook was not cleaned up: {e}");
+                    }
+                }
+                {
+                    let state = app.state::<AppState>();
+                    let lib = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+                    let last = lib.last_seq();
+                    if let Ok(mut owners) = NotebookOwners::load(lib.root()) {
+                        for e in owners.shared.values_mut() {
+                            if e.state != penroam_sync::shared::SharedState::AccessRemoved {
+                                e.state = penroam_sync::shared::SharedState::Joining;
+                                e.since_lib_seq = last;
+                            }
+                        }
+                        let _ = owners.save(lib.root());
                     }
                 }
                 let _ = r.send(engine.disconnect().map_err(|e| e.to_string()));
@@ -2079,6 +2260,31 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
                     Err(_) => {}
                 }
             }
+            // Shared notebooks last: the server's lists, then every space. A failing space keeps
+            // its error and never stops the others.
+            let before = crate::sharing::view_now(&app, &spaces);
+            if let Err(e) = spaces.refresh(&mut engine, &state.lib) {
+                if !e.is_retryable()
+                    && !matches!(
+                        e,
+                        SyncError::Transport(penroam_sync::TransportError::Network(_))
+                    )
+                {
+                    eprintln!("penroam: shared notebooks not refreshed: {e}");
+                }
+            }
+            if spaces.available || !spaces.engines.is_empty() {
+                let url = engine.store.state.server_url.clone();
+                let reports = with_space_access(&app, &url, |access| {
+                    spaces.reconcile(&mut engine, &state.lib, access)
+                });
+                for r in &reports {
+                    announce(&app, r);
+                }
+            }
+            if crate::sharing::view_now(&app, &spaces) != before {
+                let _ = app.emit("sync://shared", ());
+            }
         }
         match &result {
             Ok(report) => {
@@ -2104,7 +2310,7 @@ fn worker(app: AppHandle, mut engine: Engine, rx: Receiver<Cmd>) {
 }
 
 /// Re-indexes what a reconcile changed, and tells the editor.
-fn announce(app: &AppHandle, report: &penroam_sync::ReconcileReport) {
+pub(crate) fn announce(app: &AppHandle, report: &penroam_sync::ReconcileReport) {
     let state = app.state::<AppState>();
     // remote changes: re-index only the pages that were reinstalled
     let changed: Vec<Uuid> = report
@@ -2130,25 +2336,37 @@ fn announce(app: &AppHandle, report: &penroam_sync::ReconcileReport) {
     }
 }
 
-/// The engine that syncs a notebook.
+/// The engine that syncs a notebook: a shared notebook's space, a vault's, or the main one. A
+/// shared notebook whose space has no engine here (joining, or access removed) has none.
 fn engine_for<'a>(
     app: &AppHandle,
     nb: Uuid,
     main: &'a mut Engine,
     slots: &'a mut [VaultSlot],
-) -> &'a mut Engine {
+    spaces: &'a mut SpaceSet<HttpTransport>,
+) -> Result<&'a mut Engine, String> {
     let root = library_root(app);
     if let Ok(owners) = NotebookOwners::load(&root) {
+        if let Some(e) = owners.shared_entry(&nb) {
+            return match spaces
+                .engines
+                .iter()
+                .position(|x| x.scope().id() == Some(e.space_id.as_str()))
+            {
+                Some(i) => Ok(&mut spaces.engines[i]),
+                None => Err("this shared notebook isn't syncing on this device".into()),
+            };
+        }
         if let Some(id) = owners.owner(&nb) {
             if let Some(s) = slots
                 .iter_mut()
                 .find(|s| s.engine.store.state.account_id == id)
             {
-                return &mut s.engine;
+                return Ok(&mut s.engine);
             }
         }
     }
-    main
+    Ok(main)
 }
 
 /// Registers the worker's channel in [`AppState`] and spawns the thread.

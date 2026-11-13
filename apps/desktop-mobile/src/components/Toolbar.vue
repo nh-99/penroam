@@ -15,7 +15,7 @@ import type { TextFont } from "../generated/TextFont";
 import { fontFamilyOf } from "../editor/textLayout";
 import { useSideScroll } from "../composables/useSideScroll";
 
-const props = defineProps<{ state: EditorState; compact?: boolean }>();
+const props = defineProps<{ state: EditorState; compact?: boolean; readOnly?: boolean }>();
 const emit = defineEmits<{ tool: [t: Tool]; format: [a: FormatAction]; undo: []; redo: []; zoomIn: []; zoomOut: []; fit: []; deleteSelection: []; editText: []; restyle: [s: { color?: string; fontSize?: number; font?: TextFont }]; freePlacement: [free: boolean]; ruler: [] }>();
 const settings = useSettings();
 const mod = modKey();
@@ -60,6 +60,8 @@ const formatGroups: { a: FormatAction; label: string; icon: any; shortcut?: stri
   ],
 ];
 
+// View-only access keeps the hand (pan); every tool that could change the page is hidden.
+const visibleTools = computed(() => (props.readOnly ? tools.filter((x) => x.t === "hand") : tools));
 const selecting = computed(() => props.state.tool === "select" || props.state.tool === "lasso");
 const colors = computed(() => settings.palette(props.state.tool === "highlighter" ? "highlighter" : "pen"));
 const currentColor = computed(() =>
@@ -129,12 +131,12 @@ function setSize(v: number) {
     <div ref="strip" class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" @scroll.passive="measure">
       <!-- on a phone the formatting needs the room, and tapping away from the box picks tools again -->
       <div v-if="!(compact && state.editingText)" class="flex items-center gap-0.5" role="radiogroup" aria-label="Tool">
-        <IconBtn v-for="x in tools" :key="x.t" :label="x.label" :shortcut="x.key" :active="state.tool === x.t" role="radio" :aria-checked="state.tool === x.t" @click="emit('tool', x.t)">
+        <IconBtn v-for="x in visibleTools" :key="x.t" :label="x.label" :shortcut="x.key" :active="state.tool === x.t" role="radio" :aria-checked="state.tool === x.t" @click="emit('tool', x.t)">
           <component :is="x.icon" :size="20" />
         </IconBtn>
       </div>
       <!-- a toggle rather than a tool: it works alongside whichever tool is active -->
-      <IconBtn v-if="!(compact && state.editingText)" label="Ruler" shortcut="R" :active="state.rulerShown" @click="emit('ruler')"><Ruler :size="20" /></IconBtn>
+      <IconBtn v-if="!readOnly && !(compact && state.editingText)" label="Ruler" shortcut="R" :active="state.rulerShown" @click="emit('ruler')"><Ruler :size="20" /></IconBtn>
 
       <!-- Pressing a button must not take focus: leaving the box ends the edit. -->
       <div v-if="state.editingText" class="flex items-center gap-0.5" role="group" aria-label="Text formatting" @mousedown.prevent>
@@ -194,8 +196,10 @@ function setSize(v: number) {
       </template>
 
       <div class="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+        <template v-if="!readOnly">
         <IconBtn label="Undo" :shortcut="`${mod}+Z`" :disabled="!state.canUndo" @click="emit('undo')"><Undo2 :size="20" /></IconBtn>
         <IconBtn label="Redo" :shortcut="`${mod}+Shift+Z`" :disabled="!state.canRedo" @click="emit('redo')"><Redo2 :size="20" /></IconBtn>
+        </template>
         <template v-if="!compact">
           <div class="mx-1.5 h-7 w-px bg-line" aria-hidden="true" />
           <IconBtn label="Zoom out" :shortcut="`${mod}+−`" @click="emit('zoomOut')"><ZoomOut :size="20" /></IconBtn>

@@ -7,7 +7,7 @@ import type { Notebook } from "../generated/Notebook";
 import Menu from "./ui/Menu.vue";
 import MenuItem from "./ui/MenuItem.vue";
 
-const props = defineProps<{ notebook: Notebook; current: string | null; thumbs: Record<string, string> }>();
+const props = defineProps<{ notebook: Notebook; current: string | null; thumbs: Record<string, string>; readOnly?: boolean }>();
 const emit = defineEmits<{ select: [id: string]; add: [afterIndex: number]; delete: [id: string]; reorder: [order: string[]]; restore: [id: string] }>();
 const dragId = ref<string | null>(null);
 const overIdx = ref<number | null>(null);
@@ -24,6 +24,7 @@ function move(id: string, delta: number) {
 }
 
 function onDrop(idx: number) {
+  if (props.readOnly) return;
   const id = dragId.value;
   dragId.value = null;
   overIdx.value = null;
@@ -39,7 +40,7 @@ function onDrop(idx: number) {
   <nav class="flex h-full flex-col" aria-label="Pages">
     <div class="flex items-center justify-between px-3 pb-1 pt-3">
       <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Pages · {{ notebook.pageOrder.length }}</h2>
-      <button class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" aria-label="Add page at end" title="Add page at end" @click="emit('add', notebook.pageOrder.length - 1)">
+      <button v-if="!readOnly" class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface-2" aria-label="Add page at end" title="Add page at end" @click="emit('add', notebook.pageOrder.length - 1)">
         <Plus :size="18" />
       </button>
     </div>
@@ -48,7 +49,7 @@ function onDrop(idx: number) {
         @dragover.prevent="overIdx = i" @drop.prevent="onDrop(i)">
         <div v-if="overIdx === i && dragId && dragId !== pid" class="absolute -top-1 left-2 right-2 h-0.5 rounded bg-accent" aria-hidden="true" />
         <div class="group flex items-start gap-1 rounded-xl p-1.5" :class="pid === current ? 'bg-brand-soft epaper:outline epaper:outline-2 epaper:outline-black' : 'hover:bg-surface-2'">
-          <button class="flex min-w-0 flex-1 items-start gap-2 text-left" draggable="true" :aria-current="pid === current ? 'page' : undefined" :aria-label="`Page ${i + 1}`"
+          <button class="flex min-w-0 flex-1 items-start gap-2 text-left" :draggable="!readOnly" :aria-current="pid === current ? 'page' : undefined" :aria-label="`Page ${i + 1}`"
             @dragstart="dragId = pid" @dragend="dragId = null; overIdx = null" @click="emit('select', pid)">
             <span class="w-5 pt-1 text-right text-xs tabular-nums text-muted">{{ i + 1 }}</span>
             <span class="block aspect-[17/22] w-24 overflow-hidden rounded-md border border-line bg-white">
@@ -56,7 +57,7 @@ function onDrop(idx: number) {
               <FileText v-else :size="18" class="m-auto mt-6 text-gray-300" />
             </span>
           </button>
-          <Menu :label="`Page ${i + 1} actions`">
+          <Menu v-if="!readOnly" :label="`Page ${i + 1} actions`">
             <template #trigger="{ toggle, open }">
               <button class="touch-target inline-flex items-center justify-center rounded-lg text-muted hover:bg-surface" :aria-expanded="open" aria-haspopup="menu" :aria-label="`Actions for page ${i + 1}`" @click="toggle">
                 <EllipsisVertical :size="16" />
@@ -71,7 +72,7 @@ function onDrop(idx: number) {
       </li>
       <li class="h-6" @dragover.prevent="overIdx = notebook.pageOrder.length" @drop.prevent="onDrop(notebook.pageOrder.length)" />
     </ol>
-    <div v-if="notebook.trashedPages.length" class="border-t border-line px-2 py-2">
+    <div v-if="notebook.trashedPages.length && !readOnly" class="border-t border-line px-2 py-2">
       <button class="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs text-muted hover:bg-surface-2" :aria-expanded="showTrash" @click="showTrash = !showTrash">
         <span>Deleted pages ({{ notebook.trashedPages.length }})</span><span>{{ showTrash ? 'Hide' : 'Show' }}</span>
       </button>

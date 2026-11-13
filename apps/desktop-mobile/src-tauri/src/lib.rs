@@ -32,6 +32,7 @@ mod models;
 mod pinch;
 mod power;
 mod search;
+mod sharing;
 mod sync;
 mod updates;
 
@@ -191,6 +192,19 @@ pub fn run() {
             commands::import_stroke_document,
             commands::exit_app,
             sync::sync_info,
+            sharing::shared_list,
+            sharing::shared_share,
+            sharing::shared_members,
+            sharing::shared_invite,
+            sharing::shared_cancel_invitation,
+            sharing::shared_change_role,
+            sharing::shared_remove_member,
+            sharing::shared_leave,
+            sharing::shared_accept,
+            sharing::shared_decline,
+            sharing::shared_keep_private_copy,
+            sharing::shared_remove_local,
+            sharing::notebook_access,
             sync::sync_server_info,
             sync::sync_sign_in,
             sync::sync_sign_out,

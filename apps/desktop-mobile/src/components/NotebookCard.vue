@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { EllipsisVertical, SquarePen, Download, FileDown, FolderInput, Printer, Trash, Palette, Lock, Copy } from "@lucide/vue";
+import { EllipsisVertical, SquarePen, Download, FileDown, FolderInput, Printer, Trash, Palette, Lock, Copy, Users } from "@lucide/vue";
 import type { NotebookSummary } from "../generated/NotebookSummary";
 import Menu from "./ui/Menu.vue";
 import MenuItem from "./ui/MenuItem.vue";
@@ -14,9 +14,11 @@ const props = defineProps<{
   canMoveToVault?: boolean;
   /** Offer filing it in a folder. */
   canMoveToFolder?: boolean;
+  /** The owner has shared this notebook: how its copy on this device stands, in words. */
+  sharedStatus?: string;
 }>();
 const emit = defineEmits<{
-  open: []; rename: []; duplicate: []; export: []; exportPdf: []; print: []; trash: []; recolor: []; moveToVault: []; moveToFolder: [];
+  open: []; rename: []; duplicate: []; export: []; exportPdf: []; print: []; trash: []; recolor: []; moveToVault: []; moveToFolder: []; share: [];
   /** The card came on screen (true) or left it (false); covers on screen are drawn first. */
   visible: [boolean];
 }>();
@@ -64,6 +66,9 @@ const updated = computed(() => {
           <span class="truncate">{{ nb.title }}</span>
         </h3>
         <p class="text-xs text-muted">{{ nb.pageCount }} page{{ nb.pageCount === 1 ? '' : 's' }} · {{ updated }}</p>
+        <p v-if="sharedStatus" class="mt-0.5 flex items-center gap-1 text-xs text-muted" data-testid="shared-badge">
+          <Users :size="12" class="shrink-0" aria-hidden="true" /><span class="truncate">Shared · {{ sharedStatus }}</span>
+        </p>
       </div>
       <Menu :label="`${nb.title} actions`">
         <template #trigger="{ toggle, open }">
@@ -74,6 +79,7 @@ const updated = computed(() => {
         <MenuItem @click="emit('rename')"><SquarePen :size="16" />Rename</MenuItem>
         <MenuItem @click="emit('duplicate')"><Copy :size="16" />Duplicate</MenuItem>
         <MenuItem @click="emit('recolor')"><Palette :size="16" />Change cover colour</MenuItem>
+        <MenuItem @click="emit('share')"><Users :size="16" />Share notebook…</MenuItem>
         <MenuItem @click="emit('export')"><Download :size="16" />Export .penroam…</MenuItem>
         <MenuItem @click="emit('exportPdf')"><FileDown :size="16" />Export annotated PDF…</MenuItem>
         <MenuItem @click="emit('print')"><Printer :size="16" />Print…</MenuItem>

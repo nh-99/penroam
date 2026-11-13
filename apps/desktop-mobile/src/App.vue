@@ -13,6 +13,7 @@ import { useLibrary } from "./stores/library";
 import { useSettings } from "./stores/settings";
 import { useUi } from "./stores/ui";
 import { useSync } from "./stores/sync";
+import { useSharing } from "./stores/sharing";
 import { useSearch } from "./stores/search";
 import { useTour } from "./stores/tour";
 import { api, hasHost } from "./platform/ipc";
@@ -27,6 +28,7 @@ startAutoBackup();
 const settings = useSettings();
 const ui = useUi();
 const sync = useSync();
+const sharing = useSharing();
 const search = useSearch();
 const tour = useTour();
 const nativeKind = ref<string | null>(null);
@@ -61,6 +63,13 @@ onMounted(async () => {
   // sync: one query at start-up; nothing more unless a backend reports it available
   void sync.init().then(() => {
     if (!sync.available) return;
+    void sharing.init();
+    // signing in or out changes whether sharing is on offer
+    watch(() => sync.configured, () => void sharing.refresh());
+    // a notebook joined or lost: the library has to show it
+    watch(() => sharing.notebooks, () => {
+      if (!lib.current) void lib.refresh();
+    });
     watch(() => lib.notebooks, (ns) => sync.arrived(ns.map((n) => n.id)));
     // an install can land in a reconcile that then fails offline, which reports no change
     watch(() => sync.status, () => {
@@ -129,6 +138,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlisten?.();
   sync.dispose();
+  sharing.dispose();
   search.dispose();
 });
 </script>

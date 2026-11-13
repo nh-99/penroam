@@ -432,7 +432,10 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   );
   watch(
     () => state.tool,
-    (t) => (settings.s.tool = t),
+    // view-only access forces the hand; that isn't the user's choice of tool, so it isn't remembered
+    (t) => {
+      if (!editor.value?.isReadOnly) settings.s.tool = t;
+    },
   );
   watch(
     () => state.penSeen,
@@ -449,5 +452,13 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     if (remotePending.size && !remoteTimer) remoteTimer = setTimeout(() => void applyRemoteChanges(), 50);
   }
 
-  return { state, editor, native, loading, pageError, flush, openPage, reload, markChanged, renderPagePng, retry: () => session?.retry(), session: () => session };
+  /** View-only access (viewer, or access removed): the editor refuses every change. */
+  function setReadOnly(on: boolean) {
+    const e = editor.value;
+    if (!e || e.isReadOnly === on) return;
+    e.setReadOnly(on);
+    if (!on) e.setTool(settings.s.tool);
+  }
+
+  return { state, editor, native, setReadOnly, loading, pageError, flush, openPage, reload, markChanged, renderPagePng, retry: () => session?.retry(), session: () => session };
 }

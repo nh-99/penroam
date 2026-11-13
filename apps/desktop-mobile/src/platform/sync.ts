@@ -14,6 +14,7 @@ export type SyncPhase =
   | "needsReauth"
   | "revoked"
   | "needsUpgrade"
+  | "accessRemoved"
   | "quotaExceeded"
   | "rebaseRequired"
   | "integrityAlert"
@@ -330,6 +331,8 @@ export function describeStatus(s: SyncStatus | null): { tone: "ok" | "busy" | "m
       return { tone: "danger", text: "This device was removed from the account; local notes are kept" };
     case "needsUpgrade":
       return { tone: "warn", text: "Another device uses a newer Penroam · update to receive those changes (nothing is lost)" };
+    case "accessRemoved":
+      return { tone: "warn", text: "Your access to this shared notebook was removed · nothing more is sent or received" };
     case "quotaExceeded":
       return { tone: "warn", text: "Uploads paused: cloud storage is full or the account is read-only · changes stay queued on this device" };
     case "rebaseRequired":
@@ -351,7 +354,7 @@ export function describeStatus(s: SyncStatus | null): { tone: "ok" | "busy" | "m
 /** Header icon choice. Green only when everything is really up to date. */
 export function statusIcon(s: SyncStatus | null): "check" | "upload" | "off" | "alert" | "busy" {
   if (!s) return "off";
-  if (s.conflicts > 0 || ["revoked", "needsUpgrade", "quotaExceeded", "rebaseRequired", "integrityAlert", "error", "needsReauth"].includes(s.phase)) return "alert";
+  if (s.conflicts > 0 || ["revoked", "accessRemoved", "needsUpgrade", "quotaExceeded", "rebaseRequired", "integrityAlert", "error", "needsReauth"].includes(s.phase)) return "alert";
   if (s.phase === "offline" || s.phase === "paused") return "off";
   if (s.queued > 0) return "upload";
   if (s.upToDate) return "check";
