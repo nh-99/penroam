@@ -10,6 +10,11 @@
 import { anchorLabel, authorName, type CommentRect, type ThreadView } from "../platform/comments";
 
 const SIZE_PX = 44;
+// Theme colours from styles/main.css: the dark theme's paper is black, so a fixed dark grey would
+// disappear into it. The fallbacks are the light theme's values.
+const INK = "var(--pr-comment-ink,#1b1b1b)";
+const PAPER = "var(--pr-comment-paper,#fff)";
+const TINT = "var(--pr-comment-tint,rgb(27 27 27 / 0.08))";
 
 export class CommentMarkerLayer {
   readonly el: HTMLDivElement;
@@ -65,7 +70,7 @@ export class CommentMarkerLayer {
     ].join(";");
     const dot = document.createElement("span");
     dot.setAttribute("aria-hidden", "true");
-    dot.style.cssText = `display:flex;align-items:center;justify-content:center;width:26px;height:26px;margin:9px;box-sizing:border-box;border-radius:50% 50% 50% 0;font:700 12px system-ui,sans-serif;border:2px solid #1b1b1b;color:${filled ? "#fff" : "#1b1b1b"};background:${filled ? "#1b1b1b" : "#fff"};${t.unread ? "outline:3px solid #d9480f;outline-offset:1px;" : ""}`;
+    dot.style.cssText = `display:flex;align-items:center;justify-content:center;width:26px;height:26px;margin:9px;box-sizing:border-box;border-radius:50% 50% 50% 0;font:700 12px system-ui,sans-serif;border:2px solid ${INK};color:${filled ? PAPER : INK};background:${filled ? INK : PAPER};${t.unread ? "outline:3px solid #d9480f;outline-offset:1px;" : ""}`;
     // the count, and a mark for the state: ✓ resolved, ! failed, … waiting
     const mark = t.comments.some((c) => c.delivery === "failed") ? "!" : t.comments.some((c) => c.delivery === "waiting") ? "…" : t.status === "resolved" ? "✓" : String(n);
     dot.textContent = mark;
@@ -83,7 +88,7 @@ export class CommentMarkerLayer {
     const d = document.createElement("div");
     d.className = "penroam-comment-outline";
     d.setAttribute("aria-hidden", "true");
-    d.style.cssText = `position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;box-sizing:border-box;border:calc(2px * var(--inv,1)) dashed #1b1b1b;pointer-events:none;`;
+    d.style.cssText = `position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;box-sizing:border-box;border:calc(2px * var(--inv,1)) dashed ${INK};pointer-events:none;`;
     this.el.appendChild(d);
   }
 
@@ -94,7 +99,7 @@ export class CommentMarkerLayer {
     const d = document.createElement("div");
     d.className = "penroam-comment-preview";
     d.setAttribute("aria-hidden", "true");
-    d.style.cssText = `position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;box-sizing:border-box;border:calc(2px * var(--inv,1)) dashed #1b1b1b;background:#1b1b1b14;pointer-events:none;`;
+    d.style.cssText = `position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;box-sizing:border-box;border:calc(2px * var(--inv,1)) dashed ${INK};background:${TINT};pointer-events:none;`;
     this.el.appendChild(d);
   }
 

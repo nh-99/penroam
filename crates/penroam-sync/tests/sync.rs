@@ -42,6 +42,30 @@ fn signing_in_brings_existing_notebooks_to_the_new_device() {
 }
 
 #[test]
+fn a_first_sync_is_announced_while_it_runs() {
+    let s = server();
+    let acct = account(&s, "acct-first-sync");
+    let (mut a, _code) = Client::first(&s, &acct, "laptop");
+    let (nb, p) = a
+        .lib
+        .create_notebook("Physics", PageDefaults::default(), None)
+        .unwrap();
+    add(&mut a.lib, nb.id, p.id, vec![stroke(0, 1.0, "#111111")]);
+    a.sync().unwrap();
+    let mut b = Client::joined(&s, &acct, "tablet");
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hook = seen.clone();
+    b.engine.set_phase_hook(Box::new(move |st| {
+        hook.lock().unwrap().push((st.phase, st.last_success_ms))
+    }));
+    b.sync().unwrap();
+    // the app shows "first sync" from this: syncing, and never synced before
+    assert_eq!(seen.lock().unwrap().first(), Some(&(Phase::Syncing, None)));
+    assert_eq!(b.status().phase, Phase::Idle);
+    assert!(b.status().last_success_ms.is_some());
+}
+
+#[test]
 fn offline_strokes_on_both_devices_converge_to_the_union() {
     let s = server();
     let acct = account(&s, "acct-2");

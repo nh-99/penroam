@@ -3,6 +3,22 @@
 User-visible changes for each release. The release workflow copies a version's section into its
 release notes and stops if the version has no entry.
 
+## 0.1.0-beta.11
+
+* New: Penroam Cloud now offers shared notebooks. Share one from **Share notebook…** in its **⋮**
+  menu. See the manual's chapter on shared notebooks.
+* New: select several notebooks in the library and move them to the trash or to a folder in one go.
+  Click the select button at the top of the library, or **Select** in a notebook's **⋮** menu, then
+  tick the cards you want. **Undo** brings back everything you trashed. `Ctrl+A` selects every
+  notebook in the open folder and `Esc` stops selecting.
+* New: while a device's first sync runs, the library says so and the sync icons spin. A first sync
+  can bring over a whole library and take a few minutes, and the app used to look stuck meanwhile.
+* New: the Android beta is open to everyone on Google Play.
+* Fixed: comment markers and outlines vanished into the page in the dark theme.
+* Fixed: after sync was turned off, **Settings → Sync** could still show you as signed in, with a
+  **Connect** button that could only fail.
+* Fixed: turning sync off on Windows could fail when another program had just opened one of its files.
+
 ## 0.1.0-beta.10
 
 * New: shared notebooks. Share a notebook from **Share notebook…** in its **⋮** menu and invite people

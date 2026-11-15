@@ -12,7 +12,7 @@ import { useSync } from "../stores/sync";
 import { useLive } from "../stores/live";
 import { useSharing } from "../stores/sharing";
 import { useUi } from "../stores/ui";
-import { describeStatus, formatAgo, type SyncDevice } from "../platform/sync";
+import { describeStatus, formatAgo, statusIcon, type SyncDevice } from "../platform/sync";
 
 const sync = useSync();
 const live = useLive();
@@ -26,6 +26,7 @@ const renaming = ref<SyncDevice | null>(null);
 const disconnecting = ref(false);
 
 const desc = computed(() => describeStatus(sync.status));
+const syncing = computed(() => statusIcon(sync.status) === "syncing");
 const toneClass = computed(
   () =>
     ({
@@ -133,7 +134,7 @@ async function confirmDisconnect() {
     <!-- configured -->
     <div v-else class="space-y-3">
       <div class="rounded-xl border border-line p-3" role="status" aria-live="polite">
-        <p class="text-sm font-medium" :class="toneClass">{{ desc.text }}</p>
+        <p class="flex items-start gap-2 text-sm font-medium" :class="toneClass"><RefreshCw v-if="syncing" :size="16" class="mt-0.5 shrink-0 motion-safe:animate-spin" aria-hidden="true" />{{ desc.text }}</p>
         <p class="mt-0.5 text-xs text-muted">
           Last successful sync: {{ formatAgo(sync.status?.lastSuccessMs ?? null) }}
           <template v-if="sync.status?.conflicts"> · {{ sync.status.conflicts }} conflict(s) to review</template>

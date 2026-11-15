@@ -2,7 +2,7 @@
 // Compact sync state for the editor header. Never green unless everything is
 // really up to date. Hidden when sync is not set up.
 import { computed } from "vue";
-import { CloudCheck, CloudUpload, CloudOff, CloudAlert, Cloud } from "@lucide/vue";
+import { CloudCheck, CloudUpload, CloudOff, CloudAlert, Cloud, RefreshCw } from "@lucide/vue";
 import { useSync } from "../stores/sync";
 import { describeStatus, statusIcon } from "../platform/sync";
 
@@ -27,6 +27,8 @@ const liveDown = computed(() => !!props.live && props.live.startsWith("Live disc
     <template v-else-if="icon === 'upload'"><CloudUpload :size="18" class="text-muted" /><span class="tabular-nums text-muted">{{ sync.status?.queued }}</span></template>
     <CloudOff v-else-if="icon === 'off'" :size="18" class="text-muted" />
     <CloudAlert v-else-if="icon === 'alert'" :size="18" class="text-danger" />
+    <!-- motion says the app is working, not stuck (reduced-motion users get the label) -->
+    <template v-else-if="icon === 'syncing'"><RefreshCw :size="18" class="text-muted motion-safe:animate-spin" data-testid="sync-spinner" /><span v-if="sync.status?.queued" class="tabular-nums text-muted">{{ sync.status.queued }}</span></template>
     <Cloud v-else :size="18" class="text-muted" />
     <span v-if="live" class="hidden whitespace-nowrap sm:inline" :class="liveDown ? 'text-warn' : 'text-muted'" data-testid="live-status">{{ live }}</span>
   </button>
