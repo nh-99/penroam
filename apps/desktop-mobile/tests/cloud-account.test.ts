@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SHARED_PLAN_FEATURES } from "../src/platform/planFeatures";
 import { canBuy, cloudNotice, describePlan, describeReadOnly, describeRestore, describeStorePurchase, formatBytes, planTiers, storeManaged, usageFraction, type AccountView } from "../src/platform/sync";
 
 function view(p: Partial<AccountView> = {}): AccountView {
@@ -329,8 +330,15 @@ describe("upgrade prompts", () => {
     expect(text).toContain("Included in every plan");
     expect(text).toContain("Encrypted before upload");
     expect(text).not.toContain("Restore purchases");
-    // one tier, two prices
-    expect(document.body.querySelectorAll('[aria-label="Plans"] > li')).toHaveLength(2);
+    // a table: plans as columns (Free and one 5 GB tier holding both prices), features as rows
+    const cols = [...document.body.querySelectorAll("table thead th[scope=col]")].map((th) => (th.firstElementChild ?? th).textContent!.trim());
+    expect(cols).toEqual(["Plan", "Free", "5 GB"]);
+    const rows = [...document.body.querySelectorAll("table tbody th[scope=row]")];
+    expect(rows.map((th) => th.childNodes[0].textContent!.trim())).toEqual(["Cloud storage", ...SHARED_PLAN_FEATURES.map((f) => f.title)]);
+    // every shared feature is ticked for every plan
+    for (const th of rows.slice(1)) expect(th.parentElement!.querySelectorAll("td")).toHaveLength(2);
+    for (const th of rows.slice(1)) for (const td of th.parentElement!.querySelectorAll("td")) expect(td.textContent).toContain("Included");
+    expect(document.body.querySelectorAll("table tfoot button")).toHaveLength(2);
     button("$39 / year")!.click();
     await flushPromises();
     expect(api.openBilling).toHaveBeenCalledWith("subscribe", "cloud-yearly");

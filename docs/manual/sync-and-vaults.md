@@ -57,9 +57,10 @@ Every account includes some free storage. Open **Settings → Sync** to see your
 storage you've used under **Penroam Cloud**.
 
 To get more, choose **Compare plans**, which appears when your build can sell a plan. A window titled
-**Penroam Cloud plans** sets the free storage beside each plan and lists
-what every plan includes: plans differ only in storage and price, and sync, vaults, editing and
-export are the same on all of them (see **Included in every plan**). When storage is nearly full or full, the **Get more storage**
+**Penroam Cloud plans** shows a table with a column for the free storage and one for each plan, and
+a row for storage, each feature and the price. Plans differ only in storage and price: sync,
+vaults, editing and export are the same on all of them (see **Included in every plan** in the
+table). When storage is nearly full or full, the **Get more storage**
 button in the banner opens the same window.
 
 * On a computer, **Choose** on a plan opens a payment page in your browser. After paying, choose

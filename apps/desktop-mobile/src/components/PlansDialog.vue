@@ -1,18 +1,19 @@
 <script setup lang="ts">
 // Penroam Cloud plan comparison, opened from the storage banner and from Settings -> Sync.
-// Plans differ only in storage and price; the features list below the cards is shared by all.
+// It is a table: plans as columns, storage, the features every plan shares, then price with the
+// buttons. Plans differ only in storage and price; the feature rows come from planFeatures.ts.
 // Desktop prices come from the server as display text and choosing one opens the server's checkout
 // in the system browser (the plan shows up when the window regains focus). Store builds buy
 // through the app store instead, so they also carry the disclosures Apple requires next to the
 // subscribe button: title, length, price, auto-renewal terms, terms and privacy links, restore.
 import { computed } from "vue";
-import { Check, CreditCard, ExternalLink, RefreshCw, RotateCcw } from "@lucide/vue";
+import { Check, ExternalLink, RefreshCw, RotateCcw } from "@lucide/vue";
 import Modal from "./ui/Modal.vue";
 import Btn from "./ui/Btn.vue";
 import { useSync } from "../stores/sync";
 import { diagnosticsApi } from "../platform/diagnostics";
 import { SHARED_PLAN_FEATURES } from "../platform/planFeatures";
-import { NEARLY_FULL, formatBytes, planTiers, usageFraction, usesStore } from "../platform/sync";
+import { NEARLY_FULL, formatBytes, planTiers, usageFraction, usesStore, type PlanTier } from "../platform/sync";
 
 const sync = useSync();
 const a = computed(() => sync.account);
@@ -24,6 +25,11 @@ const usage = computed(() => {
   if (!x || x.quotaBytes == null) return "";
   return `${formatBytes(x.usedBytes)} of ${formatBytes(x.quotaBytes)} used (${Math.floor((usageFraction(x) ?? 0) * 100)}%).`;
 });
+
+/** Column heading: "Free", or the storage size, which is what tells paid plans apart. */
+function tierName(t: PlanTier): string {
+  return t.free ? "Free" : formatBytes(t.quotaBytes!);
+}
 
 function choose(id: string) {
   // the store build never talks to Stripe and the desktop build has no store
@@ -44,32 +50,73 @@ function openPage(page: "terms" | "privacy") {
       {{ usage }}
     </p>
 
-    <!-- stacked on phones, side by side from the small breakpoint; never scrolls sideways -->
-    <ul class="mt-4 grid gap-3 sm:grid-cols-[repeat(auto-fit,minmax(10rem,1fr))]" aria-label="Plans">
-      <li
-        v-for="t in tiers"
-        :key="t.free ? 'free' : t.quotaBytes!"
-        class="flex min-w-0 flex-col gap-2 rounded-xl border p-4 epaper:border-2 epaper:border-black"
-        :class="t.current ? 'border-accent bg-surface-2' : 'border-line'"
-      >
-        <div class="flex flex-wrap items-center gap-2">
-          <h3 class="text-xl font-semibold">{{ t.quotaBytes == null ? "Free" : formatBytes(t.quotaBytes) }}</h3>
-          <span v-if="t.current" class="inline-flex items-center gap-1 rounded-full border border-current px-2 py-0.5 text-xs font-medium epaper:border-black epaper:font-semibold">
-            <Check :size="12" />Current plan
-          </span>
-        </div>
-        <p class="text-xs text-muted">{{ t.free ? "Free cloud storage" : "Cloud storage" }}</p>
-        <p v-if="t.free && t.quotaBytes != null" class="text-sm font-medium">Free</p>
-        <div v-else-if="!t.free" class="mt-auto flex flex-col gap-2 pt-1">
-          <div v-for="p in t.prices" :key="p.id" class="flex flex-col gap-1">
-            <p v-if="p.name" class="text-sm font-semibold">{{ p.name }}</p>
-            <Btn variant="primary" :disabled="sync.accountBusy" @click="choose(p.id)">
-              <CreditCard :size="16" />{{ usesStore(a) ? "Subscribe" : "Choose" }}<span class="sr-only"> {{ formatBytes(t.quotaBytes!) }},</span> · {{ p.label }}
-            </Btn>
-          </div>
-        </div>
-      </li>
-    </ul>
+    <!--
+      Plans as columns, features as rows. Only storage and price differ, so the shared features show
+      a tick in every column. The price row with the buttons comes last so Apple's disclosures, just
+      below the table, sit next to Subscribe. The wrapper scrolls on its own if a server ever sends
+      more tiers than fit a phone, so the page itself never scrolls sideways.
+    -->
+    <div class="mt-4 overflow-x-auto rounded-xl border border-line epaper:border-2 epaper:border-black">
+      <table class="w-full border-collapse text-sm">
+        <caption class="sr-only">Compare Penroam Cloud plans</caption>
+        <thead>
+          <tr class="border-b border-line epaper:border-black">
+            <th scope="col" class="p-3 text-left align-bottom text-xs font-medium text-muted">Plan</th>
+            <th
+              v-for="t in tiers"
+              :key="t.free ? 'free' : t.quotaBytes!"
+              scope="col"
+              class="min-w-[6.5rem] p-3 text-left align-bottom"
+              :class="t.current ? 'bg-surface-2' : ''"
+            >
+              <span class="block text-base font-semibold">{{ tierName(t) }}</span>
+              <span v-if="t.current" class="mt-1 inline-flex items-center gap-1 rounded-full border border-current px-2 py-0.5 text-xs font-medium epaper:border-black epaper:font-semibold">
+                <Check :size="12" aria-hidden="true" />Current plan
+              </span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="border-b border-line epaper:border-black">
+            <th scope="row" class="p-3 text-left align-top font-medium">Cloud storage</th>
+            <td v-for="t in tiers" :key="t.free ? 'free' : t.quotaBytes!" class="p-3 align-top font-semibold" :class="t.current ? 'bg-surface-2' : ''">
+              {{ t.quotaBytes == null ? "Free allowance" : formatBytes(t.quotaBytes) }}
+            </td>
+          </tr>
+          <tr class="border-b border-line bg-surface-2 epaper:border-black epaper:bg-white">
+            <th scope="colgroup" :colspan="tiers.length + 1" class="px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-muted">Included in every plan</th>
+          </tr>
+          <tr v-for="f in SHARED_PLAN_FEATURES" :key="f.title" class="border-b border-line epaper:border-black">
+            <th scope="row" class="p-3 text-left align-top font-medium">
+              {{ f.title }}
+              <span class="mt-0.5 block text-xs font-normal leading-snug text-muted">{{ f.detail }}</span>
+            </th>
+            <td v-for="t in tiers" :key="t.free ? 'free' : t.quotaBytes!" class="p-3 align-top" :class="t.current ? 'bg-surface-2' : ''">
+              <Check :size="18" aria-hidden="true" /><span class="sr-only">Included</span>
+            </td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <th scope="row" class="p-3 text-left align-top font-medium">Price</th>
+            <td v-for="t in tiers" :key="t.free ? 'free' : t.quotaBytes!" class="p-3 align-top" :class="t.current ? 'bg-surface-2' : ''">
+              <span v-if="t.free" class="font-semibold">Free</span>
+              <div v-else class="flex flex-col gap-2">
+                <div v-for="p in t.prices" :key="p.id" class="flex flex-col gap-1">
+                  <span v-if="p.name" class="text-xs font-semibold">{{ p.name }}</span>
+                  <Btn variant="primary" class="w-full px-2! py-1.5" :disabled="sync.accountBusy" @click="choose(p.id)">
+                    <span class="flex flex-col items-center leading-tight">
+                      <span>{{ usesStore(a) ? "Subscribe" : "Choose" }}<span class="sr-only"> {{ tierName(t) }},</span></span>
+                      <span class="text-xs font-normal">{{ p.label }}</span>
+                    </span>
+                  </Btn>
+                </div>
+              </div>
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
 
     <!-- next to the buttons that cause them; the status node stays mounted so screen readers announce changes -->
     <p class="mt-3 text-xs leading-relaxed" role="status">{{ sync.storeMessage ?? "" }}</p>
@@ -88,13 +135,6 @@ function openPage(page: "terms" | "privacy") {
         <Btn variant="ghost" @click="openPage('privacy')"><ExternalLink :size="16" />Privacy</Btn>
       </div>
     </template>
-    <h3 class="mt-5 text-sm font-semibold">Included in every plan</h3>
-    <ul class="mt-2 space-y-1.5">
-      <li v-for="f in SHARED_PLAN_FEATURES" :key="f.title" class="flex gap-2 text-sm leading-relaxed">
-        <Check :size="16" class="mt-0.5 shrink-0" aria-hidden="true" />
-        <span><span class="font-medium">{{ f.title }}.</span> <span class="text-muted">{{ f.detail }}</span></span>
-      </li>
-    </ul>
 
     <template #actions>
       <Btn v-if="!usesStore(a)" variant="ghost" :disabled="sync.accountBusy" @click="sync.refreshAccount()"><RefreshCw :size="16" />I've paid, check again</Btn>
