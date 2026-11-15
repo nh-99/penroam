@@ -438,16 +438,14 @@ Everything below runs from a tag, and nothing reaches users without a person pub
 The updater never downgrades, so a bad release is fixed by promoting a newer one. Notes are stored
 apart from the app, so installing an older build by hand is safe: it refuses formats it doesn't know.
 
-A stable tag fails unless the Apple, Android and update signing secrets are present. Windows is left
-out of a stable release while `WINDOWS_SIGN_COMMAND` is unset, so an unsigned installer is never
-stable; the notes say so, and the app treats a feed without its platform as up to date. A pre-release
-may be unsigned and always includes Windows. `tools/release/release.py` decides all of this. `python3 -m unittest discover -s tools/release` tests it.
+A stable tag fails unless the Apple, Android and update signing secrets are present. The Windows
+installer is never code-signed, by choice, and ships in every release, stable or pre-release; its
+updates are still signed with the update key. A pre-release may lack any signature. `tools/release/release.py` decides all of this. `python3 -m unittest discover -s tools/release` tests it.
 
 | Name (GitHub) | Kind | Used for |
 |---|---|---|
 | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret | Signing updates. The public key goes in `plugins.updater.pubkey` in `tauri.conf.json`; while that is empty, the app has no update feature |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`; variable `APPLE_SIGNING_IDENTITY` | Secret, variable | Developer ID signing and notarization of the DMG, read by the Tauri CLI |
-| `WINDOWS_SIGN_COMMAND` | Variable | Passed to `bundle.windows.signCommand`, with `%1` for the file |
 | `PENROAM_ANDROID_KEYSTORE_BASE64`, `PENROAM_ANDROID_KEYSTORE_PASSWORD`, `PENROAM_ANDROID_KEY_ALIAS`, `PENROAM_ANDROID_KEY_PASSWORD` | Secret | The Android release key. Without it, builds use the debug key, which is for test devices only |
 
 Generate the update key once with `pnpm tauri signer generate` and keep the private half offline as

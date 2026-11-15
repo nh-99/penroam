@@ -5,7 +5,7 @@
     release.py notices OUT                 third-party licence notices for the app bundle
     release.py assemble VERSION SHA DIR    checksums, manifests, notes and update feed for DIR
     release.py sign-status TAG             which signing secrets this run has (never their values)
-    release.py desktop-matrix TAG          the desktop builds for this tag, as JSON
+    release.py desktop-matrix              the desktop builds, as JSON
     release.py configured CHANNEL          true if a signing or upload channel has its secrets
     release.py store-config ios|android|macos N
                                            Tauri config for a store build from workflow run N
@@ -78,13 +78,8 @@ def compatibility_table(contract):
     ])
 
 
-def release_notes(version, contract, changelog, has_windows=True):
-    parts = [changelog_section(version, changelog)]
-    if not has_windows:
-        parts.append(
-            "There is no Windows installer in this release. Windows builds are on the beta "
-            f"channel for now: see the [releases page]({REPO_URL}/releases).")
-    parts += [
+def release_notes(version, contract, changelog):
+    parts = [changelog_section(version, changelog),
         "## Compatibility\n\n" + compatibility_table(contract),
         "A build that meets a file or sync format newer than it knows refuses it and leaves it "
         "unchanged. Update first, then open the file.",
@@ -129,8 +124,7 @@ def assemble(version, sha, directory, root=ROOT, pub_date=None):
     (directory / "contract-manifest.json").write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     assets = sorted(p for p in directory.iterdir() if p.is_file())
-    has_windows = any(p.name.endswith(".exe") for p in assets)
-    notes = release_notes(version, contract, changelog, has_windows)
+    notes = release_notes(version, contract, changelog)
     (directory / "release-notes.md").write_text(notes, encoding="utf-8")
     feed = update_feed(version, assets, changelog_section(version, changelog), pub_date)
     if feed["platforms"]:
@@ -196,7 +190,6 @@ def notices(out):
 SIGNING = {
     "updates": ["TAURI_SIGNING_PRIVATE_KEY"],
     "macos": ["APPLE_CERTIFICATE", "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID"],
-    "windows": ["WINDOWS_SIGN_COMMAND"],
     "android": ["PENROAM_ANDROID_KEYSTORE_BASE64"],
     "testflight": ["APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_P8", "APPLE_TEAM_ID"],
     "google-play": ["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"],
@@ -205,9 +198,10 @@ SIGNING = {
     "mac-app-store": ["APPLE_MAS_CERTIFICATE", "APPLE_MAS_CERTIFICATE_PASSWORD", "APPLE_MAS_PROVISIONING_PROFILE",
                       "APPLE_API_KEY", "APPLE_API_ISSUER", "APPLE_API_KEY_P8", "APPLE_TEAM_ID"],
 }
-# These are skipped when they aren't set up, instead of stopping the release. Windows is never
-# shipped unsigned in a stable release, and the store uploads only add to what was built.
-OPTIONAL = {"windows", "testflight", "google-play", "mac-app-store"}
+# These are skipped when they aren't set up, instead of stopping the release: the store uploads
+# only add to what was built. The Windows installer is never signed, by choice, so it has no
+# entry here and ships in every release.
+OPTIONAL = {"testflight", "google-play", "mac-app-store"}
 # Store build numbers only go up. Android starts above any version code a sideloaded build used.
 ANDROID_VERSION_CODE_BASE = 10000
 
@@ -260,10 +254,9 @@ def store_config(platform, run_number, root=ROOT):
     return {"bundle": {"android": {"versionCode": ANDROID_VERSION_CODE_BASE + run_number}}}
 
 
-def desktop_matrix(tag, env):
-    """The builds for a tag. Windows joins stable releases once they can be signed."""
-    unsigned = not env.get("WINDOWS_SIGN_COMMAND") and not is_prerelease(tag)
-    return [b for b in DESKTOP_BUILDS if not (unsigned and b["name"].startswith("windows"))]
+def desktop_matrix():
+    """The desktop builds every release makes, stable or pre-release."""
+    return DESKTOP_BUILDS
 
 
 def main(argv):
@@ -281,8 +274,8 @@ def main(argv):
         print("true" if configured(argv[2], os.environ) else "false")
     elif command == "store-config" and len(argv) == 4:
         print(json.dumps(store_config(argv[2], int(argv[3])), separators=(",", ":")))
-    elif command == "desktop-matrix" and len(argv) == 3:
-        print(json.dumps(desktop_matrix(argv[2], os.environ), separators=(",", ":")))
+    elif command == "desktop-matrix" and len(argv) == 2:
+        print(json.dumps(desktop_matrix(), separators=(",", ":")))
     else:
         sys.exit(__doc__)
 

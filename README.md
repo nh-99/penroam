@@ -29,16 +29,16 @@ and not every platform has been tried on real hardware yet.
 ## Install
 
 Download the file for your system from the **[releases page](https://github.com/nh-99/penroam/releases)**.
-The macOS app is signed and notarized by Apple. The other packages aren't signed yet, so Windows may warn you the first time. The
+The macOS app is signed and notarized by Apple. The
 [release matrix](docs/platforms/release-matrix.md) shows how far each platform has been tested.
 
 | System | File | Notes |
 |---|---|---|
-| Windows (x86-64) | `…_x64-setup.exe` | The installer isn't signed yet, so Windows SmartScreen may stop it: choose **More info → Run anyway**. Not yet tried on real hardware. |
+| Windows (x86-64) | `…_x64-setup.exe` | Not yet tried on real hardware. |
 | macOS (Apple Silicon) | `….dmg` | Open it and drag Penroam to **Applications**. Not yet tried on real hardware. No Intel build. |
 | Linux (x86-64) | `.AppImage` or `.deb` | `chmod +x Penroam*.AppImage` and run it, or `sudo apt install ./Penroam*.deb`. |
 | Android and BOOX (arm64) | `…_android-arm64.apk` | Install the APK directly, or [join the test on Google Play](https://play.google.com/apps/testing/ink.penroam.app). |
-| iPhone and iPad | TestFlight | Install [TestFlight](https://apps.apple.com/app/testflight/id899247664), then [open an issue](https://github.com/nh-99/penroam/issues/new/choose) to ask for an invitation. |
+| iPhone and iPad | TestFlight | [Join the public beta on TestFlight](https://testflight.apple.com/join/2Dmb3UHr) from your iPhone or iPad. |
 
 <details>
 <summary>More about installing: the Linux AppImage, and building from source</summary>

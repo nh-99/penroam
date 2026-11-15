@@ -102,10 +102,6 @@ class Signing(unittest.TestCase):
             release.sign_status("v1.0.0", env)
         self.assertIn("APPLE_ID", str(caught.exception))
 
-    def test_a_stable_release_goes_ahead_without_windows_signing(self):
-        env = dict(self.ALL, WINDOWS_SIGN_COMMAND="")
-        self.assertEqual(release.sign_status("v1.0.0", env), ["windows"])
-
     def test_store_uploads_are_optional_even_for_stable(self):
         env = dict(self.ALL, APPLE_API_KEY_P8="", GOOGLE_PLAY_SERVICE_ACCOUNT_JSON="")
         self.assertEqual(release.sign_status("v1.0.0", env), ["google-play", "mac-app-store", "testflight"])
@@ -115,7 +111,7 @@ class Signing(unittest.TestCase):
         self.assertFalse(release.configured("testflight", dict(self.ALL, APPLE_API_ISSUER="")))
 
     def test_a_prerelease_reports_what_is_unsigned(self):
-        self.assertEqual(release.sign_status("v1.0.0-beta.1", {}), ["android", "google-play", "mac-app-store", "macos", "testflight", "updates", "windows"])
+        self.assertEqual(release.sign_status("v1.0.0-beta.1", {}), ["android", "google-play", "mac-app-store", "macos", "testflight", "updates"])
 
     def test_the_status_never_repeats_a_value(self):
         env = dict(self.ALL, APPLE_ID="")
@@ -143,22 +139,9 @@ class StoreBuildNumbers(unittest.TestCase):
 
 
 class Matrix(unittest.TestCase):
-    @staticmethod
-    def names(tag, env):
-        return [b["name"] for b in release.desktop_matrix(tag, env)]
-
-    def test_stable_leaves_out_an_unsigned_windows_build(self):
-        self.assertEqual(self.names("v1.0.0", {}), ["linux-x86_64", "macos-aarch64"])
-
-    def test_stable_includes_windows_once_it_can_be_signed(self):
-        self.assertIn("windows-x86_64", self.names("v1.0.0", {"WINDOWS_SIGN_COMMAND": "sign %1"}))
-
-    def test_prereleases_always_include_windows(self):
-        self.assertIn("windows-x86_64", self.names("v1.0.0-beta.1", {}))
-
-    def test_notes_say_when_windows_is_missing(self):
-        self.assertIn("no Windows installer", release.release_notes("1.2.0", CONTRACT, CHANGELOG, False))
-        self.assertNotIn("no Windows installer", release.release_notes("1.2.0", CONTRACT, CHANGELOG))
+    def test_every_release_builds_windows(self):
+        names = [b["name"] for b in release.desktop_matrix()]
+        self.assertEqual(names, ["linux-x86_64", "windows-x86_64", "macos-aarch64"])
 
 
 if __name__ == "__main__":

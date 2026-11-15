@@ -39,7 +39,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
           PENROAM_ANDROID_KEYSTORE_BASE64: ${{ secrets.PENROAM_ANDROID_KEYSTORE_BASE64 }}
           APPLE_MAS_CERTIFICATE: ${{ secrets.APPLE_MAS_CERTIFICATE }}
           APPLE_MAS_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_MAS_CERTIFICATE_PASSWORD }}
@@ -89,16 +88,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Choose the desktop builds
         id: matrix
-        env:
-          WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
-        run: echo "desktop_matrix=$(python3 tools/release/release.py desktop-matrix "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+        run: echo "desktop_matrix=$(python3 tools/release/release.py desktop-matrix)" >> "$GITHUB_OUTPUT"
 
   desktop:
     needs: [verify, plan]
     strategy:
       fail-fast: false
       matrix:
-        # tools/release/release.py: stable tags leave Windows out until it can be signed.
+        # tools/release/release.py. The Windows installer is unsigned, by choice.
         include: ${{ fromJSON(needs.plan.outputs.desktop_matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
@@ -127,7 +124,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          WINDOWS_SIGN_COMMAND: ${{ vars.WINDOWS_SIGN_COMMAND }}
           BUILD_ARGS: ${{ matrix.args }}
           # Read at compile time (src-tauri/src/desktop_entry.rs): builds without it list themselves
           # as "Penroam Developer" so they don't replace an installed release in the app menu.
@@ -136,9 +132,6 @@ jobs:
           config='{}'
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             config=$(jq -c '.bundle.createUpdaterArtifacts = true' <<< "$config")
-          fi
-          if [ -n "$WINDOWS_SIGN_COMMAND" ]; then
-            config=$(jq -c --arg c "$WINDOWS_SIGN_COMMAND" '.bundle.windows.signCommand = $c' <<< "$config")
           fi
           pnpm tauri build $BUILD_ARGS --config "$config"
       - name: Collect the packages
