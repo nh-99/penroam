@@ -24,8 +24,8 @@ devicePixelRatio 1.875), on adb as `c5927068`.
 * Finger pan/pinch inside the native view is handled natively and reported back
   (`viewport` event) so web layers follow.
 * ePaper theme is selected automatically on first launch when BOOX hardware ink is detected.
-* Search waits for charging by default, and the sync poll slows from 1 to 5 minutes in battery
-  saver. Power state comes from the plugin's `getPower` (`src-tauri/src/power.rs`).
+* Search indexing pauses while battery saver is on (a setting, on by default; waiting for a
+  charger is off by default), and the sync poll slows from 1 to 5 minutes in battery saver. Power state comes from the plugin's `getPower` (`src-tauri/src/power.rs`).
 * Hover rings and animation are off in the ePaper theme.
 
 ## The Onyx SDK

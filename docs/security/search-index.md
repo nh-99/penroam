@@ -106,8 +106,9 @@ A file the user installs has no such proof: its checksums only show it is intact
 * **Search index** off: deletes the index files and stops indexing.
 * **Recognize handwriting** off: handwriting rows are removed as pages are re-indexed.
   Titles, typed text and PDF text stay searchable.
-* **Pause indexing** and **Wait while on battery** (on by default; power state is known on
-  Windows and Linux).
+* **Pause indexing**, **Wait while on battery** (off by default; power source is known on
+  Windows, Linux, Android and iOS) and, on Android and iOS, **Wait while Low Power Mode / Battery
+  Saver is on** (on by default). The two waits are independent.
 * **Rebuild**: drops derived rows and indexes everything again; corrections are kept.
 * **Handwriting recognizer** (Advanced, on devices with a platform recognizer): automatic, the
   platform's only, or the Penroam model only. A change re-reads handwriting in the background.

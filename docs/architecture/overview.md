@@ -417,7 +417,8 @@ search worker (`src-tauri/src/search.rs`) keeps it current. Storage and privacy 
 * **Scheduling.** One background-priority thread. It takes the library lock only to copy a page
   (and PDF bytes not yet cached). Nothing is indexed until the pen has been idle for 1.5 s;
   recognition checks for cancellation between regions; a cancelled page is stored as
-  incomplete and resumed. Pause and "wait while on battery" are user settings.
+  incomplete and resumed. Pause, "wait while on battery" (off by default) and "wait
+  while the OS battery saver is on" (on by default, Android and iOS) are user settings.
 * **Queries.** User input is split into words and quoted for FTS5 (no query syntax reaches
   SQLite). Words match as prefixes, quoted text as a phrase. If few results come back, words of
   four or more letters also match indexed words within a small edit distance or containing

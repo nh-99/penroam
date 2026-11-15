@@ -23,8 +23,11 @@
 //! Scheduling protects writing: edited pages wait until the pen has been idle for
 //! [`EDIT_QUIET`], nothing is indexed during that time, the thread runs at background
 //! priority (Windows, Linux), and handwriting recognition sees one region at a time with a
-//! cancellation check in between. Indexing can be paused, and by default waits while the
-//! device runs on battery (where that is detectable: Windows, Linux).
+//! cancellation check in between. Indexing can be paused. Two independent settings can make it
+//! wait: "wait while on battery" (off by default, so the index stays current) and "wait in Low
+//! Power Mode" (on by default; only Android and iOS report the OS battery saver, see
+//! [`crate::power`]). Neither changes the other: the user's battery choice stands whatever the
+//! power-saver state is.
 //!
 //! Handwriting recognition uses the platform's on-device recognizer where there is one
 //! (Windows handwriting recognizers; Apple Vision on macOS and iOS) and the optional Penroam
@@ -107,8 +110,13 @@ pub struct SearchSettings {
     pub language: Option<String>,
     /// Pause all indexing.
     pub paused: bool,
-    /// Wait while running on battery.
-    pub pause_on_battery: bool,
+    /// Wait while running on battery. Off by default: recognition is light enough on current
+    /// devices that a current index is worth more. The key was renamed from `pauseOnBattery`
+    /// when the default changed, so a value saved under the old default is not carried over.
+    pub wait_on_battery: bool,
+    /// Wait while the OS battery saver (Low Power Mode on iOS) is on. Only Android and iOS
+    /// report it; elsewhere it has no effect.
+    pub wait_on_power_saver: bool,
     /// Which recognizer to prefer (Settings → Advanced).
     pub recognizer: RecognizerChoice,
 }
@@ -145,7 +153,8 @@ impl Default for SearchSettings {
             handwriting: true,
             language: None,
             paused: false,
-            pause_on_battery: true,
+            wait_on_battery: false,
+            wait_on_power_saver: true,
             recognizer: RecognizerChoice::Auto,
         }
     }
@@ -157,7 +166,8 @@ impl Default for SearchSettings {
 pub struct SearchStatus {
     /// Current settings.
     pub settings: SearchSettings,
-    /// `off`, `starting`, `indexing`, `idle`, `paused`, `waiting-for-power` or `error`.
+    /// `off`, `starting`, `indexing`, `idle`, `paused`, `waiting-for-power`,
+    /// `waiting-for-power-saver` or `error`.
     pub state: String,
     /// Pages waiting to be checked or indexed.
     pub queued: usize,
@@ -177,6 +187,8 @@ pub struct SearchStatus {
     pub index_bytes: u64,
     /// `Some(true)` on battery, `Some(false)` on power, `None` when unknown.
     pub on_battery: Option<bool>,
+    /// Whether the OS battery saver is on (always `false` where it is not reported).
+    pub power_saver: bool,
     /// Last problem (index or recognizer), for the settings screen.
     pub last_error: Option<String>,
 }
@@ -907,6 +919,7 @@ impl Worker {
                 .map(|o| index_bytes(&index_path(&self.path, o)))
                 .sum(),
             on_battery: on_battery(),
+            power_saver: crate::power::saver(),
             last_error: self.last_error.clone(),
         };
         if let Ok(mut g) = self.shared.status.lock() {
@@ -1122,9 +1135,10 @@ impl Worker {
                 .last_edit
                 .map(|t| EDIT_QUIET.saturating_sub(t.elapsed()))
                 .unwrap_or_default();
-            let blocked = !self.settings.enabled
-                || self.settings.paused
-                || (self.settings.pause_on_battery && on_battery() == Some(true));
+            let battery_wait = self.settings.wait_on_battery && on_battery() == Some(true);
+            let saver_wait = self.settings.wait_on_power_saver && crate::power::saver();
+            let blocked =
+                !self.settings.enabled || self.settings.paused || battery_wait || saver_wait;
             let wait = if !has_work || blocked {
                 POWER_POLL
             } else {
@@ -1136,8 +1150,10 @@ impl Worker {
                 "error"
             } else if self.settings.paused {
                 "paused"
-            } else if blocked && has_work {
+            } else if battery_wait && has_work {
                 "waiting-for-power"
+            } else if saver_wait && has_work {
+                "waiting-for-power-saver"
             } else if has_work {
                 "indexing"
             } else {
@@ -1478,5 +1494,27 @@ mod recognizer_choice_tests {
     fn an_impossible_choice_falls_back_instead_of_turning_search_off() {
         assert_eq!(Model.resolve(true, false), (true, false));
         assert_eq!(Platform.resolve(false, true), (false, true));
+    }
+}
+
+#[cfg(test)]
+mod power_settings_tests {
+    use super::SearchSettings;
+
+    #[test]
+    fn battery_wait_is_off_and_power_saver_wait_is_on_by_default() {
+        let s = SearchSettings::default();
+        assert!(!s.wait_on_battery);
+        assert!(s.wait_on_power_saver);
+    }
+
+    #[test]
+    fn a_value_saved_under_the_old_battery_default_is_not_carried_over() {
+        let s: SearchSettings =
+            serde_json::from_str(r#"{"enabled":true,"pauseOnBattery":true}"#).unwrap();
+        assert!(!s.wait_on_battery);
+        let s: SearchSettings = serde_json::from_str(r#"{"waitOnBattery":true}"#).unwrap();
+        assert!(s.wait_on_battery);
+        assert!(s.wait_on_power_saver);
     }
 }

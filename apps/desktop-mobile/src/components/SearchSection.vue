@@ -6,13 +6,16 @@ import { RefreshCw } from "@lucide/vue";
 import Btn from "./ui/Btn.vue";
 import { useSearch } from "../stores/search";
 import { useUi } from "../stores/ui";
-import { describeState, formatBytes, recognizerSummary, searchApi } from "../platform/search";
+import { describeState, formatBytes, powerSaverName, recognizerSummary, searchApi } from "../platform/search";
+import { isMobile } from "../platform/device";
 
 const search = useSearch();
 const ui = useUi();
 onMounted(() => void search.init());
 const st = computed(() => search.status);
 const s = computed(() => st.value?.settings);
+const mobile = isMobile();
+const saverName = powerSaverName();
 
 async function set(patch: Parameters<typeof search.update>[0]) {
   try {
@@ -76,7 +79,15 @@ const summary = computed(() => {
             <template v-else>Indexes only while charging. Now: {{ st.onBattery ? "on battery" : "on power" }}.</template>
           </span>
         </span>
-        <input type="checkbox" class="h-5 w-5" :checked="s.pauseOnBattery" @change="set({ pauseOnBattery: ($event.target as HTMLInputElement).checked })" />
+        <input type="checkbox" class="h-5 w-5" :checked="s.waitOnBattery" @change="set({ waitOnBattery: ($event.target as HTMLInputElement).checked })" />
+      </label>
+      <!-- Only Android and iOS report the OS battery saver (src-tauri/src/power.rs). -->
+      <label v-if="mobile" class="flex items-center justify-between gap-4 rounded-xl border border-line p-3">
+        <span>
+          <span class="block text-sm">Wait while {{ saverName }} is on</span>
+          <span class="block text-xs text-muted">Pauses indexing while {{ saverName }} is on, even when “Wait while on battery” is off. Now: {{ st.powerSaver ? "on" : "off" }}.</span>
+        </span>
+        <input type="checkbox" class="h-5 w-5" :checked="s.waitOnPowerSaver" @change="set({ waitOnPowerSaver: ($event.target as HTMLInputElement).checked })" />
       </label>
       <div class="flex items-center justify-between gap-3 px-1">
         <p class="text-xs text-muted" aria-live="polite">{{ describeState(st) }}<template v-if="summary"><br />{{ summary }}</template></p>

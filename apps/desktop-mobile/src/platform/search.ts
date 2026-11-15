@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { CommandError, hasHost } from "./ipc";
+import { isIOS } from "./device";
 
 export type SearchKind = "title" | "text" | "ink" | "pdf";
 
@@ -40,7 +41,9 @@ export interface SearchSettings {
   handwriting: boolean;
   language: string | null;
   paused: boolean;
-  pauseOnBattery: boolean;
+  waitOnBattery: boolean;
+  /** Wait while the OS battery saver / Low Power Mode is on (reported on Android and iOS only). */
+  waitOnPowerSaver: boolean;
   recognizer: RecognizerChoice;
 }
 
@@ -66,7 +69,7 @@ export interface ModelSummary {
   provenance: unknown;
 }
 
-export type SearchState = "off" | "starting" | "indexing" | "idle" | "paused" | "waiting-for-power" | "error";
+export type SearchState = "off" | "starting" | "indexing" | "idle" | "paused" | "waiting-for-power" | "waiting-for-power-saver" | "error";
 
 export interface SearchStatus {
   settings: SearchSettings;
@@ -82,6 +85,8 @@ export interface SearchStatus {
   stats: { pages: number; incompletePages: number; textEntries: number; inkEntries: number; pdfEntries: number; corrections: number };
   indexBytes: number;
   onBattery: boolean | null;
+  /** Whether the OS battery saver is on (always false where it is not reported). */
+  powerSaver: boolean;
   lastError: string | null;
 }
 
@@ -139,6 +144,8 @@ export function describeState(s: SearchStatus): string {
       return s.queued ? `Paused, ${s.queued} page${s.queued === 1 ? "" : "s"} waiting` : "Paused";
     case "waiting-for-power":
       return `Waiting for a charger: ${s.queued} page${s.queued === 1 ? "" : "s"} to check`;
+    case "waiting-for-power-saver":
+      return `Waiting for ${powerSaverName()} to turn off: ${s.queued} page${s.queued === 1 ? "" : "s"} to check`;
     case "error":
       return `The search index could not be opened${s.lastError ? `: ${s.lastError}` : ""}`;
     default:
@@ -150,4 +157,9 @@ export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** What the OS calls its battery saver: Low Power Mode on iOS, Battery Saver on Android. */
+export function powerSaverName(): string {
+  return isIOS() ? "Low Power Mode" : "Battery Saver";
 }

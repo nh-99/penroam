@@ -33,8 +33,11 @@ you wrote it.
 
 ## Search settings
 
-**Settings → Search** turns handwriting recognition on or off, pauses indexing, waits while the
-device runs on battery, and rebuilds or deletes the search index.
+**Settings → Search** turns handwriting recognition on or off, pauses indexing, and rebuilds or
+deletes the search index. Indexing runs on battery too, so new pages are searchable straight away;
+turn on **Wait while on battery** to index only while charging. On phones and tablets, indexing
+also waits while Low Power Mode (iOS) or Battery Saver (Android) is on. That is a separate
+setting, on by default, and it never changes your battery choice.
 
 **Settings → Advanced** chooses between your device's recognizer and the Penroam model where you
 have both, and checks for model updates, installs a model from a file, or removes it. A model you

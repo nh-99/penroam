@@ -30,8 +30,8 @@ belong to the device, not to your notebooks.
 
 ## Search
 
-Handwriting recognition, its language, pausing indexing, waiting while on battery, and rebuilding or
-deleting the search index. See [Searching](search.md#search-settings).
+Handwriting recognition, its language, pausing indexing, waiting while on battery or in Low Power
+Mode / Battery Saver, and rebuilding or deleting the search index. See [Searching](search.md#search-settings).
 
 ## Sync
 

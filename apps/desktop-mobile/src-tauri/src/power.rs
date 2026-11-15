@@ -4,8 +4,9 @@
 //! it only to app code, so the webview asks the native plugin (`getPower`) and hands the answer
 //! to [`power_report`]. Readers see "unknown" until the first report and never block on one.
 //!
-//! The search worker uses [`on_battery`] for its "wait while on battery" setting and the sync
-//! worker stretches its idle poll while [`saver`] is on, on every platform that reports it.
+//! The search worker uses [`on_battery`] and [`saver`] for its "wait while on battery" and "wait
+//! while Low Power Mode is on" settings, and the sync worker stretches its idle poll while
+//! [`saver`] is on, on every platform that reports it.
 
 use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 
