@@ -11,6 +11,7 @@ import type { PdfBackgroundRef } from "../generated/PdfBackgroundRef";
 import type { RecoveryReport } from "../generated/RecoveryReport";
 import { renderMathTable } from "../editor/math";
 import { api, CommandError, hasHost } from "../platform/ipc";
+import { recordUiError } from "../platform/diagnostics";
 import { pickFile, pickImportFiles, pickSaveLocation, safeFileName, type Picked } from "../platform/files";
 import type { Kept } from "../generated/Kept";
 import { useSync } from "./sync";
@@ -145,7 +146,10 @@ export const useLibrary = defineStore("library", () => {
     let next = 0;
     const read = async () => {
       for (let n = want[next++]; n; n = want[next++]) {
-        const b = await api.getThumbnail(n.id, n.firstPageId!).catch(() => null);
+        const b = await api.getThumbnail(n.id, n.firstPageId!).catch((e) => {
+          reportCoverFailure("reading the saved cover", e);
+          return null;
+        });
         if (b) {
           showCover(n.id, b);
           coverFor.set(n.id, n.updatedAt);
@@ -191,36 +195,69 @@ export const useLibrary = defineStore("library", () => {
     return toPaint.splice(i, 1)[0];
   }
 
+  /** Longest a cover may take; past it the painter moves on, so one stuck picture can't stop the rest. */
+  const COVER_TIMEOUT_MS = 20_000;
+  /** Steps whose failure is already in the diagnostic report this session. */
+  const coverStepsReported = new Set<string>();
+
+  /** Notes a cover failure once per step, for the diagnostic report (Settings › About › Show diagnostic report). */
+  function reportCoverFailure(step: string, e: unknown) {
+    console.warn("cover", step, e);
+    if (coverStepsReported.has(step)) return;
+    coverStepsReported.add(step);
+    recordUiError(`library cover: ${step}`, e);
+  }
+
   async function paintCover(nbId: string) {
     const summary = notebooks.value.find((n) => n.id === nbId);
     if (!summary || summary.deletedAt != null || paintFailed.get(nbId) === summary.updatedAt || coverFor.get(nbId) === summary.updatedAt) return;
-    const { PdfCache } = await import("../editor/pdf");
-    const { drawPagePng } = await import("../editor/pagePicture");
-    const pdfCache = new PdfCache((hash) => api.readAsset(nbId, hash), 1);
-    try {
+    // the step under way, so a failure or a timeout says where it happened
+    let step = "loading the drawing code";
+    let pdfCache: { destroy(): void } | null = null;
+    const work = async () => {
+      const { PdfCache } = await import("../editor/pdf");
+      const { drawPagePng } = await import("../editor/pagePicture");
+      const cache = new PdfCache((hash) => api.readAsset(nbId, hash), 1);
+      pdfCache = cache;
+      step = "reading the notebook";
       const nb = await api.getNotebook(nbId);
       const pageId = nb.pageOrder[0];
       if (!pageId) return;
+      step = "reading the page";
       const page = await api.loadPage(nbId, pageId);
       // as in the editor: a page this large takes too long to draw in the background
       if (page.elements.length > 20000) throw new Error("page too large for a background picture");
+      step = "drawing";
       const settings = useSettings();
       const png = await drawPagePng(
         page,
         240,
-        { notebookId: nbId, infiniteCanvas: !!nb.infiniteCanvas, pdfCache, mono: settings.effectiveTheme() === "epaper", dark: false },
+        { notebookId: nbId, infiniteCanvas: !!nb.infiniteCanvas, pdfCache: cache, mono: settings.effectiveTheme() === "epaper", dark: false },
         { paper: true },
       );
+      if (!png) throw new Error("the picture could not be encoded as PNG");
       // the notebook was opened meanwhile: its editor draws the page as it is now
-      if (!png || current.value?.id === nbId) return;
-      await api.saveThumbnail(nbId, pageId, png);
+      if (current.value?.id === nbId) return;
+      // shown before it's saved: a cover that can't be saved is still worth seeing
       showCover(nbId, png);
       coverFor.set(nbId, summary.updatedAt);
+      step = "saving";
+      await api.saveThumbnail(nbId, pageId, png).catch((e) => reportCoverFailure("saving", e));
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        work(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no result after ${COVER_TIMEOUT_MS / 1000} s`)), COVER_TIMEOUT_MS);
+        }),
+      ]);
     } catch (e) {
       paintFailed.set(nbId, summary.updatedAt);
-      console.warn("cover", nbId, e);
+      reportCoverFailure(step, e);
     } finally {
-      pdfCache.destroy();
+      clearTimeout(timer);
+      (pdfCache as { destroy(): void } | null)?.destroy();
     }
     // let the library take input between pictures
     await new Promise((r) => setTimeout(r, 16));

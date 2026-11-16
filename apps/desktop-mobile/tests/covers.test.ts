@@ -23,14 +23,20 @@ vi.mock("../src/platform/ipc", () => ({
     readAsset: vi.fn(),
   },
 }));
+const reported: string[] = [];
+vi.mock("../src/platform/diagnostics", () => ({ recordUiError: (where: string) => void reported.push(where) }));
 vi.mock("../src/editor/pdf", () => ({ PdfCache: class { destroy() {} } }));
+/** Notebooks whose picture never finishes (a stuck draw). */
+const stuck = new Set<string>();
 vi.mock("../src/editor/pagePicture", () => ({
   drawPagePng: vi.fn(async (page: { nb: string }) => {
+    if (stuck.has(page.nb)) return new Promise(() => {});
     drawn.push(page.nb);
     return new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
   }),
 }));
 
+const { api } = await import("../src/platform/ipc");
 const { useLibrary } = await import("../src/stores/library");
 
 /** Lets the painters run to the end (each picture yields to a timer). */
@@ -47,6 +53,8 @@ describe("library covers", () => {
     setActivePinia(createPinia());
     saved.clear();
     drawn.length = 0;
+    reported.length = 0;
+    stuck.clear();
     notebooks = [summary("a"), summary("b"), summary("c")];
     globalThis.URL.createObjectURL = vi.fn(() => `blob:${Math.random()}`);
     globalThis.URL.revokeObjectURL = vi.fn();
@@ -90,5 +98,28 @@ describe("library covers", () => {
     await lib.refresh();
     await settle();
     expect(drawn).toEqual(["b"]);
+  });
+
+  it("shows a cover that could not be saved, and reports the failure once", async () => {
+    vi.mocked(api.saveThumbnail).mockRejectedValueOnce(new Error("disk full")).mockRejectedValueOnce(new Error("disk full"));
+    const lib = useLibrary();
+    await lib.refresh();
+    await settle();
+    expect(Object.keys(lib.covers).sort()).toEqual(["a", "b", "c"]);
+    expect(reported).toEqual(["library cover: saving"]);
+  });
+
+  it("moves on from a picture that never finishes", async () => {
+    stuck.add("a");
+    stuck.add("b");
+    const lib = useLibrary();
+    await lib.refresh();
+    await settle();
+    // both painters are held up by the stuck pictures until they give up on them
+    expect(drawn).toEqual([]);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await settle();
+    expect(drawn).toEqual(["c"]);
+    expect(reported).toEqual(["library cover: drawing"]);
   });
 });
