@@ -34,7 +34,7 @@ The macOS app is signed and notarized by Apple. The
 
 | System | File | Notes |
 |---|---|---|
-| Windows (x86-64) | `…_x64-setup.exe` | Not yet tried on real hardware. |
+| Windows (x86-64) | `…_x64-setup.exe` | Run the installer. |
 | macOS (Apple Silicon) | `….dmg` | Open it and drag Penroam to **Applications**. Not yet tried on real hardware. No Intel build. |
 | Linux (x86-64) | `.AppImage` or `.deb` | `chmod +x Penroam*.AppImage` and run it, or `sudo apt install ./Penroam*.deb`. |
 | Android and BOOX (arm64) | `…_android-arm64.apk` | Install the APK directly, or [join the test on Google Play](https://play.google.com/apps/testing/ink.penroam.app). |
