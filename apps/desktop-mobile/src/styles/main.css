@@ -176,6 +176,9 @@ pre,
   --pr-safe-right: max(env(safe-area-inset-right), var(--pr-native-inset-right, 0px));
   --pr-safe-bottom: max(env(safe-area-inset-bottom), var(--pr-native-inset-bottom, 0px));
   --pr-safe-left: max(env(safe-area-inset-left), var(--pr-native-inset-left, 0px));
+  /* The on-screen keyboard's height over the bottom of the window: measured natively on
+     Android, from the visual viewport elsewhere (platform/keyboard.ts). */
+  --pr-keyboard: max(var(--pr-native-keyboard, 0px), var(--pr-viewport-keyboard, 0px));
 }
 .safe-top {
   padding-top: var(--pr-safe-top);
@@ -184,6 +187,11 @@ pre,
    pb-[calc(<padding>+var(--pr-safe-bottom))] instead. */
 .safe-bottom {
   padding-bottom: var(--pr-safe-bottom);
+}
+/* For bars docked to the bottom of the screen: also clears an open on-screen keyboard, which
+   covers the safe area too, so the larger of the two is enough. */
+.safe-bottom-keyboard {
+  padding-bottom: max(var(--pr-safe-bottom), var(--pr-keyboard));
 }
 .safe-x {
   padding-left: var(--pr-safe-left);

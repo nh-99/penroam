@@ -531,8 +531,8 @@ watch(narrow, (n) => {
         @close="comments.drawerOpen = false; cancelComment()" @start="startComment" @cancel-start="cancelComment" @submit-new="submitComment" @locate="locateThread" @reattach="reattachThread" />
     </div>
 
-    <!-- bottom tray on narrow screens -->
-    <footer v-if="narrow" class="safe-bottom relative z-30 border-t border-line bg-surface">
+    <!-- bottom tray on narrow screens; it rides above the on-screen keyboard so text formatting stays reachable -->
+    <footer v-if="narrow" class="safe-bottom-keyboard relative z-30 border-t border-line bg-surface">
       <Toolbar compact :read-only="readOnly" :state="st" @tool="setTool" @format="host.editor.value?.formatText($event)" @undo="host.editor.value?.undo()" @redo="host.editor.value?.redo()" @ruler="host.editor.value?.toggleRuler()"
         @zoom-in="host.editor.value?.zoomBy(1.25)" @zoom-out="host.editor.value?.zoomBy(0.8)" @fit="host.editor.value?.fit('width')"
         @delete-selection="host.editor.value?.deleteSelection()" @edit-text="host.editor.value?.editSelectedText()" @restyle="(s) => host.editor.value?.restyleSelection(s)" @free-placement="(f) => host.editor.value?.setSelectionFreePlacement(f)" />

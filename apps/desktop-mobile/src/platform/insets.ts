@@ -3,9 +3,11 @@
 // Android WebView does not reliably report the system bars through `env(safe-area-inset-*)`
 // and never reports the bottom gesture area, so the activity measures them and passes them in
 // as `--pr-native-inset-*` CSS variables. `main.css` uses the larger of those and `env()`.
+// The activity also reports the on-screen keyboard's height, measured from the bottom of the
+// window, as `--pr-native-keyboard`: the edge-to-edge WebView is not resized for it.
 // Elsewhere there is no bridge and the variables stay unset (0px).
 
-type Insets = { top: number; right: number; bottom: number; left: number };
+type Insets = { top: number; right: number; bottom: number; left: number; keyboard?: number };
 
 declare global {
   interface Window {
@@ -20,6 +22,8 @@ function apply(insets: Insets) {
     const v = Number(insets[side]);
     style.setProperty(`--pr-native-inset-${side}`, `${Number.isFinite(v) ? v : 0}px`);
   }
+  const k = Number(insets.keyboard ?? 0);
+  style.setProperty("--pr-native-keyboard", `${Number.isFinite(k) ? k : 0}px`);
 }
 
 /** Applies the native insets now, and whenever the activity reports a change. */

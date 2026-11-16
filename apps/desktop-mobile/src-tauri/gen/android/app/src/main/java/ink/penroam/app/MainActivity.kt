@@ -16,9 +16,13 @@ import androidx.core.view.WindowInsetsCompat
  * switches apps instead of scrolling the toolbar. So this activity measures the insets itself
  * and hands them to the page as CSS variables (`--pr-native-inset-top|right|bottom|left`, in
  * CSS pixels). `main.css` takes the larger of those and `env()`.
+ *
+ * Drawing edge to edge also means the window is not resized for the on-screen keyboard, which
+ * would cover the bottom toolbar while typing. The keyboard's height is passed as `keyboard`
+ * (`--pr-native-keyboard`) so the toolbar can sit above it.
  */
 class MainActivity : TauriActivity() {
-  @Volatile private var insetsJson = """{"top":0,"right":0,"bottom":0,"left":0}"""
+  @Volatile private var insetsJson = """{"top":0,"right":0,"bottom":0,"left":0,"keyboard":0}"""
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -44,7 +48,10 @@ class MainActivity : TauriActivity() {
       val right = css(bars.right)
       val bottom = css(maxOf(bars.bottom, gestures.bottom))
       val left = css(bars.left)
-      insetsJson = """{"top":$top,"right":$right,"bottom":$bottom,"left":$left}"""
+      // Measured from the bottom of the window, so it already includes the navigation bar.
+      val keyboard = if (insets.isVisible(WindowInsetsCompat.Type.ime()))
+        css(insets.getInsets(WindowInsetsCompat.Type.ime()).bottom) else 0f
+      insetsJson = """{"top":$top,"right":$right,"bottom":$bottom,"left":$left,"keyboard":$keyboard}"""
       view.post {
         (view as WebView).evaluateJavascript(
           "window.__penroamApplyInsets && window.__penroamApplyInsets($insetsJson)", null
