@@ -1,7 +1,7 @@
 // Library + open-notebook UI state. All data operations go through Rust; this
 // store only mirrors the latest results for the views.
 import { defineStore } from "pinia";
-import { computed, ref, shallowRef } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
 import type { Folder } from "../generated/Folder";
 import type { Notebook } from "../generated/Notebook";
 import type { NotebookSummary } from "../generated/NotebookSummary";
@@ -12,6 +12,7 @@ import type { RecoveryReport } from "../generated/RecoveryReport";
 import { renderMathTable } from "../editor/math";
 import { api, CommandError, hasHost } from "../platform/ipc";
 import { recordUiError } from "../platform/diagnostics";
+import { readResume, setPendingView, writeResume } from "../platform/resume";
 import { pickFile, pickImportFiles, pickSaveLocation, safeFileName, type Picked } from "../platform/files";
 import type { Kept } from "../generated/Kept";
 import { useSync } from "./sync";
@@ -294,6 +295,29 @@ export const useLibrary = defineStore("library", () => {
     for (const u of Object.values(thumbs.value)) URL.revokeObjectURL(u);
     thumbs.value = {};
     void refresh();
+  }
+
+  // ------------------------------------------------------------------ resume --
+
+  // Every move is written down as it happens, so a quit at any moment (or the system ending
+  // the app in the background) reopens in the same place. See platform/resume.ts.
+  watch([() => current.value?.id ?? null, currentPageId, openFolderId], ([notebookId, pageId, folderId]) =>
+    writeResume({ notebookId, pageId: notebookId ? pageId : null, folderId }),
+  );
+
+  /**
+   * Goes back to where the user was when the app last quit: the folder they were browsing and
+   * the notebook and page they had open, with the page's scroll and zoom (the editor restores
+   * that when it opens the page). Call once, after the first `refresh`. Anything that has gone
+   * since (trashed, deleted elsewhere, in a locked vault) is skipped.
+   */
+  async function resume() {
+    const r = readResume();
+    if (r.folderId && folders.value.some((f) => f.id === r.folderId)) openFolderId.value = r.folderId;
+    if (!r.notebookId || !live.value.some((n) => n.id === r.notebookId)) return;
+    setPendingView(r.view);
+    await open(r.notebookId, r.pageId ?? undefined);
+    if (!current.value) setPendingView(null);
   }
 
   async function loadThumbs() {
@@ -840,6 +864,7 @@ export const useLibrary = defineStore("library", () => {
     duplicate,
     open,
     close,
+    resume,
     rename,
     setCover,
     trash,

@@ -270,6 +270,12 @@ interface TextEdit {
 
 type CommentRectLike = { x: number; y: number; w: number; h: number };
 
+/** The transform that puts `spot` (see `InkEditor.viewSpot`) at the view's top-left. */
+function spotTransform(spot: { scale: number; x: number; y: number }): ViewTransform {
+  const scale = clampScale(spot.scale);
+  return { scale, ox: -spot.x * scale, oy: -spot.y * scale };
+}
+
 export class InkEditor {
   readonly world: HTMLDivElement;
   readonly renderer: PageRenderer;
@@ -579,9 +585,10 @@ export class InkEditor {
   /**
    * Opens a page session. The previous session must have been flushed by the caller.
    * The view fits the page's width, unless `keepView` is set in continuous scrolling: then
-   * the page stays where it was in the column, so scrolling onto it doesn't jump.
+   * the page stays where it was in the column, so scrolling onto it doesn't jump; or `view`
+   * (from `viewSpot`) is given, to come back to where the page was left.
    */
-  async setSession(session: PageSession, pdfCache: PdfCache | null, opts: { keepView?: boolean } = {}) {
+  async setSession(session: PageSession, pdfCache: PdfCache | null, opts: { keepView?: boolean; view?: { scale: number; x: number; y: number } | null } = {}) {
     this.endTextEdit();
     this.cancelGestures();
     this.clearSelection();
@@ -635,7 +642,7 @@ export class InkEditor {
     // the background layer's PDF bitmap is for sheets
     this.background = this.canvas ? null : (p.background ?? null);
     this.relayoutStrip();
-    this.transform = kept ? this.constrained(kept) : this.fitTransform("width");
+    this.transform = kept ? this.constrained(kept) : opts.view ? this.constrained(spotTransform(opts.view)) : this.fitTransform("width");
     this.applyTransform(false);
     if (this.canvas) this.growExtent();
     this.renderer.setResolution(this.wantedRes());
@@ -1159,6 +1166,21 @@ export class InkEditor {
   /** Fits the page's width or the whole page; on a free infinite canvas, always everything on it. */
   fit(mode: "width" | "page" = "width") {
     this.setTransform(this.fitTransform(this.unbounded ? "page" : mode));
+  }
+
+  /**
+   * Where the view is on the open page: its zoom and the document point (pt, from the page's
+   * corner) at the view's top-left. Unlike the transform, this means the same thing in a window
+   * of another size, so it is what gets saved to come back to.
+   */
+  viewSpot(): { scale: number; x: number; y: number } {
+    const [x, y] = toDoc(this.transform, 0, 0);
+    return { scale: this.transform.scale, x, y };
+  }
+
+  /** Puts the view back on a spot from `viewSpot`, kept from leaving the page like any other move. */
+  showSpot(spot: { scale: number; x: number; y: number }) {
+    this.setTransform(spotTransform(spot));
   }
 
   zoomBy(factor: number) {

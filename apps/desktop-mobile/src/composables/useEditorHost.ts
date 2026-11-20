@@ -11,6 +11,7 @@ import { api, hasHost } from "../platform/ipc";
 import { isIOS } from "../platform/device";
 import { detectNativeInk, type NativeInkSurface } from "../platform/nativeInk";
 import { registerFlusher } from "../platform/lifecycle";
+import { takePendingView, writeResume } from "../platform/resume";
 import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { useUi } from "../stores/ui";
@@ -250,10 +251,22 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
   /** Flushes the current page; throws (and keeps the data in memory) if saving fails. */
   async function flush() {
     editor.value?.endTextEdit();
+    saveView();
     if (session) {
       await session.flush();
       await thumbnailNow().catch(() => {});
     }
+  }
+
+  /**
+   * Writes down how the open page is scrolled and zoomed, to come back to after a restart.
+   * Flushing does it, so the close handler and going into the background (see `onVisibility`) both
+   * save it.
+   */
+  function saveView() {
+    const e = editor.value;
+    const s = session;
+    if (e && s && lib.current?.id === s.notebookId) writeResume({ view: { notebookId: s.notebookId, pageId: s.page.id, ...e.viewSpot() } });
   }
 
   async function openPage(pageId: string | null) {
@@ -308,7 +321,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
       session = next;
       const page = next.page;
       noteSize(nb.id, page);
-      await e.setSession(next, pdfCache, { keepView });
+      // the first page after start-up comes back scrolled and zoomed as it was left
+      await e.setSession(next, pdfCache, { keepView, view: keepView ? null : takePendingView(nb.id, pageId) });
       if (!lib.thumbs[pageId]) setTimeout(() => void thumbnailNow(), page.background ? 1500 : 200);
     } catch (err) {
       if (seq === openSeq) pageError.value = errorMessage(err);

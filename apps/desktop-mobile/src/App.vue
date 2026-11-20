@@ -64,6 +64,13 @@ onMounted(async () => {
       if (id) tour.offerInEditor();
     },
   );
+  const benchQuery = withTimeout(api.autobenchRequested(), 5000, "autobench query").catch((e) => {
+    console.error("autobench query failed", e);
+    return null;
+  });
+  // back to the folder, notebook and page the user had open when the app last quit; a
+  // benchmark run opens notebooks of its own instead
+  void benchQuery.then((b) => (b ? undefined : lib.resume()));
   void search.init();
   // sync: one query at start-up; nothing more unless a backend reports it available
   void sync.init().then(() => {
@@ -102,10 +109,7 @@ onMounted(async () => {
       action: { label: "Update", run: () => void installFromToast(ui, settings.s.updateChannel, offer.version) },
     });
   });
-  const bench = await withTimeout(api.autobenchRequested(), 5000, "autobench query").catch((e) => {
-    console.error("autobench query failed", e);
-    return null;
-  });
+  const bench = await benchQuery;
   try {
     unlisten = await withTimeout(
       listen("penroam://close-requested", async () => {

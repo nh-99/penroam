@@ -46,7 +46,8 @@ Click **Create notebook**, and it opens, ready to write in.
   [Pages and the infinite canvas](pages-and-canvas.md).
 
 There is no save button. Everything is saved as you write, and the top bar shows **Saved** once
-it's safe on disk. See [Saving, backups and version history](backups-and-history.md).
+it's safe on disk. When you quit and open Penroam again, it comes back to the same notebook and
+page. See [Saving, backups and version history](backups-and-history.md).
 
 ## Next steps
 

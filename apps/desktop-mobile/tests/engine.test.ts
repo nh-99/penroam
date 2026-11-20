@@ -1260,3 +1260,18 @@ describe("ruler", () => {
     expect(ed.nativeIsVisible).toBe(true);
   });
 });
+
+describe("coming back to a saved view", () => {
+  it("opens the page scrolled and zoomed as it was left, kept on the page", async () => {
+    ed.setTransform({ scale: 2, ox: -100, oy: -700 });
+    const spot = ed.viewSpot();
+    expect(spot).toEqual({ scale: 2, x: 50, y: 350 });
+    ed.fit("width");
+    await ed.setSession(new PageSession("nb", page(), async () => ({ revision: 1, updatedAt: 0, durable: true })), null, { view: spot });
+    expect(ed.transform).toEqual({ scale: 2, ox: -100, oy: -700 });
+    // a spot far off the page (a smaller page now, say) still leaves the page in view
+    ed.showSpot({ scale: 1, x: 99999, y: 99999 });
+    expect(ed.transform.ox).toBeGreaterThan(-612);
+    expect(ed.transform.oy).toBeGreaterThan(-792);
+  });
+});

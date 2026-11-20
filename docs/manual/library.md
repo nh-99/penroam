@@ -2,8 +2,13 @@
 
 [Manual](README.md) › Your library
 
-The library is the first thing you see when Penroam opens. It shows every notebook as a card with
-its cover colour and a preview of its first page, newest first.
+The library shows every notebook as a card with its cover colour and a preview of its first page,
+newest first.
+
+Penroam opens where you left off. If a notebook was open when you quit, it opens on the same page,
+scrolled and zoomed as you left it. Otherwise you start in the library, in the folder you were
+looking at. If that notebook or folder has gone since (moved to the trash, deleted on another
+device, or in a locked vault), you start in the library instead.
 
 Previews are kept on each device. When a notebook arrives from another device, or changes there,
 the library draws its new preview in the background, the notebooks on screen first.
