@@ -3,6 +3,31 @@
 User-visible changes for each release. The release workflow copies a version's section into its
 release notes and stops if the version has no entry.
 
+## 0.1.0-beta.12
+
+* New: an infinite canvas of ruled paper works like a note. As a text box gets longer while you
+  type, the drawings and text below it move down to make room, and move back up when it gets
+  shorter. Strokes close together move as one drawing, and ink that touches a text box moves with
+  it. After you draw, drag the grip under the drawing to open or close the space below it. The
+  ruled column also stays in the middle of the window now: it only scrolls up and down. See the
+  manual's chapter on pages and the infinite canvas.
+* New: Penroam opens where you left off: the folder you were looking at, or the notebook and page
+  you had open, scrolled and zoomed as you left it.
+* Changed: where a finger moves the page, one finger scrolls up and down and keeps going for a
+  moment when you flick it (except in the ePaper theme). Moving sideways or zooming takes two
+  fingers.
+* Changed: on a phone, notebooks open with the pan tool, so a finger scrolls and a tap on text
+  starts typing. Choose the pen to draw with your finger.
+* Changed: search indexing now runs on battery by default, so new pages are searchable straight
+  away. Turn on **Wait while on battery** in **Settings → Search** to index only while charging.
+  On phones and tablets, indexing waits while Low Power Mode or Battery Saver is on; that's a
+  separate setting, on by default.
+* New: the iPhone and iPad beta is open to everyone on TestFlight.
+* Fixed: on phones, the on-screen keyboard covered the editor's toolbar and its text formatting
+  controls.
+* Fixed: library covers could stop appearing for the rest of a session after one cover failed to
+  draw.
+
 ## 0.1.0-beta.11
 
 * New: Penroam Cloud now offers shared notebooks. Share one from **Share notebook…** in its **⋮**
