@@ -346,6 +346,43 @@ pre,
   min-height: calc(var(--pr-touch) * var(--inv, 1));
 }
 
+/* The bottom edge of a drawing box on ruled canvas paper (editor/engine.ts updateBoxHandle): a
+   faint line across the column, and a grip in its middle that takes the presses. Sized with --inv
+   to stay the same on screen. */
+.penroam-boxline {
+  height: 0;
+  border-top: calc(1px * var(--inv, 1)) dashed rgb(37 99 235 / 0.45);
+  pointer-events: none;
+}
+.penroam-boxline.is-dragging {
+  border-top-style: solid;
+  border-top-color: #2563eb;
+}
+.penroam-boxhandle {
+  width: calc(64px * var(--inv, 1));
+  height: calc(28px * var(--inv, 1));
+  margin: calc(-14px * var(--inv, 1)) 0 0 calc(-32px * var(--inv, 1));
+  cursor: ns-resize;
+  touch-action: none;
+}
+.penroam-boxhandle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(44px * var(--inv, 1));
+  height: calc(8px * var(--inv, 1));
+  margin: calc(-4px * var(--inv, 1)) 0 0 calc(-22px * var(--inv, 1));
+  border-radius: 9999px;
+  background: #2563eb;
+}
+:root[data-theme="epaper"] .penroam-boxline {
+  border-top-color: #000;
+}
+:root[data-theme="epaper"] .penroam-boxhandle::after {
+  background: #000;
+}
+
 /* The grab strip around a box being edited. Sized with --inv to stay the same on screen. */
 .penroam-editframe {
   box-sizing: content-box;

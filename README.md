@@ -105,7 +105,8 @@ stays sharp vector lines. The original PDF is never changed. [PDFs →](docs/man
 ![A mind map of science fair ideas spread across an infinite dotted canvas](docs/images/infinite-canvas.png)
 
 Turn any notebook into an infinite canvas for mind maps, sketches and brainstorms that grows in
-every direction as you write, and switch back to pages at any time.
+every direction as you write, and switch back to pages at any time. On ruled paper the canvas is
+one long note: as the text you type grows, the drawings below it move down to make room.
 [Pages and the infinite canvas →](docs/manual/pages-and-canvas.md)
 
 ### Keep your library in order

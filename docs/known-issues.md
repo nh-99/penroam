@@ -23,6 +23,9 @@ notes. If you find one, please report it: see [support](support.md).
   the next page.
 * SVG export and text export leave out PDF pages placed on a canvas, with a warning. PNG and
   annotated PDF keep them.
+* On ruled paper, only typing moves the drawings and text below a text box. Making a box's text
+  bigger or smaller from the toolbar, or moving or resizing the box, leaves what's below where it
+  is, so the box can end up over it.
 
 ## Importing
 

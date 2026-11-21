@@ -1041,9 +1041,10 @@ class BooxInkView @JvmOverloads constructor(
                     val sc = (pinchStartScale * dist / pinchStartDist).coerceIn(0.25f, 8f)
                     transform = transform.copy(scale = sc, offsetX = fx / d - pinchAnchorX * sc, offsetY = fy / d - pinchAnchorY * sc)
                 } else if (navMode == 1) {
-                    val dx = (e.getX(0) - navLastX) / d; val dy = (e.getY(0) - navLastY) / d
+                    // one finger scrolls the page up and down; moving sideways takes a pinch
+                    val dy = (e.getY(0) - navLastY) / d
                     navLastX = e.getX(0); navLastY = e.getY(0)
-                    transform = transform.copy(offsetX = transform.offsetX + dx, offsetY = transform.offsetY + dy)
+                    transform = transform.copy(offsetY = transform.offsetY + dy)
                 }
                 rebuildBitmap()
                 listener?.onViewportChanged(transform)

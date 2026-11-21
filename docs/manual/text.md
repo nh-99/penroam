@@ -26,6 +26,9 @@ same button frees that box or puts it on the rows. Text boxes written freely, in
 earlier versions of Penroam, stay where they are until you do. Blank paper, grid paper and PDF
 pages have no rows, so text goes anywhere on them.
 
+On an infinite canvas of ruled paper, a text box that gets longer pushes the drawings and text
+below it down. See [Typing and drawing on ruled paper](pages-and-canvas.md#typing-and-drawing-on-ruled-paper).
+
 ## Lining up text
 
 When you drag a text box or click to start a new one close to another text box, it snaps into line

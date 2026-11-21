@@ -16,7 +16,14 @@
 // elements with `pdfPage`, rendered sharp near the view and coarse elsewhere (`syncPdfPages`).
 // Ruled paper makes the canvas a column (`column`): the page's width with its header and margin
 // line, infinite only downward. The extent then spans the column's width and grows down, the
-// view is kept on the column, and text is placed and sized as on a sheet.
+// view is kept on the column, and text is placed and sized as on a sheet. A column never scrolls
+// sideways: it stays centred and the view zooms in no further than its width. Text and drawings
+// on it flow like a note (flow.ts): a text box that grows or shrinks moves the blocks below it,
+// and the handle under the drawing box last drawn in makes room below it (`updateBoxHandle`).
+//
+// Touch: one finger scrolls up and down, with momentum when it lifts (`fling`); moving sideways
+// and zooming take two fingers. The hand tool, which phones start on, also edits a text box it
+// taps, so a phone opens ready to scroll and type.
 //
 // The ruler (`setRuler`) is a screen-space overlay with its own canvas above the ink
 // previews. Presses on it are routed in `onDown` by `rulerPress`; a stroke that starts at its
@@ -31,6 +38,7 @@ import type { PdfBackgroundRef } from "../generated/PdfBackgroundRef";
 import type { Template } from "../generated/Template";
 import type { TextBlock } from "../generated/TextBlock";
 import type { TextFont } from "../generated/TextFont";
+import type { OpKind } from "../generated/OpKind";
 import type { NativeInkSurface, NativeTool } from "../platform/nativeInk";
 import {
   drawPieces,
@@ -64,6 +72,7 @@ import { onMathReady } from "./math";
 import { DIAL_RADIUS_PX, fingerTurn, moveBy, normaliseAngle, outsideDialDeadZone, projectToEdge, reachFor, rotateAbout, RULER_HALF_WIDTH_PX, rulerPress, stepAngle, tickLayout, twoFingerTransform, type Ruler, type RulerSide } from "./ruler";
 import { alignment, SNAP_DISTANCE_PX, type Guide, type TextEdges } from "./snap";
 import { isCanvasColumn, rowPitchOf, snapToRow } from "./templates";
+import { drawingBox, flowShift, flowUnits, movedElement, shiftOps } from "./flow";
 import { ascentOf, contentHeight, descentOf, firstBaseline, fontFamilyOf, lineHeight, metrics } from "./textLayout";
 import { PageStrip, type StripPage } from "./pageStrip";
 import { backingScale, clampScale, constrain, constrainTo, fitPage, fitWidth, toDoc, zoomAbout, type ViewTransform } from "./viewport";
@@ -183,6 +192,14 @@ const PINCH_GRACE_MS = 250;
 const PEN_LIFT_GRACE_MS = 400;
 /** A press that moves less than this (screen pixels) before it lifts is a tap. */
 const TAP_SLOP_PX = 8;
+/** A one-finger scroll's speed is measured over its last this many ms. */
+const FLING_SAMPLE_MS = 80;
+/** Slower than this (px/ms) when the finger lifts, the page stops with it. */
+const FLING_MIN_SPEED = 0.3;
+/** A fling ends once it slows below this (px/ms). */
+const FLING_STOP_SPEED = 0.02;
+/** How much of its speed a fling keeps each ms, about as quickly as a native scroll view slows. */
+const FLING_DECAY_PER_MS = 0.996;
 /** How far (screen pixels) outside a task's small checkbox a tap still reaches it. */
 const TASK_TAP_PAD_PX = 6;
 /** Infinite canvas: how far past the view, as a fraction of its size, the layers reach. */
@@ -393,6 +410,21 @@ export class InkEditor {
   private rulerDrawnScale = 0;
   /** The ruler was shown while a native pen stroke was in flight: hide the layer at pen-up. */
   private nativeHideAtLift = false;
+  // note flow (ruled canvas)
+  /** An element of the drawing box last drawn in, whose handle shows under it. */
+  private boxOf: string | null = null;
+  /** The line along a drawing box's bottom, and the grip on it that drags it. */
+  private boxLine: HTMLDivElement;
+  private boxHandle: HTMLDivElement;
+  /** Dragging a drawing box's bottom: where it was, how far it has moved (whole rows) and its least move. */
+  private boxDrag: { pointerId: number; startY: number; bottom: number; below: number; minDy: number; dy: number } | null = null;
+  // touch scrolling
+  /** The last one-finger scroll positions (time ms, viewport y), for the speed of the fling. */
+  private scrollTrail: { t: number; y: number }[] = [];
+  /** The momentum scroll running after a finger lifted. */
+  private flingFrame: number | null = null;
+  /** A hand-tool press on a text box, which edits the box if it lifts as a tap. */
+  private textTapNav: { pointerId: number; x: number; y: number; id: string } | null = null;
 
   constructor(
     private viewport: HTMLElement,
@@ -424,6 +456,16 @@ export class InkEditor {
     this.selHandle = document.createElement("div");
     this.selHandle.className = "penroam-handle absolute hidden";
     this.overlay.appendChild(this.selHandle);
+    this.boxLine = document.createElement("div");
+    this.boxLine.className = "penroam-boxline absolute hidden";
+    this.overlay.appendChild(this.boxLine);
+    // only the grip takes presses, so ink can still be drawn right along the box's edge
+    this.boxHandle = document.createElement("div");
+    this.boxHandle.className = "penroam-boxhandle absolute hidden";
+    this.boxHandle.title = "Drag to make room under the drawing";
+    this.boxHandle.setAttribute("aria-label", "Drawing space");
+    this.boxHandle.style.pointerEvents = "auto";
+    this.overlay.appendChild(this.boxHandle);
 
     // before the text editor, so the editor stays on top of the strip's middle
     this.editFrame = document.createElement("div");
@@ -540,6 +582,7 @@ export class InkEditor {
 
   dispose() {
     this.endTextEdit();
+    this.stopFling();
     this.ro.disconnect();
     this.dprQuery?.removeEventListener?.("change", this.onDprChange);
     this.disposers.forEach((d) => d());
@@ -606,6 +649,8 @@ export class InkEditor {
     this.session = session;
     session.readOnly = this.viewOnly;
     session.measureText = (t) => this.textHeight(t as Text);
+    session.reflowText = (before, after) => this.flowOps(before as Text, after as Text).forward;
+    this.boxOf = null;
     this.renderPresence();
     this.textRange = null;
     this.cancelCommentPlacement();
@@ -648,6 +693,7 @@ export class InkEditor {
     this.renderer.setResolution(this.wantedRes());
     this.renderer.renderAll(this.visibleDocRect());
     this.emitAll();
+    this.updateBoxHandle();
     if (this.native) {
       if (this.nativeMounted) this.nativeCall((n) => n.loadCommittedInk(this.inkElements()));
       this.syncNativeTransform();
@@ -1003,6 +1049,108 @@ export class InkEditor {
     return paintOf(t).height;
   }
 
+  /** The height of one line of `t`, as a new box starts. */
+  private oneLine(t: Text): number {
+    return t.rowPitch === undefined ? lineHeight(t.fontSize) : rowsFor(t.fontSize, t.rowPitch) * t.rowPitch;
+  }
+
+  // ====================================================== note flow ==
+
+  /** Column: the row pitch blocks move by, which is also how close strokes must be to make one drawing. */
+  private get flowPitch(): number {
+    return Math.max(1, this.session?.page.template.spacing ?? 24);
+  }
+
+  /**
+   * Column: the ops that move the blocks under a text box as it goes from `before` (null for a
+   * new box, which starts one line high) to `after`, and the ops that put them back. Empty
+   * anywhere else, where everything stays where it was placed.
+   */
+  private flowOps(before: Text | null, after: Text): { forward: OpKind[]; inverse: OpKind[] } {
+    const s = this.session;
+    if (!s || !this.column) return { forward: [], inverse: [] };
+    const oldBottom = before ? before.y + before.height : after.y + this.oneLine(after);
+    const newBottom = after.y + after.height;
+    const others = s.page.elements.filter((e) => e.id !== after.id);
+    const pitch = this.flowPitch;
+    const { ids, dy } = flowShift(flowUnits(others, elementBounds, pitch), oldBottom, newBottom - oldBottom, pitch, newBottom);
+    return shiftOps(others, ids, dy);
+  }
+
+  /** Column: remembers the drawing box `id` was drawn in, so its handle shows. */
+  private noteBox(id: string) {
+    this.boxOf = this.column ? id : null;
+    this.updateBoxHandle();
+  }
+
+  /** The drawing box the handle is for, when there is something under it to move. */
+  private currentBox() {
+    const s = this.session;
+    if (!s || !this.column || !this.boxOf || !s.elementById(this.boxOf)) return null;
+    const pitch = this.flowPitch;
+    const units = flowUnits(s.page.elements, elementBounds, pitch);
+    const box = drawingBox(units, this.boxOf, pitch / 2);
+    // under the last block the page goes on for ever, so there is no room to make
+    return box && box.next !== null ? { ...box, units } : null;
+  }
+
+  /**
+   * Shows the bottom edge of the drawing box last drawn in, with its grip, while a drawing or
+   * selecting tool is out. Hidden during text editing, in view-only access and off a column.
+   */
+  private updateBoxHandle() {
+    const d = this.boxDrag;
+    const tools = DRAW_TOOLS.includes(this.tool) || this.tool === "select" || this.tool === "lasso";
+    const bottom = d ? d.bottom + d.dy : this.boxOf && tools && !this.viewOnly && !this.edit ? this.currentBox()?.bottom : undefined;
+    const show = bottom !== undefined && this.column;
+    this.boxLine.classList.toggle("hidden", !show);
+    this.boxHandle.classList.toggle("hidden", !show);
+    this.boxHandle.classList.toggle("is-dragging", !!d);
+    this.boxLine.classList.toggle("is-dragging", !!d);
+    if (!show) return;
+    const [x0, , x1] = this.columnBounds();
+    Object.assign(this.boxLine.style, { left: `${x0}px`, width: `${x1 - x0}px`, top: `${bottom}px` });
+    Object.assign(this.boxHandle.style, { left: `${(x0 + x1) / 2}px`, top: `${bottom}px` });
+  }
+
+  private beginBoxDrag(e: PointerEvent) {
+    const box = this.currentBox();
+    if (!box) return;
+    e.preventDefault();
+    this.capture(e);
+    this.boxDrag = { pointerId: e.pointerId, startY: this.docPoint(e)[1], bottom: box.bottom, below: box.unit.bottom, minDy: box.unit.bottom - box.bottom, dy: 0 };
+    this.updateBoxHandle();
+  }
+
+  private boxDragTo(e: PointerEvent) {
+    const d = this.boxDrag!;
+    const pitch = this.flowPitch;
+    // whole rows, so text below stays on the paper's lines; never above the drawing's own ink
+    const raw = this.docPoint(e)[1] - d.startY;
+    d.dy = Math.max(Math.ceil(d.minDy / pitch - 1e-6) * pitch, Math.round(raw / pitch) * pitch);
+    this.updateBoxHandle();
+  }
+
+  /** Moves everything under the box by the rows the bottom was dragged, as one undoable change. */
+  private finishBoxDrag() {
+    const d = this.boxDrag;
+    this.boxDrag = null;
+    const s = this.session;
+    if (d && s && d.dy !== 0) {
+      const pitch = this.flowPitch;
+      const units = flowUnits(s.page.elements, elementBounds, pitch);
+      const { ids, dy } = flowShift(units, d.below, d.dy, pitch, d.below);
+      const ops = shiftOps(s.page.elements, ids, dy);
+      if (ops.forward.length) s.commit({ label: dy > 0 ? "Make room" : "Close up space", ...ops });
+    }
+    this.updateBoxHandle();
+  }
+
+  private cancelBoxDrag() {
+    this.boxDrag = null;
+    this.updateBoxHandle();
+  }
+
   // ======================================================= viewport ==
 
   private resize() {
@@ -1031,9 +1179,14 @@ export class InkEditor {
     }
   }
 
+  /** The space fitting leaves around the page, in CSS px. */
+  private get fitMargin(): number {
+    return this.viewW < 600 ? 8 : 24;
+  }
+
   private fitTransform(mode: "width" | "page"): ViewTransform {
     const f = mode === "width" ? fitWidth : fitPage;
-    const margin = this.viewW < 600 ? 8 : 24;
+    const margin = this.fitMargin;
     if (this.canvas) return this.fitCanvas(mode, margin);
     const t = f(Math.max(1, this.viewW), Math.max(1, this.viewH), this.renderer.width, this.renderer.height, margin);
     // a short page centred in the column would leave the page before it half on screen
@@ -1156,7 +1309,17 @@ export class InkEditor {
     // a column reaches a page's length past its content; a free canvas has nowhere to get lost from
     if (this.column) {
       const b = this.columnBounds();
-      return constrainTo(t, this.viewW, this.viewH, [b[0], b[1], b[2], b[3] + this.session!.page.size.height]);
+      const w = Math.max(1, b[2] - b[0]);
+      // a column only scrolls up and down: zoomed in no further than its width, and centred
+      const fill = clampScale((this.viewW - 2 * this.fitMargin) / w);
+      let c = t;
+      if (t.scale > fill) {
+        // keep what is in the middle of the view there
+        const mid = (this.viewH / 2 - t.oy) / t.scale;
+        c = { scale: fill, ox: t.ox, oy: this.viewH / 2 - mid * fill };
+      }
+      const v = constrainTo(c, this.viewW, this.viewH, [b[0], b[1], b[2], b[3] + this.session!.page.size.height]);
+      return { scale: v.scale, ox: (this.viewW - w * v.scale) / 2 - b[0] * v.scale, oy: v.oy };
     }
     if (this.canvas) return t;
     if (this.continuous) return constrainTo(t, this.viewW, this.viewH, this.strip.bounds());
@@ -1202,8 +1365,11 @@ export class InkEditor {
   }
 
   setTransform(t: ViewTransform, fromNative = false) {
-    this.transform = this.constrained({ ...t, scale: clampScale(t.scale) });
-    this.applyTransform(!fromNative);
+    const want = { ...t, scale: clampScale(t.scale) };
+    this.transform = this.constrained(want);
+    // a native layer that went where the page doesn't allow (sideways on a column) is put back
+    const kept = this.transform.scale !== want.scale || this.transform.ox !== want.ox || this.transform.oy !== want.oy;
+    this.applyTransform(!fromNative || kept);
   }
 
   private applyTransform(notifyNative: boolean) {
@@ -1572,6 +1738,7 @@ export class InkEditor {
     this.emit({ tool });
     this.updateNative();
     this.updateSelectionBox();
+    this.updateBoxHandle();
   }
 
   /** Follows the system's Apple Pencil double-tap preference. Other actions are not ours to do. */
@@ -1701,6 +1868,8 @@ export class InkEditor {
       this.endTextEdit();
       if (this.tool === "text" && !grabbed) return;
     }
+    this.stopFling();
+    if (e.target === this.boxHandle && !this.viewOnly && !this.active && !this.erase && !this.drag && !this.boxDrag && this.touches.size === 0) return this.beginBoxDrag(e);
     const tool = this.effectiveTool(e);
     const busy = !!(this.active || this.erase || this.drag);
     const penActive = this.penDown || performance.now() - this.penLiftedAt < PEN_LIFT_GRACE_MS;
@@ -1794,6 +1963,14 @@ export class InkEditor {
       }
     }
     if (this.rulerDrag && this.rulerMove(e)) return;
+    if (this.boxDrag?.pointerId === e.pointerId) {
+      if (e.type === "pointermove") this.boxDragTo(e);
+      return;
+    }
+    if (this.textTapNav?.pointerId === e.pointerId) {
+      const [x, y] = this.viewportPoint(e);
+      if (Math.hypot(x - this.textTapNav.x, y - this.textTapNav.y) > TAP_SLOP_PX) this.textTapNav = null;
+    }
     if (this.touches.has(e.pointerId) || this.pan?.pointerId === e.pointerId) {
       if (e.type === "pointermove") this.navigate(e);
       return;
@@ -1829,6 +2006,9 @@ export class InkEditor {
     if (e.pointerType === "pen") this.liftPen();
     if (this.fingerDraw?.pointerId === e.pointerId) this.fingerDraw = null;
     if (this.rulerDrag && this.rulerUp(e.pointerId)) return;
+    if (this.boxDrag?.pointerId === e.pointerId) return cancelled ? this.cancelBoxDrag() : this.finishBoxDrag();
+    const textTap = this.textTapNav?.pointerId === e.pointerId ? this.textTapNav : null;
+    if (textTap) this.textTapNav = null;
     const tap = this.linkTap?.pointerId === e.pointerId ? this.linkTap : null;
     if (tap) {
       this.linkTap = null;
@@ -1842,12 +2022,22 @@ export class InkEditor {
         this.toggleTask(task);
       }
     }
+    const editTap = () => {
+      const t = textTap && !cancelled && !tap && !task && !this.viewOnly ? this.session?.elementById(textTap.id) : undefined;
+      if (t?.type === "text") this.beginTextEdit(t, false);
+    };
     if (this.touches.delete(e.pointerId)) {
+      const scrolled = this.touches.size === 0 && !this.pinch && !textTap;
       if (this.touches.size < 2) this.pinch = null;
+      // a finger that was scrolling (not one left over from a pinch) keeps the page going
+      if (scrolled && !cancelled) this.fling();
+      this.scrollTrail = [];
+      editTap();
       return;
     }
     if (this.pan?.pointerId === e.pointerId) {
       this.pan = null;
+      editTap();
       return;
     }
     if (this.active?.pointerId === e.pointerId) {
@@ -1898,7 +2088,8 @@ export class InkEditor {
   private onLostCapture(e: PointerEvent) {
     // lost capture mid-stroke (e.g. window lost focus): keep what was drawn, never orphan it
     if (this.rulerDrag && this.rulerUp(e.pointerId)) return;
-    if (this.active?.pointerId === e.pointerId) this.finishStroke();
+    if (this.boxDrag?.pointerId === e.pointerId) this.finishBoxDrag();
+    else if (this.active?.pointerId === e.pointerId) this.finishStroke();
     else if (this.erase?.pointerId === e.pointerId) this.finishErase();
     else if (this.drag?.pointerId === e.pointerId) this.finishDrag();
   }
@@ -1908,6 +2099,10 @@ export class InkEditor {
     if (this.active) this.finishStroke();
     if (this.erase) this.finishErase();
     if (this.drag) this.cancelDrag();
+    if (this.boxDrag) this.cancelBoxDrag();
+    this.stopFling();
+    this.scrollTrail = [];
+    this.textTapNav = null;
     if (this.rulerDrag) {
       this.rulerDrag = null;
       this.markRulerDirty(); // takes the angle readout away
@@ -1954,6 +2149,11 @@ export class InkEditor {
     const href = first && e.button <= 0 ? this.linkUnder(e) : null;
     this.linkTap = href ? { pointerId: e.pointerId, x: p[0], y: p[1], href } : null;
     this.taskTap = first && !href ? this.pressedTask(e, this.effectiveTool(e)) : null;
+    // with the hand tool, a tap on a text box types in it: a phone starts on this tool
+    if (first && !href && !this.taskTap && e.button <= 0 && this.tool === "hand" && !this.viewOnly) {
+      const t = this.hitText(...this.docPoint(e));
+      this.textTapNav = t ? { pointerId: e.pointerId, x: p[0], y: p[1], id: t.id } : null;
+    } else this.textTapNav = null;
     if (e.pointerType === "touch") {
       this.touches.set(e.pointerId, { x: p[0], y: p[1] });
       if (this.touches.size === 2) {
@@ -1981,9 +2181,44 @@ export class InkEditor {
       const fx = (a.x + b.x) / 2, fy = (a.y + b.y) / 2;
       const scale = clampScale((this.pinch.scale * dist) / this.pinch.dist);
       this.setTransform({ scale, ox: fx - this.pinch.ax * scale, oy: fy - this.pinch.ay * scale });
-    } else if (this.touches.size === 1) {
-      this.setTransform({ ...this.transform, ox: this.transform.ox + x - prev.x, oy: this.transform.oy + y - prev.y });
+    } else if (this.touches.size === 1 && !this.pinch) {
+      // one finger scrolls; moving sideways and zooming take two
+      this.setTransform({ ...this.transform, oy: this.transform.oy + y - prev.y });
+      const now = performance.now();
+      this.scrollTrail.push({ t: now, y });
+      while (this.scrollTrail.length > 2 && now - this.scrollTrail[0].t > FLING_SAMPLE_MS) this.scrollTrail.shift();
     }
+  }
+
+  /**
+   * Keeps the page scrolling after a finger lifts, at the speed it was moving, slowing down
+   * until it stops. Not on ePaper, where every frame of it would be a visible refresh.
+   */
+  private fling() {
+    const trail = this.scrollTrail;
+    if (this.settings.mono || trail.length < 2) return;
+    const a = trail[0], b = trail[trail.length - 1];
+    // a finger that stopped before it lifted means the page should stay where it is
+    if (performance.now() - b.t > FLING_SAMPLE_MS || b.t - a.t <= 0) return;
+    let v = (b.y - a.y) / (b.t - a.t); // px per ms
+    if (Math.abs(v) < FLING_MIN_SPEED) return;
+    let last = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min(48, now - last);
+      last = now;
+      const before = this.transform.oy;
+      this.setTransform({ ...this.transform, oy: before + v * dt });
+      v *= Math.pow(FLING_DECAY_PER_MS, dt);
+      // stops when slow, or when it reached the end of the page
+      if (Math.abs(v) < FLING_STOP_SPEED || this.transform.oy === before) this.flingFrame = null;
+      else this.flingFrame = requestAnimationFrame(step);
+    };
+    this.flingFrame = requestAnimationFrame(step);
+  }
+
+  private stopFling() {
+    if (this.flingFrame !== null) cancelAnimationFrame(this.flingFrame);
+    this.flingFrame = null;
   }
 
   // --------------------------------------------------------- strokes --
@@ -2099,6 +2334,7 @@ export class InkEditor {
     this.session.commit({ label: "Draw", forward: [{ op: "addElements", elements: [a.stroke] }], inverse: [{ op: "removeElements", ids: [a.stroke.id] }] });
     this.clearScreen(this.actx);
     this.clearScreen(this.tctx);
+    this.noteBox(a.stroke.id);
   }
 
   private cancelStroke() {
@@ -2400,8 +2636,7 @@ export class InkEditor {
   }
 
   private movedCopy(e: Element, dx: number, dy: number): Element {
-    if (e.type === "ink") return { ...e, points: e.points.map((p) => ({ ...p, x: Math.round((p.x + dx) * 1000) / 1000, y: Math.round((p.y + dy) * 1000) / 1000 })) };
-    return { ...e, x: e.x + dx, y: e.y + dy };
+    return movedElement(e, dx, dy);
   }
 
   private drawDrag() {
@@ -2658,6 +2893,7 @@ export class InkEditor {
     this.textEditor.focus();
     this.emit({ editingText: true, textFormats: this.textEditor.formats });
     this.updateNative();
+    this.updateBoxHandle();
   }
 
   /** Places the text box editor over the block it is editing. */
@@ -2698,7 +2934,11 @@ export class InkEditor {
     if (!ed) return;
     ed.draft.text = text;
     this.layoutTextEditor();
-    if (!ed.composing) this.scheduleTextCommit();
+    if (ed.composing) return;
+    // on a column a line more or less moves what is under the box, which can't wait for the pause
+    const was = ed.committed ? ed.committed.height : this.oneLine(ed.draft);
+    if (this.column && this.textHeight(ed.draft) !== was && text.trim()) this.commitText(false);
+    else this.scheduleTextCommit();
   }
 
   private scheduleTextCommit() {
@@ -2722,19 +2962,24 @@ export class InkEditor {
     const empty = text.trim().length === 0;
     if (!prev) {
       if (empty) return;
-      s.commit({ label: "Add text", forward: [{ op: "addElements", elements: [next] }], inverse: [{ op: "removeElements", ids: [next.id] }] });
+      const flow = this.flowOps(null, next);
+      s.commit({ label: "Add text", forward: [{ op: "addElements", elements: [next] }, ...flow.forward], inverse: [{ op: "removeElements", ids: [next.id] }, ...flow.inverse] });
     } else if (empty && final) {
-      s.commit({ label: "Delete text", forward: [{ op: "removeElements", ids: [prev.id] }], inverse: [{ op: "addElements", elements: [prev] }] });
+      // what the box pushed down comes back up to where it was before the box had more than a line
+      const flow = this.flowOps(prev, { ...prev, height: this.oneLine(prev) });
+      s.commit({ label: "Delete text", forward: [{ op: "removeElements", ids: [prev.id] }, ...flow.forward], inverse: [{ op: "addElements", elements: [prev] }, ...flow.inverse] });
       ed.committed = null;
       return;
     } else if (empty) {
       return;
     } else if (prev.text !== next.text || prev.color !== next.color || prev.fontSize !== next.fontSize || prev.font !== next.font || prev.height !== next.height || prev.y !== next.y || prev.rowPitch !== next.rowPitch) {
       const splices = diffSplices(prev.text, next.text);
+      // undo and redo move the blocks below again themselves (`PageSession.reflowText`)
+      const flow = this.flowOps(prev, next);
       s.commit({
         label: "Edit text",
-        forward: [{ op: "replaceElements", elements: [next] }],
-        inverse: [{ op: "replaceElements", elements: [prev] }],
+        forward: [{ op: "replaceElements", elements: [next] }, ...flow.forward],
+        inverse: [{ op: "replaceElements", elements: [prev] }, ...flow.inverse],
         // own changes are kept as ranges, so undo later removes only this user's part of the text
         text: splices.length ? { elementId: next.id, edit: editFromSplices(prev.text, splices), splices } : undefined,
       });
@@ -2761,6 +3006,7 @@ export class InkEditor {
     this.renderer.renderText(e ? textBounds(e as Text) : textBounds(ed.draft));
     this.emit({ editingText: false });
     this.updateNative();
+    this.updateBoxHandle();
   }
 
   /** Applies a toolbar formatting command to the text box being edited. */
@@ -2812,6 +3058,7 @@ export class InkEditor {
       if (add.length) this.nativeCall((n) => n.addStrokes(add.map((e) => this.nativeShown(e))));
     }
     if (this.selection.size) this.updateSelectionBox();
+    if (this.boxOf || this.boxDrag) this.updateBoxHandle();
     if (this.editedTimer) clearTimeout(this.editedTimer);
     this.editedTimer = window.setTimeout(() => this.cb.onPageEdited(), 1500);
   }
@@ -3242,6 +3489,7 @@ export class InkEditor {
     } finally {
       this.nativeEcho = false;
     }
+    this.noteBox(el.id);
     // preview surfaces drop their live stroke once our committed pixels are on screen
     if (this.native && !this.native.ownsCommittedInk) {
       requestAnimationFrame(() => requestAnimationFrame(() => this.nativeCall((n) => n.commitAck(el.id))));

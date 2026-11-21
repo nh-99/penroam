@@ -163,6 +163,12 @@ export class PageSession {
   /** Height of a text block with new text, so undoing text keeps the block's size right. */
   measureText: ((t: Element) => number) | null = null;
   /**
+   * The ops that move what follows a text block when undo or redo changes its height (the note
+   * flow of flow.ts), computed against the page as it is then. Applied with the text, so the
+   * blocks below follow the text back and forth however the page changed in between.
+   */
+  reflowText: ((before: Element, after: Element) => OpKind[]) | null = null;
+  /**
    * View-only access (a viewer, or access that was removed). This is the central guard: while
    * set, `commit`, `undo` and `redo` refuse, so nothing is applied locally or queued for Rust,
    * whatever the UI above still offers. Rust refuses the same writes; this keeps the page from
@@ -266,8 +272,9 @@ export class PageSession {
     const r = invertEdit(el.text, t.edit);
     this.rebaseText(t.elementId, r.splices, c);
     t.edit = r.edit;
-    const next = { ...el, text: r.text };
-    return [{ op: "replaceElements", elements: [this.measureText ? { ...next, height: this.measureText(next) } : next] }];
+    const raw = { ...el, text: r.text };
+    const next = this.measureText ? { ...raw, height: this.measureText(raw) } : raw;
+    return [{ op: "replaceElements", elements: [next] }, ...(this.reflowText?.(el, next) ?? [])];
   }
 
   /** Maps every stored edit of a block (both stacks, except `skip`) through changes made to its text. */

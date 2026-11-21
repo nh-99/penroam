@@ -14,9 +14,10 @@ Choose a tool from the toolbar, then a colour and thickness:
 | Select | `V` | Drag a box around ink or text to move or delete it |
 | Lasso | `L` | Draw a loop around ink or text to select it, then drag inside the selection to move it |
 | Text | `T` | Click where you want to type, click a text box to edit it, or drag one to move it. `Esc` finishes the text box. See [Typing and formatting text](text.md) |
-| Pan | `H` | Move around the page |
+| Pan | `H` | Move around the page. With a finger it scrolls up and down, and a tap on a text box types in it |
 
-Penroam remembers your last tool on each device.
+Penroam remembers your last tool on each device. On a phone, notebooks always open with the pan
+tool, so a finger scrolls and a tap on text starts typing; choose the pen to draw with your finger.
 
 If the toolbar doesn't fit the window, arrows appear at each end to move along it. With a mouse you
 can also turn the wheel over the toolbar, or hold the middle button and drag.
@@ -39,11 +40,18 @@ support has not been tested on real hardware yet, so tell us how it goes.
 
 ## Fingers and touch
 
-On a touchscreen, **Settings → General → Touch input** decides what your fingers do:
+Wherever a finger moves the page rather than drawing, one finger scrolls up and down, and the page
+keeps going for a moment when you flick it (except in the ePaper theme). To move sideways or zoom,
+use two fingers.
 
-* **Automatic** (the default): fingers draw until you use a pen, then they pan and zoom.
-* **Pen only**: fingers always pan and zoom.
+On a touchscreen, **Settings → General → Touch input** decides when fingers draw:
+
+* **Automatic** (the default): fingers draw with the drawing tools until you use a pen, then they
+  scroll.
+* **Pen only**: fingers always scroll.
 * **Fingers draw**: one finger draws, two fingers pan and zoom.
+
+With the pan tool, a finger always scrolls.
 
 ## Ruler
 

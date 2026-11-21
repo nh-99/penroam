@@ -101,7 +101,8 @@ describe("native pen surface and fingers", () => {
     ptr("pointerdown", 100, 100, touch);
     ptr("pointermove", 130, 150, touch);
     ptr("pointerup", 130, 150, touch);
-    expect(ed.transform).toMatchObject({ scale: 1, ox: 30, oy: 50 });
+    // one finger scrolls: up and down only
+    expect(ed.transform).toMatchObject({ scale: 1, ox: 0, oy: 50 });
 
     ptr("pointerdown", 100, 100, touch);
     ptr("pointerdown", 200, 100, touch2);
@@ -128,8 +129,8 @@ describe("native pen surface and fingers", () => {
     ptr("pointerup", 340, 340, touch2);
     afterPenGrace();
     ptr("pointerdown", 100, 100, touch);
-    ptr("pointermove", 110, 100, touch);
-    expect(ed.transform.ox).toBe(10);
+    ptr("pointermove", 100, 110, touch);
+    expect(ed.transform.oy).toBe(10);
   });
 
   it("does not leave fingers ignored if the surface is hidden while the pen is down", async () => {
@@ -139,8 +140,8 @@ describe("native pen surface and fingers", () => {
     ed.setOverlayBlocked(true);
     ed.setOverlayBlocked(false);
     ptr("pointerdown", 100, 100, touch);
-    ptr("pointermove", 110, 100, touch);
-    expect(ed.transform.ox).toBe(10);
+    ptr("pointermove", 100, 110, touch);
+    expect(ed.transform.oy).toBe(10);
   });
 
   it("turns a one-finger stroke into a pinch when a second finger lands", () => {
@@ -183,13 +184,13 @@ describe("native pen surface and fingers", () => {
     native.penState(true);
     native.penState(false);
     ptr("pointerdown", 100, 100, touch);
-    ptr("pointermove", 130, 100, touch);
-    ptr("pointerup", 130, 100, touch);
-    expect(ed.transform.ox).toBe(0);
+    ptr("pointermove", 100, 130, touch);
+    ptr("pointerup", 100, 130, touch);
+    expect(ed.transform.oy).toBe(0);
     afterPenGrace();
     ptr("pointerdown", 100, 100, touch);
-    ptr("pointermove", 130, 100, touch);
-    expect(ed.transform.ox).toBe(30);
+    ptr("pointermove", 100, 130, touch);
+    expect(ed.transform.oy).toBe(30);
   });
 
   it("commits a Pencil stroke once when the web view also receives it", async () => {
@@ -924,6 +925,101 @@ describe("ruled infinite canvas", () => {
     expect(t.y).toBe(48);
     expect(t.x).toBeGreaterThanOrEqual(0);
     expect(t.x + t.width).toBeLessThanOrEqual(612);
+  });
+
+  it("never scrolls sideways, and zooms in no further than its width", async () => {
+    await ruled();
+    // 800 px wide, 24 px either side: the column fills the width at (800 - 48) / 612
+    const fill = (800 - 48) / 612;
+    ed.setTransform({ scale: 4, ox: -900, oy: 0 });
+    expect(ed.transform.scale).toBeCloseTo(fill);
+    expect(ed.transform.ox).toBeCloseTo((800 - 612 * fill) / 2);
+    ed.setTransform({ scale: 1, ox: 300, oy: -50 });
+    expect(ed.transform).toMatchObject({ scale: 1, ox: 94, oy: -50 });
+    (vp as any).dispatchEvent(new WheelEvent("wheel", { deltaX: 200, deltaY: 30, bubbles: true, cancelable: true }));
+    expect(ed.transform).toMatchObject({ ox: 94, oy: -80 });
+  });
+
+  const stroke = (id: string, y0: number, y1: number): Page["elements"][number] =>
+    ({ type: "ink", id, z: 1, tool: "pen", color: "#111111", opacity: 1, width: 2, pressure: false, source: "stylus", input: {}, points: [{ x: 100, y: y0, pressure: 0.5, tiltX: 0, tiltY: 0, timeUs: 0 }, { x: 200, y: y1, pressure: 0.5, tiltX: 0, tiltY: 0, timeUs: 1 }] }) as any;
+  const topOf = (id: string) => {
+    const e = session.elementById(id)!;
+    return e.type === "ink" ? Math.min(...e.points.map((p) => p.y)) : (e as any).y;
+  };
+  const add = (...elements: Page["elements"]) => session.commit({ label: "add", forward: [{ op: "addElements", elements }], inverse: [{ op: "removeElements", ids: elements.map((e) => e.id) }] });
+
+  it("pushes a drawing down as the text above it gets longer, and back with undo", async () => {
+    await ruled();
+    ed.setTransform({ scale: 1, ox: 0, oy: 0 });
+    const ox = ed.transform.ox;
+    add(stroke("d", 200, 260));
+    ed.setTool("text");
+    ptr("pointerdown", ox + 100, 80);
+    ptr("pointerup", ox + 100, 80);
+    typeIn("one");
+    vi.advanceTimersByTime(800);
+    expect(topOf("d")).toBe(200);
+    // two more lines: two rows down at once, without waiting for typing to pause
+    typeIn("one\ntwo\nthree");
+    expect(topOf("d")).toBe(248);
+    ed.endTextEdit();
+    ed.undo();
+    expect(topOf("d")).toBe(200);
+    ed.redo();
+    expect(topOf("d")).toBe(248);
+  });
+
+  it("leaves drawings alone when text grows on a sheet", async () => {
+    session.page.template = { kind: "ruled", spacing: 24 };
+    add(stroke("d", 200, 260));
+    ed.setTool("text");
+    ptr("pointerdown", 100, 80);
+    ptr("pointerup", 100, 80);
+    typeIn("one\ntwo\nthree");
+    ed.endTextEdit();
+    expect(topOf("d")).toBe(200);
+  });
+
+  it("makes room under a drawing box with the handle at its bottom", async () => {
+    await ruled();
+    ed.setTransform({ scale: 1, ox: 0, oy: 0 });
+    const ox = ed.transform.ox;
+    add({ type: "text", id: "below", z: 2, x: 72, y: 336, width: 300, height: 24, text: "below", fontSize: 16, color: "#111111", align: "left", rowPitch: 24 });
+    const handle = vp.querySelector(".penroam-boxhandle") as HTMLElement;
+    expect(handle.classList.contains("hidden")).toBe(true);
+    drawLine(ox + 100, 200, ox + 200, 260);
+    expect(handle.classList.contains("hidden")).toBe(false);
+    // the box reaches down to half a row above the text under it
+    expect(handle.style.top).toBe("324px");
+    handle.dispatchEvent(new PointerEvent("pointerdown", { clientX: ox + 306, clientY: 324, pointerId: 5, pointerType: "touch", button: 0, buttons: 1, bubbles: true, cancelable: true }));
+    ptr("pointermove", ox + 306, 374, { pointerId: 5, pointerType: "touch" });
+    ptr("pointerup", ox + 306, 374, { pointerId: 5, pointerType: "touch" });
+    expect(topOf("below")).toBe(384);
+    expect(session.page.elements.filter((e) => e.type === "ink")).toHaveLength(1);
+    ed.undo();
+    expect(topOf("below")).toBe(336);
+    // the handle is for drawing: typing hides it
+    ed.setTool("text");
+    expect(handle.classList.contains("hidden")).toBe(true);
+  });
+});
+
+describe("touch scrolling", () => {
+  const touch = { pointerType: "touch", pointerId: 41, pressure: 0.5 };
+  const note: Page["elements"][number] = { type: "text", id: "t", z: 1, x: 100, y: 100, width: 200, height: 24, text: "hi", fontSize: 16, color: "#111111", align: "left" };
+
+  it("types in a text box tapped with the hand tool, and only scrolls when the finger moves", () => {
+    session.commit({ label: "add", forward: [{ op: "addElements", elements: [note] }], inverse: [{ op: "removeElements", ids: ["t"] }] });
+    ed.setTool("hand");
+    ptr("pointerdown", 150, 110, touch);
+    ptr("pointermove", 150, 160, touch);
+    ptr("pointerup", 150, 160, touch);
+    expect(ed.isEditingText).toBe(false);
+    expect(ed.transform.oy).toBe(50);
+    ed.setTransform({ scale: 1, ox: 0, oy: 0 });
+    ptr("pointerdown", 150, 110, touch);
+    ptr("pointerup", 150, 110, touch);
+    expect(ed.isEditingText).toBe(true);
   });
 });
 

@@ -8,7 +8,7 @@ import { drawPageCanvas, drawPagePng, type PictureContext } from "../editor/page
 import type { Page } from "../generated/Page";
 import { PageSession, errorMessage } from "../editor/session";
 import { api, hasHost } from "../platform/ipc";
-import { isIOS } from "../platform/device";
+import { isIOS, isPhone } from "../platform/device";
 import { detectNativeInk, type NativeInkSurface } from "../platform/nativeInk";
 import { registerFlusher } from "../platform/lifecycle";
 import { takePendingView, writeResume } from "../platform/resume";
@@ -408,7 +408,8 @@ export function useEditorHost(viewport: Ref<HTMLElement | null>, extraBlocked: R
     e.penSeen = settings.s.penSeen;
     applySettings();
     e.setCanvas(!!lib.current?.infiniteCanvas);
-    e.setTool(settings.s.tool);
+    // a phone opens a notebook to read and type in, so a finger scrolls instead of drawing
+    e.setTool(isPhone() ? "hand" : settings.s.tool);
     unregister = registerFlusher(flush);
     if (sync.available) {
       offChanged = sync.onChanged((c) => {

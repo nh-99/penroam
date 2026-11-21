@@ -32,12 +32,35 @@ A canvas is a page with no edges: write, type and pan in any direction and it gr
 Tick **Infinite canvas** when you create a notebook, or choose **Page template → Infinite canvas**
 in the top bar to switch a notebook either way. Blank, grid and dotted paper have no edges at all.
 Ruled paper stays the page's width, with its header and margin line, and goes on downward for as
-long as you write.
+long as you write. It only scrolls up and down: it stays in the middle of the window, and zooms in
+no further than the window's width.
 
 A canvas notebook can still have several pages, each a canvas of its own; the page sidebar starts
 closed there, and the sidebar button opens it. When you turn the canvas on for a notebook with
 several pages, Penroam asks whether to keep them or combine them onto one canvas, one below the
 other. Combining moves the emptied pages to the notebook's trash, so you can restore them.
+
+## Typing and drawing on ruled paper
+
+An infinite canvas of ruled paper works like a note, where typed text and drawings take turns down
+the page:
+
+* **Text pushes drawings down.** When a text box gets longer as you type, everything below it moves
+  down by the same number of lines, so a drawing under a paragraph stays under it. When the text
+  gets shorter, what's below moves back up. Things beside the text box stay where they are.
+* **A drawing keeps together.** Strokes that touch or come within a line of each other count as
+  one drawing and move as one. Ink that touches a text box, such as an underline or a circled word,
+  moves with that box.
+* **Draw anywhere in a drawing's space.** The space between a drawing and the text below it
+  belongs to the drawing. Drawing further down, where there's no text, makes the drawing bigger.
+* **Make room under a drawing.** After you draw, a faint line with a grip shows the bottom of that
+  drawing's space. Drag the grip down to move everything below further away, or up to close the gap.
+  It moves a whole line at a time.
+
+Undo puts everything back where it was. On sheets and on other canvases, text and drawings stay
+where you put them.
+
+## Turning the canvas off
 
 Turning the canvas off again shows the pages as sheets and changes nothing on them; anything beyond
 a sheet's edge is still there when you turn it back on. **Fit** shows everything on the canvas, or

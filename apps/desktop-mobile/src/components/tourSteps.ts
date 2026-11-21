@@ -54,7 +54,7 @@ export const TOURS: Record<TourName, TourStep[]> = {
     {
       target: ['[role="radiogroup"][aria-label="Tool"]'],
       title: "Your tools",
-      body: "Pen (P), highlighter (M), eraser (E), select (V), lasso (L), text (T) and pan (H). A pen's eraser end erases too.",
+      body: "Pen (P), highlighter (M), eraser (E), select (V), lasso (L), text (T) and pan (H). A pen's eraser end erases too. On a phone, notebooks open with pan: a finger scrolls, and tapping text types in it.",
     },
     {
       target: ['[role="group"][aria-label="Colour"]'],

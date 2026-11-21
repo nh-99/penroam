@@ -60,8 +60,8 @@ const themes: { v: ThemePref; label: string; icon: any }[] = [
   { v: "epaper", label: "ePaper", icon: Tablet },
 ];
 const penModes: { v: PenOnlyMode; label: string; hint: string }[] = [
-  { v: "auto", label: "Automatic", hint: "Fingers draw until a pen is used, then fingers pan and zoom" },
-  { v: "on", label: "Pen only", hint: "Fingers always pan and zoom" },
+  { v: "auto", label: "Automatic", hint: "Fingers draw until a pen is used, then one finger scrolls and two pan and zoom" },
+  { v: "on", label: "Pen only", hint: "One finger scrolls; two fingers pan and zoom" },
   { v: "off", label: "Fingers draw", hint: "One finger draws; two fingers pan and zoom" },
 ];
 const nativeLabel = computed(() =>

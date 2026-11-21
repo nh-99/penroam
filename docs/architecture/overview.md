@@ -291,7 +291,12 @@ Specs: [`../formats/model-and-archive.md`](../formats/model-and-archive.md) (JSO
   so memory stays bounded however far a canvas reaches. Panning is unconstrained and fit fits the
   content. On ruled paper the canvas is a column the page's width, with the sheet's header and
   margin line: the extent spans that width and grows only downward, the view is kept on the
-  column to a page's length past its content, and text is placed and sized as on a sheet. PDF pages on a canvas are image elements with `pdfPage`, rendered by PDF.js sharp
+  column to a page's length past its content, and text is placed and sized as on a sheet. A column
+  never scrolls sideways: it stays centred and zooms in no further than its width. Its content flows
+  like a note (`editor/flow.ts`): blocks (text boxes with the ink touching them, and drawing boxes of
+  strokes that meet vertically) are worked out from the elements, never stored, and a text box that
+  changes height moves the blocks wholly below it by whole rows, as ordinary element replacements
+  that sync and undo like any move. PDF pages on a canvas are image elements with `pdfPage`, rendered by PDF.js sharp
   near the view and at a low resolution elsewhere. Exports cut a canvas page to a sheet around its
   content (`Page::canvas_as_sheet`), which PDF export and printing split into paper-shaped
   pages at gaps in the content (`Page::canvas_as_sheets`); the PDF exporter draws `pdfPage` elements from their source
